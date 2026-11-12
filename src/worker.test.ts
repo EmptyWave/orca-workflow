@@ -73,6 +73,27 @@ function makeHost() {
     if (command.includes('worker-start')) {
       return '{"ok":true,"result":{"dispatchId":"ctx_9","state":"ready"}}'
     }
+    if (command.includes('__WFC__')) {
+      // One batched command: terminal list + repo list between markers.
+      return [
+        '__WFC__',
+        JSON.stringify({
+          ok: true,
+          result: { terminals: [{ handle: 't1', title: 'workflow-view bridge', worktreeId: 'r1::/Users/tester/PhpstormProjects/biz.erp' }] }
+        }),
+        '__WFR__',
+        JSON.stringify({
+          ok: true,
+          result: {
+            repos: [
+              { id: 'r1', displayName: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp', kind: 'git' },
+              { id: 'f1', displayName: '~', path: '/Users/tester', kind: 'folder' }
+            ]
+          }
+        }),
+        '__WFE__'
+      ].join('\n')
+    }
     if (command.includes('repo list')) {
       return JSON.stringify({
         ok: true,
@@ -87,30 +108,25 @@ function makeHost() {
     if (command.includes('__WF_ALIVE__')) {
       return '__WF_ALIVE__'
     }
-    if (command.includes('terminal list')) {
-      return JSON.stringify({
-        ok: true,
-        result: {
-          terminals: [{ handle: 't1', title: 'workflow-view bridge', worktreeId: 'r1::/Users/tester/PhpstormProjects/biz.erp' }]
-        }
-      })
-    }
     if (command.includes('echo $HOME')) {
       return '/Users/tester'
     }
-    if (command.includes('__WF_LS__')) {
-      return '__WF_LS__demo.yaml'
+    if (command.includes('__WF_LS__') && command.includes('base64')) {
+      // The whole-directory listing: marker + base64 + end marker per yaml file.
+      const chunks: string[] = []
+      chunks.push('__WF_LS__demo.yaml')
+      chunks.push(b64(TEMPLATE_YAML).replace(/(.{76})/g, '$1\n'))
+      chunks.push('__WF_LE__')
+      return chunks.join('\n')
     }
     if (command.includes('__FILE__')) {
-      // One bridge command cats several files as base64 (wrapped at 76 chars like real base64).
+      // Spec files still read per cat: answer with a marker per `base64 < '<dir>/<rel>'`.
       const chunks: string[] = []
       for (const match of command.matchAll(/base64 < '([^']+)'/g)) {
         const rel = match[1].slice(dir.length + 1)
         chunks.push(`__FILE__${rel}`)
-        const content =
-          rel === 'demo.yaml' ? TEMPLATE_YAML : rel === 'specs/plan.md' ? 'PLAN SPEC {{objective}}' : 'DEV SPEC {{objective}}'
-        const encoded = b64(content).replace(/(.{76})/g, '$1\n')
-        chunks.push(encoded)
+        const content = rel === 'specs/plan.md' ? 'PLAN SPEC {{objective}}' : 'DEV SPEC {{objective}}'
+        chunks.push(b64(content).replace(/(.{76})/g, '$1\n'))
       }
       return chunks.join('\n')
     }

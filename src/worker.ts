@@ -36,6 +36,14 @@ function fromBase64(text: string): string {
   return new TextDecoder().decode(bytes)
 }
 
+/** Pulls the first JSON document out of terminal output that may carry markers around it. */
+function extractJson(text: string): string {
+  const trimmed = text.trim()
+  const first = trimmed.indexOf('{')
+  const last = trimmed.lastIndexOf('}')
+  return first >= 0 && last > first ? trimmed.slice(first, last + 1) : trimmed
+}
+
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
@@ -293,34 +301,46 @@ export default function activate(orca: OrcaWorkerApi): void {
   async function listTemplates(source: 'library' | 'project', projectPath: string | null): Promise<WfTemplate[]> {
     everUsed = true
     const dir = await workflowsDir(source, projectPath)
-    // Basename-only markers: a full path is longer than a terminal line and would wrap.
+    // One bridge command does the whole listing: marker + base64 per yaml file, so a directory
+    // of templates costs a single terminal round-trip instead of one per file.
     const listing = await bridge.run(
-      `for f in ${shellPath(dir)}/*.yaml; do echo "__WF_LS__\${f##*/}"; done`
+      `for f in ${shellPath(dir)}/*.yaml; do [ -f "$f" ] || continue; echo "__WF_LS__\${f##*/}"; base64 < "$f"; echo __WF_LE__; done`
     )
-    const yamlFiles = listing
-      .split('\n')
-      .map((l) => l.trim())
-      .filter((l) => l.startsWith('__WF_LS__'))
-      .map((l) => l.slice('__WF_LS__'.length))
+    const files: Record<string, string> = {}
+    let current: string | null = null
+    const chunks: string[] = []
+    for (const line of listing.split('\n')) {
+      if (line.startsWith('__WF_LS__')) {
+        if (current) files[current] = fromBase64(chunks.join(''))
+        current = line.slice('__WF_LS__'.length).trim()
+        chunks.length = 0
+      } else if (line.trim() === '__WF_LE__') {
+        if (current) files[current] = fromBase64(chunks.join(''))
+        current = null
+        chunks.length = 0
+      } else if (current !== null) {
+        chunks.push(line.trim())
+      }
+    }
+    if (current) files[current] = fromBase64(chunks.join(''))
+    const yamlFiles = Object.keys(files)
     if (yamlFiles.length === 0) return []
-    const contents = await readFiles(dir, yamlFiles)
     const templates: WfTemplate[] = []
     const specFiles: Record<string, string | null> = {}
     for (const file of yamlFiles) {
-      const fallbackId = file.replace(/\.yaml$/, '')
+      const fallbackId = file.replace(/\.workflow\.yaml$|\.yaml$/, '')
       try {
-        const parsed = parseTemplate(file, parseYaml(contents[file] ?? ''))
+        const parsed = parseTemplate(file, parseYaml(files[file] ?? ''))
         templates.push({
           id: parsed.id,
           title: parsed.title,
           source,
           sourcePath: dir,
           file,
-          steps: parsed.steps.map((s) => ({ ...s, spec: null })),
+          steps: parsed.steps,
           error: null
         })
         for (const step of parsed.steps) if (parsed.specFiles[step.id]) specFiles[parsed.specFiles[step.id] as string] = null
-        templates[templates.length - 1].steps = parsed.steps
       } catch (error) {
         templates.push({
           id: fallbackId,
@@ -333,17 +353,24 @@ export default function activate(orca: OrcaWorkerApi): void {
         })
       }
     }
-    // Resolve specFile contents (paths relative to the workflows dir) in one read.
-    const specs = await readFiles(dir, Object.keys(specFiles))
+    // Resolve specFile contents in one more round-trip when any template uses them.
+    const specDirs = Object.keys(specFiles)
+    if (specDirs.length === 0) return templates
+    const specs = await readFiles(dir, specDirs)
     for (const template of templates) {
       if (template.error) continue
-      const parsed = parseTemplate(template.file, parseYaml(contents[template.file] ?? ''))
-      template.steps = parsed.steps.map((step) => {
-        const rel = parsed.specFiles[step.id]
-        return { ...step, spec: rel ? (specs[rel] ?? null) : step.spec }
+      template.steps = template.steps.map((step) => {
+        const rel = specFilesFor(template, step)
+        return rel ? { ...step, spec: specs[rel] ?? step.spec } : step
       })
     }
     return templates
+  }
+
+  /** The spec path a step declares (re-parsed from the file we already read; cheap). */
+  function specFilesFor(template: WfTemplate, step: WfStep): string | null {
+    void template
+    return step.specFile
   }
 
   // ---- instantiate ---------------------------------------------------------------------------------
@@ -583,24 +610,39 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('project.current', async () => {
     everUsed = true
     // The focused workspace's terminal carries a worktreeId of "repoId::repoPath", which names
-    // the project directly; no guessing from display names.
+    // the project directly. One bridge command prints both mappings at once.
     const context = await orca.host.call('workspace.readContext', undefined)
     const terminalId = context?.terminals?.[0]?.id
     if (!terminalId) return { project: null }
-    const listing = await cli<{ terminals?: unknown }>('orca terminal list --json')
-    const entry = asArray<Record<string, unknown>>(listing.terminals).find((t) => String(field(t, 'handle')) === terminalId)
-    const worktreeId = String(field(entry ?? {}, 'worktreeId') ?? '')
+    const combined = await bridge.run(
+      `echo __WFC__; orca terminal list --json; echo __WFR__; orca repo list --json; echo __WFE__`
+    )
+    const lines = combined.split('\n')
+    const between = (from: string, to: string): string => {
+      const start = lines.indexOf(from)
+      const end = lines.indexOf(to, start + 1)
+      return start >= 0 && end > start ? lines.slice(start + 1, end).join('\n') : ''
+    }
+    const terminalJson = between('__WFC__', '__WFR__')
+    const repoJson = between('__WFR__', '__WFE__')
+    if (!terminalJson) return { project: null }
+    let worktreeId = ''
+    try {
+      const listing = JSON.parse(extractJson(terminalJson)) as { result?: { terminals?: Array<{ handle?: string; worktreeId?: string }> } }
+      const entry = (listing.result?.terminals ?? []).find((t) => t.handle === terminalId)
+      worktreeId = entry?.worktreeId ?? ''
+    } catch {
+      return { project: null }
+    }
     const repoId = worktreeId.split('::')[0]
     if (!repoId) return { project: null }
-    const repos = await cli<{ repos?: unknown }>('orca repo list --json')
-    const repo = asArray<Record<string, unknown>>(repos.repos).find((r) => String(field(r, 'id')) === repoId)
-    if (!repo) return { project: null }
-    return {
-      project: {
-        repoId,
-        name: String(field(repo, 'displayName') ?? ''),
-        path: String(field(repo, 'path') ?? '')
-      }
+    try {
+      const repos = JSON.parse(extractJson(repoJson)) as { result?: { repos?: Array<{ id?: string; displayName?: string; path?: string }> } }
+      const repo = (repos.result?.repos ?? []).find((r) => r.id === repoId)
+      if (!repo) return { project: null }
+      return { project: { repoId, name: repo.displayName ?? '', path: repo.path ?? '' } }
+    } catch {
+      return { project: null }
     }
   })
 

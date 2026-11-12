@@ -3,7 +3,7 @@
 // exist, and "a trusted-worker can act as the orca CLI does" over exactly these terminal calls.
 import type { OrcaWorkerApi } from 'orca/worker'
 
-const READ_INTERVAL_MS = 300
+const READ_INTERVAL_MS = 120
 const DEFAULT_TIMEOUT_MS = 25_000
 const READ_LINES = 400
 
