@@ -536,6 +536,30 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { dispatchId: result.dispatchId, state: result.state }
   })
 
+  orca.panels.handle('project.current', async () => {
+    everUsed = true
+    // The focused workspace's terminal carries a worktreeId of "repoId::repoPath", which names
+    // the project directly; no guessing from display names.
+    const context = await orca.host.call('workspace.readContext', undefined)
+    const terminalId = context?.terminals?.[0]?.id
+    if (!terminalId) return { project: null }
+    const listing = await cli<{ terminals?: unknown }>('orca terminal list --json')
+    const entry = asArray<Record<string, unknown>>(listing.terminals).find((t) => String(field(t, 'handle')) === terminalId)
+    const worktreeId = String(field(entry ?? {}, 'worktreeId') ?? '')
+    const repoId = worktreeId.split('::')[0]
+    if (!repoId) return { project: null }
+    const repos = await cli<{ repos?: unknown }>('orca repo list --json')
+    const repo = asArray<Record<string, unknown>>(repos.repos).find((r) => String(field(r, 'id')) === repoId)
+    if (!repo) return { project: null }
+    return {
+      project: {
+        repoId,
+        name: String(field(repo, 'displayName') ?? ''),
+        path: String(field(repo, 'path') ?? '')
+      }
+    }
+  })
+
   orca.panels.handle('template.list', async ({ source, projectPath }) => ({
     templates: await listTemplates(source, projectPath ?? null)
   }))

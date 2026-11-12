@@ -83,7 +83,7 @@ function makeHost() {
       return JSON.stringify({
         ok: true,
         result: {
-          terminals: [{ handle: 't1', title: 'workflow-view bridge' }]
+          terminals: [{ handle: 't1', title: 'workflow-view bridge', worktreeId: 'r1::/Users/tester/PhpstormProjects/biz.erp' }]
         }
       })
     }
@@ -110,6 +110,11 @@ function makeHost() {
   return mockHost({
     storage: {},
     results: {
+      'workspace.readContext': {
+        branch: 'master',
+        displayName: 'biz.erp',
+        terminals: [{ id: 't1', title: 'workflow-view bridge' }]
+      },
       'workspace.list': {
         workspaces: [{ id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/x/biz.erp', branch: 'master', project: 'p', hostId: 'local' }],
         truncated: false
@@ -225,6 +230,8 @@ test('projects.list отдаёт git-репозитории с путями', ()
     assert.deepEqual(answer.projects, [
       { repoId: 'r1', name: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp' }
     ])
+    const current = await worker.request('project.current')
+    assert.deepEqual(current.project, { repoId: 'r1', name: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp' })
   }))
 
 test('gate.resolve и task.start доходят до CLI с флагами', () =>

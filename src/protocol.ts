@@ -90,6 +90,10 @@ declare module 'orca' {
     'projects.list': {
       output: { projects: { repoId: string; name: string; path: string }[] }
     }
+    /** The project the focused workspace belongs to; null when it cannot be resolved. */
+    'project.current': {
+      output: { project: { repoId: string; name: string; path: string } | null }
+    }
     /** Fresh orchestration snapshot for a Run (runId null = latest runs summary only). */
     'state.get': { input: { runId: string | null }; output: WfSnapshot }
     /** Resolve a pending decision gate. */

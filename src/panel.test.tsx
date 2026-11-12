@@ -97,9 +97,10 @@ test('вкладка Templates: пустой проект показывает �
       'state.get': { at: 1, run: null, tasks: [], gates: [], workers: [], error: null },
       'workspaces.list': { workspaces: [] },
       'projects.list': { projects: [{ repoId: 'r1', name: 'biz.erp', path: '/x/biz.erp' }] },
+      'project.current': { project: { repoId: 'r1', name: 'biz.erp', path: '/x/biz.erp' } },
       'template.list': (input: { source: string; projectPath: string | null }) => {
         assert.equal(input.source, 'project', 'источник по умолчанию — проект')
-        assert.equal(input.projectPath, '/x/biz.erp')
+        assert.equal(input.projectPath, '/x/biz.erp', 'проект берётся из фокуса, без выбора руками')
         return { templates: [] }
       },
       'settings.get': { libraryDir: '~/l', refreshMs: 10000, defaultAgent: 'claude' },

@@ -2,6 +2,7 @@
 // one-click copy, instantiate into a Run). No DOM and no hooks: state lives in atoms.
 import {
   atom,
+  Badge,
   Button,
   Callout,
   Card,
@@ -13,6 +14,7 @@ import {
   KeyValue,
   List,
   ListItem,
+  on,
   plugin,
   read,
   read as rd,
@@ -48,6 +50,7 @@ const worktree = atom('ui.worktree', '', { persist: 'plugin' })
 const tplSource = atom<'library' | 'project'>('ui.tplSource', 'project', { persist: 'plugin' })
 const tplProjectPath = atom('ui.tplProjectPath', '', { persist: 'plugin' })
 const projects = atom<{ repoId: string; name: string; path: string }[]>([])
+const currentProject = atom<{ repoId: string; name: string; path: string } | null>(null)
 const templates = atom<WfTemplate[] | null>(null)
 const selectedTemplate = atom('ui.selectedTemplate', '', { persist: 'plugin' })
 const objective = atom('ui.objective', '', { persist: 'plugin' })
@@ -94,6 +97,17 @@ async function loadProjects(): Promise<void> {
     if (!current && answer.projects.length > 0) set(tplProjectPath, answer.projects[0].path)
   } catch {
     // The Runs tab works without projects; the Templates tab will show the error.
+  }
+}
+
+/** The project comes from where the panel is opened: the focused workspace's repo. */
+async function loadCurrentProject(): Promise<void> {
+  try {
+    const answer = await plugin.request('project.current', undefined, { timeoutMs: 30_000 })
+    set(currentProject, answer.project)
+    if (answer.project) set(tplProjectPath, answer.project.path)
+  } catch {
+    // Keep the last known project; the panel still works with the cached path.
   }
 }
 
@@ -268,9 +282,16 @@ export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(plugin.on('state.changed', () => void loadState()))
   ctx.subscriptions.push(plugin.on('job.progress', (payload) => set(job, payload.job)))
   void loadWorkspaces()
-  const projectsReady = loadProjects()
+  const projectsReady = loadProjects().then(() => loadCurrentProject())
   void loadRuns().then(() => loadState())
   void loadSettings()
+  ctx.subscriptions.push(
+    on('workspace.changed', () => {
+      void loadCurrentProject().then(() => {
+        if (rd(tab) === 'templates') void run('шаблоны', loadTemplates)
+      })
+    })
+  )
   if (rd(tab) === 'templates') void projectsReady.then(() => run('шаблоны', loadTemplates))
 }
 
@@ -449,15 +470,13 @@ function TemplatesTab() {
           }}
         />
         {rd(tplSource) === 'project' ? (
-          <Select
-            label="Проект"
-            value={rd(tplProjectPath) || undefined}
-            options={rd(projects).map((p) => ({ value: p.path, label: p.name }))}
-            onChange={(value) => {
-              set(tplProjectPath, value)
-              void run('шаблоны', loadTemplates)
-            }}
-          />
+          rd(currentProject) ? (
+            <Badge tone="accent">Проект: {rd(currentProject)?.name}</Badge>
+          ) : (
+            <Text muted size="xs">
+              проект по фокусу воркспейса…
+            </Text>
+          )
         ) : null}
         <IconButton icon="refresh" label="Обновить шаблоны" onPress={() => void run('шаблоны', loadTemplates)} />
       </Row>
