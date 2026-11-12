@@ -417,7 +417,7 @@ function RunsTab() {
                       .join(' · ')}
                   >
                     <Row gap="xs" align="center">
-                      {eff.status === 'dispatched' ? null : statusBadge(eff.status)}
+                      {eff.status === 'dispatched' ? statusBadge(eff.status) : null}
                       <Text weight="semibold">{t.title || t.id}</Text>
                       {t.model ? (
                         <Badge tone="neutral">
