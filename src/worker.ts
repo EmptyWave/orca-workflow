@@ -134,7 +134,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         state: String(field(row, 'state', 'status') ?? '?')
       })
     )
-    return { at, run, tasks, gates, workers, error: null }
+    return { at, run, tasks: orderTasks(tasks), gates, workers, error: null }
   }
 
   function normalizeStatus(raw: string): WfTask['status'] {
@@ -142,6 +142,29 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (raw === 'completed' || raw === 'done') return 'succeeded'
     if (raw === 'dispatched' || raw === 'working') return 'dispatched'
     return 'unknown'
+  }
+
+  /** Pipeline order: dependencies first, then what depends on them; stable for parallel steps. */
+  function orderTasks(tasks: WfTask[]): WfTask[] {
+    const byId = new Map(tasks.map((t) => [t.id, t]))
+    const emitted = new Set<string>()
+    const out: WfTask[] = []
+    let progress = true
+    while (out.length < tasks.length && progress) {
+      progress = false
+      for (const task of tasks) {
+        if (emitted.has(task.id)) continue
+        const ready = task.deps.every((dep) => !byId.has(dep) || emitted.has(dep))
+        if (ready) {
+          emitted.add(task.id)
+          out.push(task)
+          progress = true
+        }
+      }
+    }
+    // A cycle would loop forever above; keep whatever is left in input order.
+    for (const task of tasks) if (!emitted.has(task.id)) out.push(task)
+    return out
   }
 
   // ---- refresh + status bar --------------------------------------------------------------------

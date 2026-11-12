@@ -31,13 +31,14 @@ function makeHost() {
     if (command.includes('--ready')) {
       return '{"ok":true,"result":{"tasks":[{"id":"task_b","taskTitle":"dev Разработка"}]}}'
     }
-    if (command.includes('task-list')) {
+    if (command.includes('task-list') && !command.includes('--ready')) {
+      // Deliberately unordered: the snapshot must return pipeline order (plan before dev).
       return JSON.stringify({
         ok: true,
         result: {
           tasks: [
-            { id: 'task_a', taskTitle: 'plan План', status: 'succeeded', deps: [] },
-            { id: 'task_b', taskTitle: 'dev Разработка', status: 'pending', deps: ['task_a'] }
+            { id: 'task_b', taskTitle: 'dev Разработка', status: 'pending', deps: ['task_a'] },
+            { id: 'task_a', taskTitle: 'plan План', status: 'succeeded', deps: [] }
           ]
         }
       })
@@ -155,6 +156,7 @@ test('runs.list и state.get читают оркестрацию через мо
     const state = await worker.request('state.get', { runId: 'run_1' })
     assert.equal(state.error, null)
     assert.equal(state.tasks.length, 2)
+    assert.equal(state.tasks[0].id, 'task_a', 'plan идёт раньше dev независимо от порядка task-list')
     assert.equal(state.tasks[0].status, 'succeeded')
     assert.equal(state.tasks[1].status, 'ready')
     assert.equal(state.gates[0].taskId, 'task_b')
