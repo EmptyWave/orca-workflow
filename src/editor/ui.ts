@@ -87,6 +87,18 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   const view = { x: 20, y: 20, k: 1 }
 
   // ---- toolbar -------------------------------------------------------------------------
+  // Reasoning-effort levels per agent (Orca's own pickers: Claude adds xhigh/max, Codex minimal).
+  const EFFORTS: Record<string, string[]> = {
+    claude: ['low', 'medium', 'high', 'xhigh', 'max'],
+    codex: ['minimal', 'low', 'medium', 'high']
+  }
+  const effortsFor = (agent: string | null | undefined): string[] => {
+    const a = (agent ?? '').toLowerCase()
+    if (a.startsWith('claude')) return EFFORTS.claude
+    if (a.startsWith('codex')) return EFFORTS.codex
+    return ['low', 'medium', 'high']
+  }
+
   // ---- project specialists: dropdown data + the manager panel -------------------------
   type Sp = { slug: string; agent: string; model: string | null; effort: string | null; spec: string | null; error: string | null }
   let specialists: Sp[] = []
@@ -265,7 +277,15 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const modelEl = input('модель (опц.)', editing === 'new' || !editing ? '' : editing.model ?? '')
     modelEl.setAttribute('list', 'dl-model')
     const effortEl = input('effort (опц.)', editing === 'new' || !editing ? '' : editing.effort ?? '')
-    effortEl.setAttribute('list', 'dl-effort')
+    const spEfforts = document.createElement('datalist')
+    spEfforts.id = 'dl-effort-sp'
+    for (const value of [...new Set([...EFFORTS.claude, ...EFFORTS.codex])]) {
+      const opt = document.createElement('option')
+      opt.value = value
+      spEfforts.append(opt)
+    }
+    effortEl.setAttribute('list', 'dl-effort-sp')
+    form.append(spEfforts)
     const specL = document.createElement('label')
     specL.textContent = 'spec — промпт специалиста'
     form.append(specL)
@@ -664,7 +684,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         [...new Set([...specialists.map((sp) => sp.model), ...graph.steps.map((st) => st.model)].filter((m): m is string => !!m))]
       )
     )
-    inspector.append(datalist('dl-effort', ['low', 'medium', 'high']))
+    const stepSpecialist = specialists.find((sp) => sp.slug === step.specialist)
+    inspector.append(datalist('dl-effort', effortsFor(step.agent ?? stepSpecialist?.agent)))
     inspector.append(datalist('dl-goto', graph.steps.filter((st) => st.id !== step.id).map((st) => st.id)))
   }
 
