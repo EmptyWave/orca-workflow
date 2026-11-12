@@ -516,15 +516,17 @@ function TemplatesTab() {
               current={t.id === rd(selectedTemplate)}
               onPress={() => set(selectedTemplate, t.id)}
             >
-              <IconButton
-                icon="edit"
-                label={`Редактировать ${t.id}`}
-                tooltip="Открыть в граф-редакторе"
-                variant="ghost"
-                size="sm"
-                disabled={rd(busy) !== null || t.error !== null}
-                onPress={() => void editTemplate(t.id)}
-              />
+              {t.id === rd(selectedTemplate) ? (
+                <IconButton
+                  icon="edit"
+                  label={`Редактировать ${t.id}`}
+                  tooltip="Открыть в граф-редакторе"
+                  variant="ghost"
+                  size="sm"
+                  disabled={rd(busy) !== null || t.error !== null}
+                  onPress={() => void editTemplate(t.id)}
+                />
+              ) : null}
             </ListItem>
           ))}
         </List>
