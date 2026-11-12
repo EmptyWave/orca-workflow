@@ -493,7 +493,7 @@ function TemplatesTab() {
                       step.agent ? `агент ${step.agent}` : 'барьер',
                       step.model ? `модель ${step.model}${step.effort ? ` · ${step.effort}` : ''}` : null,
                       step.deps.length > 0 ? `deps: ${step.deps.join(', ')}` : null,
-                      step.checkpoint ? `гейт: ${step.checkpoint.question}` : null,
+                      step.gate ? `гейт: ${step.gate.question}` : null,
                       step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
                     ]
                       .filter(Boolean)

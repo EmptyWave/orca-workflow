@@ -84,6 +84,12 @@ function parseList(lines: Line[], start: number, indent: number): { value: YfVal
       }
       continue
     }
+    if (rest.startsWith('{') || rest.startsWith('[')) {
+      // A flow map or list written inline as one item: `- { id: x, deps: [y] }`.
+      items.push(parseFlowScalar(rest, lines[i].no))
+      i++
+      continue
+    }
     if (isKeyLine(rest)) {
       // "- key: value" starts a map whose remaining keys sit at indent + 2.
       const itemIndent = indent + 2

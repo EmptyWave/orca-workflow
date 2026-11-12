@@ -11,11 +11,12 @@ steps:
     specFile: specs/plan.md
   - id: gate1
     deps: [plan]
-    checkpoint: { question: 'Пускать dev?', options: [approve, request-changes] }
+    gate: { question: 'Пускать dev?', options: [approve, request-changes] }
   - id: dev
     agent: claude
     specFile: specs/dev.md
     deps: [gate1]
+    gate: { question: 'Отчёт принят?', options: [approve, request-changes] }
 `
 
 function makeHost() {
@@ -170,8 +171,8 @@ test('template.instantiate создаёт Run, задачи и гейты бар
     assert.equal(job.runId, 'run_2')
     const commands = host.callsOf('terminal.sendText').map((c) => (c as { text: string }).text)
     assert.equal(commands.filter((c) => c.includes('task-create')).length, 2, 'plan + dev')
-    // Гейт барьера gate1 должен повиснуть на задаче dev (первой материализованной после барьера).
-    assert.equal(commands.filter((c) => c.includes('gate-create') && c.includes('task_new')).length, 1)
+    // Гейт барьера gate1 + собственный гейт dev — оба на задаче dev (task_new).
+    assert.equal(commands.filter((c) => c.includes('gate-create') && c.includes('task_new')).length, 2)
     const specWrite = commands.find((c) => c.includes('base64 -d'))
     assert.ok(specWrite, 'спека пишется через base64')
   }))

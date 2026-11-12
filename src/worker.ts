@@ -337,15 +337,15 @@ export default function activate(orca: OrcaWorkerApi): void {
   }
 
   /** Checkpoints of barrier ancestors plus the step's own; consumed set prevents duplicates. */
-  function gatesFor(step: WfStep, consumed: Set<string>): Array<NonNullable<WfStep['checkpoint']>> {
-    const gates: Array<NonNullable<WfStep['checkpoint']>> = []
-    if (step.agent && step.checkpoint) gates.push(step.checkpoint)
+  function gatesFor(step: WfStep, consumed: Set<string>): Array<NonNullable<WfStep['gate']>> {
+    const gates: Array<NonNullable<WfStep['gate']>> = []
+    if (step.agent && step.gate) gates.push(step.gate)
     const walk = (id: string): void => {
       const dep = stepsById.get(id)
       if (!dep || dep.agent) return
-      if (dep.checkpoint && !consumed.has(dep.id)) {
+      if (dep.gate && !consumed.has(dep.id)) {
         consumed.add(dep.id)
-        gates.push(dep.checkpoint)
+        gates.push(dep.gate)
       }
       for (const d of dep.deps) walk(d)
     }

@@ -1,0 +1,502 @@
+// The graph editor's DOM/SVG glue: canvas with draggable nodes, ports to connect deps,
+// an inspector (including the gate section), toolbar and YAML preview. Vanilla, no libraries.
+import type { EditorSession } from 'orca/frame'
+import type { WfStep } from '../protocol'
+import { autoLayout, emit, NODE_H, NODE_W, validate, type WfGraph } from './core'
+
+const STYLE = `
+.wfv{display:flex;flex-direction:column;height:100vh;color:var(--orca-foreground);background:var(--orca-background);font:13px -apple-system,system-ui,sans-serif}
+.wfv-toolbar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--orca-border);background:var(--orca-card)}
+.wfv-toolbar button{font:12px inherit;padding:3px 10px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer}
+.wfv-toolbar button:hover{background:var(--orca-muted)}
+.wfv-status{margin-left:auto;font-size:12px}
+.wfv-status.bad{color:var(--orca-destructive)}
+.wfv-status.good{color:var(--orca-foreground);opacity:.7}
+.wfv-body{flex:1;display:flex;min-height:0;position:relative}
+.wfv-canvas{flex:1;cursor:grab;overflow:hidden}
+.wfv-canvas.connecting{cursor:crosshair}
+.wfv-canvas svg{display:block;width:100%;height:100%}
+.wfv-node rect{fill:var(--orca-card);stroke:var(--orca-border);stroke-width:1.5;rx:8}
+.wfv-node.barrier rect{stroke-dasharray:5 4;fill:var(--orca-muted)}
+.wfv-node.selected rect{stroke:var(--orca-accent);stroke-width:2}
+.wfv-node text{fill:var(--orca-foreground);user-select:none;pointer-events:none}
+.wfv-node .sub{fill:var(--orca-muted-foreground);font-size:11px}
+.wfv-port{fill:var(--orca-muted);stroke:var(--orca-border);cursor:crosshair}
+.wfv-port:hover{fill:var(--orca-accent)}
+.wfv-edge{fill:none;stroke:var(--orca-muted-foreground);stroke-width:1.6;cursor:pointer}
+.wfv-edge:hover,.wfv-edge.selected{stroke:var(--orca-accent);stroke-width:2.4}
+.wfv-tmp{fill:none;stroke:var(--orca-accent);stroke-width:1.6;stroke-dasharray:4 3}
+.wfv-badge{fill:var(--orca-warning)}
+.wfv-inspector{width:270px;border-left:1px solid var(--orca-border);background:var(--orca-card);padding:10px;overflow:auto;box-sizing:border-box}
+.wfv-inspector label{display:block;margin:8px 0 2px;font-size:11px;color:var(--orca-muted-foreground)}
+.wfv-inspector input[type=text],.wfv-inspector textarea{width:100%;box-sizing:border-box;padding:4px 6px;border:1px solid var(--orca-input);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);font:12px ui-monospace,monospace}
+.wfv-inspector textarea{min-height:70px;resize:vertical}
+.wfv-inspector .row{display:flex;gap:6px;align-items:center}
+.wfv-inspector .del{margin-top:14px;border-color:var(--orca-destructive);color:var(--orca-destructive);background:none;padding:4px 10px;border-radius:var(--orca-radius);cursor:pointer;font:12px inherit}
+.wfv-yaml{position:absolute;inset:0;margin:0;padding:12px;overflow:auto;background:var(--orca-background);font:12px ui-monospace,monospace;white-space:pre;border:0}
+.wfv-error{padding:8px 12px;background:var(--orca-destructive);color:var(--orca-destructive-foreground);font-size:12px}
+.wfv-hint{padding:4px 12px;font-size:11px;color:var(--orca-muted-foreground)}
+`
+
+type Selection = { kind: 'node'; id: string } | { kind: 'edge'; from: string; to: string } | null
+
+export function createEditor(doc: EditorSession<WfGraph>): void {
+  const style = document.createElement('style')
+  style.textContent = STYLE
+  document.head.append(style)
+  document.body.style.margin = '0'
+
+  const root = document.createElement('div')
+  root.className = 'wfv'
+  root.innerHTML =
+    '<div class="wfv-toolbar"></div>' +
+    '<div class="wfv-error" hidden></div>' +
+    '<div class="wfv-body"><div class="wfv-canvas"><svg><defs>' +
+    '<marker id="wfv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+    '<path d="M0,0 L10,5 L0,10 z" fill="var(--orca-muted-foreground)"/></marker></defs>' +
+    '<g class="wfv-viewport"></g></svg></div>' +
+    '<aside class="wfv-inspector"></aside></div>'
+  document.body.append(root)
+
+  const toolbar = root.querySelector<HTMLElement>('.wfv-toolbar') as HTMLElement
+  const errorBar = root.querySelector<HTMLElement>('.wfv-error') as HTMLElement
+  const canvas = root.querySelector<HTMLElement>('.wfv-canvas') as HTMLElement
+  const svg = root.querySelector('svg') as SVGSVGElement
+  const viewport = root.querySelector('g.wfv-viewport') as SVGGElement
+  const inspector = root.querySelector<HTMLElement>('.wfv-inspector') as HTMLElement
+
+  let graph: WfGraph = doc.value
+  let selection: Selection = null
+  let connectFrom: string | null = null
+  let tmpEdge: { x1: number; y1: number; x2: number; y2: number } | null = null
+  const view = { x: 20, y: 20, k: 1 }
+
+  // ---- toolbar -------------------------------------------------------------------------
+  const buttons: Array<[string, () => void]> = [
+    ['+ Шаг', () => addStep(true)],
+    ['+ Барьер', () => addStep(false)],
+    ['Автораскладка', () => { graph.layout = autoLayout(graph); push() }],
+    ['YAML', () => toggleYaml()]
+  ]
+  for (const [label, onClick] of buttons) {
+    const b = document.createElement('button')
+    b.textContent = label
+    b.addEventListener('click', onClick)
+    toolbar.append(b)
+  }
+  const status = document.createElement('span')
+  status.className = 'wfv-status'
+  toolbar.append(status)
+  let yamlPre: HTMLPreElement | null = null
+  function toggleYaml(): void {
+    if (yamlPre) {
+      yamlPre.remove()
+      yamlPre = null
+      return
+    }
+    yamlPre = document.createElement('pre')
+    yamlPre.className = 'wfv-yaml'
+    yamlPre.textContent = emit(graph)
+    ;(root.querySelector('.wfv-body') as HTMLElement).append(yamlPre)
+  }
+
+  // ---- helpers -------------------------------------------------------------------------
+  function ensureLayout(): void {
+    const missing = graph.steps.filter((s) => !graph.layout[s.id])
+    if (missing.length === 0) return
+    const auto = autoLayout(graph)
+    for (const id of Object.keys(auto)) if (!graph.layout[id]) graph.layout[id] = auto[id]
+  }
+
+  function stepById(id: string): WfStep | undefined {
+    return graph.steps.find((s) => s.id === id)
+  }
+
+  function push(): void {
+    ensureLayout()
+    graph = { ...graph, steps: [...graph.steps] }
+    if (yamlPre) yamlPre.textContent = emit(graph)
+    render()
+    doc.change(graph)
+  }
+
+  function addStep(withAgent: boolean): void {
+    const base = withAgent ? 'step' : 'gate'
+    let n = 1
+    while (stepById(`${base}${n}`)) n += 1
+    const id = `${base}${n}`
+    const step: WfStep = {
+      id,
+      title: withAgent ? `Шаг ${n}` : `Гейт ${n}`,
+      agent: withAgent ? 'claude' : null,
+      model: null,
+      effort: null,
+      spec: withAgent ? 'Новая задача: {{objective}}.' : null,
+      specFile: null,
+      deps: selection?.kind === 'node' && selection.id !== id ? [selection.id] : [],
+      gate: null,
+      onReject: null
+    }
+    // New nodes land next to the selection, or in the last column.
+    const anchor = selection?.kind === 'node' ? graph.layout[selection.id] : null
+    const maxX = Math.max(40, ...Object.values(graph.layout).map((p) => p.x))
+    graph.steps.push(step)
+    graph.layout[id] = anchor ? { x: anchor.x + NODE_W + 70, y: anchor.y } : { x: maxX + NODE_W + 70, y: 40 }
+    selection = { kind: 'node', id }
+    push()
+  }
+
+  function removeSelected(): void {
+    if (!selection) return
+    if (selection.kind === 'node') {
+      const id = selection.id
+      graph.steps = graph.steps.filter((s) => s.id !== id)
+      for (const s of graph.steps) {
+        s.deps = s.deps.filter((d) => d !== id)
+        if (s.onReject && s.onReject.goto === id) s.onReject = null
+      }
+      delete graph.layout[id]
+    } else {
+      const step = stepById(selection.to)
+      if (step) step.deps = step.deps.filter((d) => d !== (selection as { from: string }).from)
+    }
+    selection = null
+    push()
+  }
+
+  // ---- rendering -----------------------------------------------------------------------
+  function nodeCenter(id: string, side: 'in' | 'out'): { x: number; y: number } {
+    const p = graph.layout[id] ?? { x: 0, y: 0 }
+    return { x: p.x + (side === 'in' ? 0 : NODE_W), y: p.y + NODE_H / 2 }
+  }
+
+  function render(): void {
+    viewport.innerHTML = ''
+    viewport.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`)
+    for (const step of graph.steps) {
+      for (const dep of step.deps) {
+        const a = nodeCenter(dep, 'out')
+        const b = nodeCenter(step.id, 'in')
+        const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+        const mid = (a.x + b.x) / 2
+        path.setAttribute('d', `M ${a.x} ${a.y} C ${mid} ${a.y}, ${mid} ${b.y}, ${b.x} ${b.y}`)
+        path.setAttribute('class', 'wfv-edge')
+        path.setAttribute('marker-end', 'url(#wfv-arrow)')
+        if (selection?.kind === 'edge' && selection.from === dep && selection.to === step.id) {
+          path.classList.add('selected')
+        }
+        path.addEventListener('click', (e) => {
+          e.stopPropagation()
+          selection = { kind: 'edge', from: dep, to: step.id }
+          render()
+        })
+        viewport.append(path)
+      }
+    }
+    for (const step of graph.steps) {
+      const p = graph.layout[step.id] ?? { x: 0, y: 0 }
+      const g = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+      g.setAttribute('class', 'wfv-node' + (step.agent ? '' : ' barrier') + (selection?.kind === 'node' && selection.id === step.id ? ' selected' : ''))
+      g.setAttribute('transform', `translate(${p.x} ${p.y})`)
+      const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+      rect.setAttribute('width', String(NODE_W))
+      rect.setAttribute('height', String(NODE_H))
+      rect.setAttribute('rx', '8')
+      g.append(rect)
+      if (step.gate) {
+        const badge = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+        badge.setAttribute('class', 'wfv-badge')
+        badge.setAttribute('cx', String(NODE_W - 14))
+        badge.setAttribute('cy', '14')
+        badge.setAttribute('r', '6')
+        const badgeTitle = document.createElementNS('http://www.w3.org/2000/svg', 'title')
+        badgeTitle.textContent = `Гейт: ${step.gate.question}`
+        badge.append(badgeTitle)
+        g.append(badge)
+      }
+      const title = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      title.setAttribute('x', '10')
+      title.setAttribute('y', '20')
+      title.textContent = `${step.id}${step.title ? ' · ' + step.title : ''}`
+      title.setAttribute('style', 'font-size:12px;font-weight:600')
+      const sub = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      sub.setAttribute('class', 'sub')
+      sub.setAttribute('x', '10')
+      sub.setAttribute('y', '38')
+      sub.textContent = step.agent
+        ? `${step.agent}${step.model ? ' · ' + step.model : ''}${step.specFile ? ' · ' + step.specFile : ''}`
+        : 'барьер / гейт'
+      const sub2 = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+      sub2.setAttribute('class', 'sub')
+      sub2.setAttribute('x', '10')
+      sub2.setAttribute('y', '54')
+      sub2.textContent = step.gate ? '⏿ ' + step.gate.question.slice(0, 26) : step.onReject ? `on_reject → ${step.onReject.goto}` : ''
+      g.append(title, sub, sub2)
+      for (const side of ['in', 'out'] as const) {
+        const port = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
+        port.setAttribute('class', 'wfv-port')
+        port.setAttribute('cx', String(side === 'in' ? 0 : NODE_W))
+        port.setAttribute('cy', String(NODE_H / 2))
+        port.setAttribute('r', '6')
+        port.dataset.step = step.id
+        port.dataset.side = side
+        g.append(port)
+      }
+      g.addEventListener('pointerdown', (e) => {
+        const target = e.target as SVGCircleElement
+        if (target.classList.contains('wfv-port')) {
+          e.stopPropagation()
+          if (target.dataset.side === 'out') {
+            connectFrom = step.id
+            canvas.classList.add('connecting')
+            const c = nodeCenter(step.id, 'out')
+            tmpEdge = { x1: c.x, y1: c.y, x2: c.x, y2: c.y }
+          } else if (connectFrom && connectFrom !== step.id) {
+            const target2 = stepById(step.id)
+            if (target2 && !target2.deps.includes(connectFrom)) target2.deps.push(connectFrom)
+            connectFrom = null
+            tmpEdge = null
+            canvas.classList.remove('connecting')
+            selection = null
+            push()
+          }
+          return
+        }
+        e.stopPropagation()
+        selection = { kind: 'node', id: step.id }
+        render()
+        beginNodeDrag(e, step.id)
+      })
+      viewport.append(g)
+    }
+    if (tmpEdge) {
+      const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      path.setAttribute('class', 'wfv-tmp')
+      path.setAttribute('d', `M ${tmpEdge.x1} ${tmpEdge.y1} L ${tmpEdge.x2} ${tmpEdge.y2}`)
+      viewport.append(path)
+    }
+    renderInspector()
+    renderStatus()
+  }
+
+  function renderStatus(): void {
+    if (graph.parseError) {
+      status.textContent = ''
+      return
+    }
+    const errors = validate(graph)
+    if (errors.length === 0) {
+      status.className = 'wfv-status good'
+      status.textContent = `✓ ${graph.steps.length} шагов · сохранение через Cmd+S`
+    } else {
+      status.className = 'wfv-status bad'
+      status.textContent = `⚠ ${errors[0]}${errors.length > 1 ? ` (+${errors.length - 1})` : ''}`
+    }
+  }
+
+  // ---- inspector -----------------------------------------------------------------------
+  function field(label: string, value: string, onInput: (v: string) => void): HTMLElement {
+    const wrap = document.createElement('div')
+    const l = document.createElement('label')
+    l.textContent = label
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.value = value
+    input.addEventListener('input', () => onInput(input.value))
+    wrap.append(l, input)
+    return wrap
+  }
+
+  function renderInspector(): void {
+    inspector.innerHTML = ''
+    if (graph.parseError || !selection || selection.kind !== 'node') {
+      const hint = document.createElement('div')
+      hint.style.cssText = 'font-size:12px;color:var(--orca-muted-foreground);line-height:1.5'
+      hint.textContent = graph.parseError
+        ? 'Файл не парсится как шаблон — правь его во вкладке Source.'
+        : 'Клик по блоку — свойства. Потяни от правого порта к левому — зависимость. Клик по стрелке + Del — удалить.'
+      inspector.append(hint)
+      return
+    }
+    const step = stepById(selection.id)
+    if (!step) return
+    inspector.append(field('id', step.id, (v) => {
+      const clean = v.trim().replace(/[^a-z0-9-]/g, '-') || step.id
+      if (clean === step.id) return
+      for (const s of graph.steps) s.deps = s.deps.map((d) => (d === step.id ? clean : d))
+      const pos = graph.layout[step.id]
+      delete graph.layout[step.id]
+      if (pos) graph.layout[clean] = pos
+      step.id = clean
+      selection = { kind: 'node', id: clean }
+      push()
+    }))
+    inspector.append(field('Заголовок', step.title ?? '', (v) => { step.title = v === '' ? null : v; push() }))
+    inspector.append(field('Агент (пусто = барьер)', step.agent ?? '', (v) => { step.agent = v.trim() === '' ? null : v.trim(); push() }))
+    inspector.append(field('Модель (опц.)', step.model ?? '', (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }))
+    inspector.append(field('Effort (только с моделью)', step.effort ?? '', (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }))
+    inspector.append(field('specFile (путь в каталоге шаблонов)', step.specFile ?? '', (v) => { step.specFile = v.trim() === '' ? null : v.trim(); step.spec = null; push() }))
+    const specLabel = document.createElement('label')
+    specLabel.textContent = 'spec (инлайн, если нет specFile)'
+    inspector.append(specLabel)
+    const specArea = document.createElement('textarea')
+    specArea.value = step.spec ?? ''
+    specArea.addEventListener('input', () => { step.spec = specArea.value === '' ? null : specArea.value; step.specFile = null; push() })
+    inspector.append(specArea)
+    inspector.append(field('deps (через запятую)', step.deps.join(', '), (v) => {
+      step.deps = v.split(',').map((s) => s.trim()).filter(Boolean)
+      push()
+    }))
+
+    const gateLabel = document.createElement('label')
+    gateLabel.textContent = 'Гейт перед шагом (шаг не начнётся без ответа)'
+    inspector.append(gateLabel)
+    const gateRow = document.createElement('div')
+    gateRow.className = 'row'
+    const gateCheck = document.createElement('input')
+    gateCheck.type = 'checkbox'
+    gateCheck.checked = step.gate !== null
+    gateCheck.addEventListener('change', () => {
+      step.gate = gateCheck.checked ? { question: 'Аппрувнут?', options: ['approve', 'request-changes'] } : null
+      push()
+    })
+    const gateText = document.createElement('span')
+    gateText.textContent = 'включить'
+    gateRow.append(gateCheck, gateText)
+    inspector.append(gateRow)
+    if (step.gate) {
+      inspector.append(field('Вопрос гейта', step.gate.question, (v) => { if (step.gate) step.gate.question = v; push() }))
+      inspector.append(field('Варианты (через запятую)', step.gate.options.join(', '), (v) => {
+        if (step.gate) step.gate.options = v.split(',').map((s) => s.trim()).filter(Boolean)
+        push()
+      }))
+    }
+    inspector.append(field('on_reject: goto', step.onReject?.goto ?? '', (v) => {
+      step.onReject = v.trim() === '' ? null : { goto: v.trim(), maxRounds: step.onReject?.maxRounds ?? 2 }
+      push()
+    }))
+    inspector.append(field('on_reject: max_rounds', step.onReject ? String(step.onReject.maxRounds) : '', (v) => {
+      const n = Number(v)
+      if (step.onReject && Number.isInteger(n) && n >= 1) step.onReject.maxRounds = n
+      push()
+    }))
+    const del = document.createElement('button')
+    del.className = 'del'
+    del.textContent = 'Удалить шаг'
+    del.addEventListener('click', removeSelected)
+    inspector.append(del)
+  }
+
+  // ---- pointer interactions --------------------------------------------------------------
+  let dragNode: { id: string; dx: number; dy: number } | null = null
+  let pan: { x: number; y: number; vx: number; vy: number } | null = null
+
+  function svgPoint(e: PointerEvent | WheelEvent): { x: number; y: number } {
+    const rect = svg.getBoundingClientRect()
+    return { x: (e.clientX - rect.left - view.x) / view.k, y: (e.clientY - rect.top - view.y) / view.k }
+  }
+
+  function beginNodeDrag(e: PointerEvent, id: string): void {
+    const p = svgPoint(e)
+    const at = graph.layout[id] ?? { x: 0, y: 0 }
+    dragNode = { id, dx: p.x - at.x, dy: p.y - at.y }
+  }
+
+  svg.addEventListener('pointerdown', (e) => {
+    if ((e.target as Element).closest('.wfv-node')) return
+    selection = null
+    connectFrom = null
+    tmpEdge = null
+    canvas.classList.remove('connecting')
+    render()
+    pan = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }
+    canvas.setPointerCapture(e.pointerId)
+  })
+
+  window.addEventListener('pointermove', (e) => {
+    if (dragNode) {
+      const p = svgPoint(e)
+      graph.layout[dragNode.id] = { x: p.x - dragNode.dx, y: p.y - dragNode.dy }
+      render()
+    } else if (pan) {
+      view.x = pan.vx + (e.clientX - pan.x)
+      view.y = pan.vy + (e.clientY - pan.y)
+      render()
+    } else if (connectFrom && tmpEdge) {
+      const p = svgPoint(e)
+      tmpEdge = { ...tmpEdge, x2: p.x, y2: p.y }
+      render()
+    }
+  })
+
+  window.addEventListener('pointerup', () => {
+    if (dragNode) {
+      dragNode = null
+      push()
+    }
+    pan = null
+  })
+
+  svg.addEventListener('dblclick', (e) => {
+    const p = svgPoint(e as unknown as PointerEvent)
+    let n = 1
+    while (stepById(`step${n}`)) n += 1
+    const id = `step${n}`
+    graph.steps.push({
+      id, title: `Шаг ${n}`, agent: 'claude', model: null, effort: null,
+      spec: 'Новая задача: {{objective}}.', specFile: null, deps: [], gate: null, onReject: null
+    })
+    graph.layout[id] = p
+    selection = { kind: 'node', id }
+    push()
+  })
+
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault()
+    const k = Math.min(2, Math.max(0.3, view.k * Math.exp(-e.deltaY * 0.0012)))
+    const rect = svg.getBoundingClientRect()
+    const mx = e.clientX - rect.left
+    const my = e.clientY - rect.top
+    view.x = mx - ((mx - view.x) / view.k) * k
+    view.y = my - ((my - view.y) / view.k) * k
+    view.k = k
+    render()
+  }, { passive: false })
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      connectFrom = null
+      tmpEdge = null
+      canvas.classList.remove('connecting')
+      selection = null
+      render()
+    }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selection) {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+      e.preventDefault()
+      removeSelected()
+    }
+  })
+
+  // ---- boot ------------------------------------------------------------------------------
+  if (graph.parseError) {
+    errorBar.hidden = false
+    errorBar.textContent = `Файл не парсится: ${graph.parseError}`
+    const pre = document.createElement('pre')
+    pre.className = 'wfv-yaml'
+    pre.textContent = graph.raw
+    ;(root.querySelector('.wfv-body') as HTMLElement).append(pre)
+    canvas.remove()
+    inspector.remove()
+    return
+  }
+  ensureLayout()
+  render()
+  doc.onReplace((next) => {
+    graph = next
+    selection = null
+    ensureLayout()
+    render()
+  })
+}

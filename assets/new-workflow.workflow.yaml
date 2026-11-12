@@ -1,0 +1,21 @@
+# workflow-view: layout plan:40,40; review:300,40; dev:560,40
+id: my-workflow
+title: 'Мой воркфлоу'
+steps:
+  - id: plan
+    title: 'План'
+    agent: claude
+    specFile: specs/plan.md
+  - id: review
+    title: 'Ревью плана'
+    agent: claude
+    specFile: specs/plan-review.md
+    deps: [plan]
+  - id: dev
+    title: 'Разработка'
+    agent: claude
+    specFile: specs/dev.md
+    deps: [review]
+    gate:
+      question: 'План аппрувнут? Запускать разработку?'
+      options: [approve, request-changes]

@@ -20,7 +20,7 @@ steps:
     deps: [plan]
   - id: dev-gate
     deps: [plan-review]
-    checkpoint: { question: 'План аппрувнут?', options: [approve, request-changes] }
+    gate: { question: 'План аппрувнут?', options: [approve, request-changes] }
   - id: dev
     agent: claude
     model: some-model
@@ -39,7 +39,7 @@ test('парсер: блоки, потоки, кавычки, блочные с�
   assert.equal(steps[0].agent, 'claude')
   assert.equal(steps[0].spec, 'строка 1\n\nстрока 3 с {{objective}}\n')
   assert.deepEqual(steps[1].deps, ['plan'])
-  const gate = steps[2].checkpoint as { [k: string]: unknown }
+  const gate = steps[2].gate as { [k: string]: unknown }
   assert.equal(gate.question, 'План аппрувнут?')
   assert.deepEqual(gate.options, ['approve', 'request-changes'])
   const reject = steps[3].on_reject as { [k: string]: unknown }
@@ -84,6 +84,15 @@ test('шаблон: неизвестная зависимость отклоня
 test('шаблон: спецификация без агента отклоняется', () => {
   const bad = TEMPLATE.replace('  - id: dev\n    agent: claude\n    model: some-model', '  - id: dev\n    model: some-model')
   assert.throws(() => parseTemplate('feature-dev.yaml', parseYaml(bad)), /dev/)
+})
+
+test('шаблон: checkpoint — старое имя gate — тоже читается', () => {
+  const legacy = TEMPLATE.replace(
+    "    gate: { question: 'План аппрувнут?', options: [approve, request-changes] }",
+    "    checkpoint: { question: 'План аппрувнут?', options: [approve, request-changes] }"
+  )
+  const parsed = parseTemplate('feature-dev.yaml', parseYaml(legacy))
+  assert.equal(parsed.steps[2].gate?.question, 'План аппрувнут?')
 })
 
 test('плейсхолдеры подставляются, неизвестные остаются', () => {

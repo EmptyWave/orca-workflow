@@ -1,0 +1,39 @@
+# Переносимый шаблон воркфлоу разработки (библиотека плагина).
+# Кнопка «Скопировать в проект» кладёт его в .orca/workflows/ проекта.
+# Гейт обычно живёт прямо на шаге (шаг не начнётся без ответа); барьер-узел —
+# явная форма, здесь она закрывает сразу обе тест-ветки одним вопросом.
+id: feature-dev
+title: 'Фича: план → ревью плана → разработка → ревью кода → тесты → коммит'
+steps:
+  - id: plan
+    title: 'План (openspec)'
+    agent: claude
+    # model: claude-opus-4-5     # опционально: провайдерная модель агента
+    # effort: high               # только вместе с model
+    specFile: specs/plan.md
+  - { id: plan-review, title: 'Ревью плана', agent: claude, specFile: specs/plan-review.md, deps: [plan] }
+  - id: dev
+    title: 'Разработка'
+    agent: claude
+    specFile: specs/dev.md
+    deps: [plan-review]
+    gate:
+      question: 'План аппрувнут (вердикт ревью + proposal)? Запускать разработку?'
+      options: [approve, request-changes]
+    on_reject: { goto: dev, max_rounds: 2 }
+  - { id: code-review, title: 'Ревью кода', agent: claude, specFile: specs/code-review.md, deps: [dev] }
+  - id: tests-gate
+    deps: [code-review]
+    gate:
+      question: 'Код после ревью аппрувнут? Запускать тесты?'
+      options: [approve, request-changes]
+  - { id: test-api, title: 'Тесты API/бэкенд', agent: claude, specFile: specs/test-api.md, deps: [tests-gate] }
+  - { id: test-ui, title: 'Проверка UI/фронт', agent: claude, specFile: specs/test-ui.md, deps: [tests-gate] }
+  - id: commit
+    title: 'Коммит'
+    agent: claude
+    specFile: specs/commit.md
+    deps: [test-api, test-ui]
+    gate:
+      question: 'Тесты зелёные? Делать финальный коммит (без push)?'
+      options: [approve, request-changes]

@@ -62,15 +62,16 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
       else throw new Error(`шаг "${stepId}": deps должен быть списком`)
     }
 
-    let checkpoint: WfStep['checkpoint'] = null
-    if (raw.checkpoint !== undefined && raw.checkpoint !== null) {
-      if (!isMap(raw.checkpoint)) throw new Error(`шаг "${stepId}": checkpoint должен быть {question, options}`)
-      const question = str(raw.checkpoint.question ?? '', `шаг "${stepId}": checkpoint.question`)
-      const optionsRaw = raw.checkpoint.options
+    let gate: WfStep['gate'] = null
+    const gateRaw = raw.gate !== undefined ? raw.gate : raw.checkpoint // `checkpoint` — старое имя
+    if (gateRaw !== undefined && gateRaw !== null) {
+      if (!isMap(gateRaw)) throw new Error(`шаг "${stepId}": gate должен быть {question, options}`)
+      const question = str(gateRaw.question ?? '', `шаг "${stepId}": gate.question`)
+      const optionsRaw = gateRaw.options
       if (!Array.isArray(optionsRaw) || optionsRaw.length === 0) {
-        throw new Error(`шаг "${stepId}": checkpoint.options должен быть непустым списком`)
+        throw new Error(`шаг "${stepId}": gate.options должен быть непустым списком`)
       }
-      checkpoint = { question, options: optionsRaw.map((o) => str(o, 'checkpoint.options[]')) }
+      gate = { question, options: optionsRaw.map((o) => str(o, 'gate.options[]')) }
     }
 
     let onReject: WfStep['onReject'] = null
@@ -91,8 +92,9 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
       model: strOrNull(raw.model, 'steps[].model'),
       effort: strOrNull(raw.effort, 'steps[].effort'),
       spec,
+      specFile,
       deps,
-      checkpoint,
+      gate,
       onReject
     })
     specFiles[stepId] = specFile

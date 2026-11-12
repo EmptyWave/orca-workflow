@@ -20,6 +20,23 @@
         "ui": "components"
       }
     ],
+    "customEditors": [
+      {
+        "id": "workflow-graph",
+        "title": "Workflow Graph",
+        "entry": "src/editor/entry.ts",
+        "extensions": [".workflow.yaml", ".yaml"],
+        "frame": "isolated"
+      }
+    ],
+    "newFiles": [
+      {
+        "id": "new-workflow",
+        "title": "Новый воркфлоу",
+        "extension": ".workflow.yaml",
+        "template": "assets/new-workflow.workflow.yaml"
+      }
+    ],
     "statusBarItems": [
       {
         "id": "wf-status",

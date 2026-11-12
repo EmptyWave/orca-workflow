@@ -59,8 +59,12 @@ export type WfStep = {
   model: string | null
   effort: string | null
   spec: string | null
+  /** Path relative to the workflows dir; the editor keeps it, the worker resolves it. */
+  specFile: string | null
   deps: string[]
-  checkpoint: { question: string; options: string[] } | null
+  /** "This step does not start until a human answers." On a barrier step it gates the first
+   *  materialized step after it (the explicit multi-target form). */
+  gate: { question: string; options: string[] } | null
   onReject: { goto: string; maxRounds: number } | null
 }
 
