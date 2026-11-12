@@ -81,6 +81,12 @@ export class Bridge {
     return next
   }
 
+  /** Forgets the stored terminal handle; the next command creates a fresh bridge. */
+  async reset(): Promise<void> {
+    this.terminal = null
+    await this.orca.storage.delete('bridge.terminalId')
+  }
+
   /** A command that prints one JSON document; parsed and returned. */
   async json<T>(command: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
     const output = await this.run(command, timeoutMs)

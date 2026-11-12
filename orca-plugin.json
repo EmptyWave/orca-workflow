@@ -40,6 +40,21 @@
         "type": "string",
         "default": "~/orca-plugins/workflow-view/workflows",
         "placeholder": "~/orca-plugins/workflow-view/workflows"
+      },
+      {
+        "key": "refreshMs",
+        "title": "Refresh interval, ms (2000–120000)",
+        "type": "integer",
+        "default": 10000,
+        "minimum": 2000,
+        "maximum": 120000
+      },
+      {
+        "key": "defaultAgent",
+        "title": "Default agent for task start",
+        "type": "string",
+        "default": "claude",
+        "placeholder": "claude"
       }
     ]
   },

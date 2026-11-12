@@ -69,6 +69,26 @@ test('кнопка гейта зовёт gate.resolve с выбранной ре
   await view.unmount()
 })
 
+test('вкладка Настройки показывает значения и мост', async () => {
+  const host = mockHost({
+    storage: {},
+    requests: {
+      'runs.list': { runs: [], error: null },
+      'state.get': { at: 1, run: null, tasks: [], gates: [], workers: [], error: null },
+      'workspaces.list': { workspaces: [] },
+      'settings.get': { libraryDir: '~/my-lib', refreshMs: 5000, defaultAgent: 'codex' },
+      'bridge.info': { terminalId: 'term_1' }
+    }
+  })
+  const view = await mount(panel, { host, persisted: { plugin: { 'ui.tab': 'settings' } } })
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  assert.ok(view.find({ text: 'Сохранить' }), 'кнопка сохранения видна')
+  assert.ok(view.find({ text: 'Пересоздать мост' }), 'кнопка моста видна')
+  assert.ok(view.find({ label: 'Каталог библиотеки шаблонов' }), 'поле каталога видно')
+  assert.deepEqual(view.errors, [])
+  await view.unmount()
+})
+
 test('вкладка Templates: пустая библиотека показывает подсказку', async () => {
   const host = mockHost({
     storage: {},
@@ -76,7 +96,9 @@ test('вкладка Templates: пустая библиотека показыв
       'runs.list': { runs: [], error: null },
       'state.get': { at: 1, run: null, tasks: [], gates: [], workers: [], error: null },
       'workspaces.list': { workspaces: [] },
-      'template.list': { templates: [] }
+      'template.list': { templates: [] },
+      'settings.get': { libraryDir: '~/l', refreshMs: 10000, defaultAgent: 'claude' },
+      'bridge.info': { terminalId: null }
     }
   })
   // The Tab control is not pressable in the harness: start on the Templates tab instead.

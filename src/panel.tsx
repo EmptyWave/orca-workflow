@@ -6,9 +6,11 @@ import {
   Callout,
   Card,
   EmptyState,
+  Field,
   Heading,
   IconButton,
   Input,
+  KeyValue,
   List,
   ListItem,
   plugin,
@@ -34,7 +36,7 @@ import type { WfGate, WfJob, WfRun, WfSnapshot, WfTask, WfTemplate } from './pro
 const snapshot = atom<WfSnapshot | null>('state.snapshot', null, { persist: 'storage' })
 const selectedRun = atom<string | null>('state.selectedRunId', null, { persist: 'storage' })
 const runs = atom<WfRun[] | null>(null)
-const tab = atom<'runs' | 'templates'>('ui.tab', 'runs', { persist: 'plugin' })
+const tab = atom<'runs' | 'templates' | 'settings'>('ui.tab', 'runs', { persist: 'plugin' })
 const busy = atom<string | null>(null)
 const notice = atom<string | null>(null)
 
@@ -52,6 +54,14 @@ const baseBranch = atom('ui.baseBranch', '', { persist: 'plugin' })
 const worktreeName = atom('ui.worktreeName', '', { persist: 'plugin' })
 const job = atom<WfJob | null>(null)
 const workspaces = atom<{ id: string; kind: string; name: string; path: string; branch: string | null }[]>([])
+
+// Settings tab state
+const cfgLibrary = atom('cfg.library', '', { persist: 'plugin' })
+const cfgRefresh = atom('cfg.refresh', '', { persist: 'plugin' })
+const cfgAgent = atom('cfg.agent', '', { persist: 'plugin' })
+const bridgeTerminal = atom<string | null>(null)
+const cfgSaved = atom<string | null>(null)
+const agentSeeded = atom('ui.agentSeeded', false, { persist: 'plugin' })
 
 // ---- actions -----------------------------------------------------------------------------------
 
@@ -167,6 +177,49 @@ async function instantiate(): Promise<void> {
   })
 }
 
+async function loadSettings(): Promise<void> {
+  try {
+    const cfg = await plugin.request('settings.get', undefined, { timeoutMs: 10_000 })
+    set(cfgLibrary, cfg.libraryDir)
+    set(cfgRefresh, String(cfg.refreshMs))
+    set(cfgAgent, cfg.defaultAgent)
+    if (!rd(agentSeeded)) {
+      set(agent, cfg.defaultAgent)
+      set(agentSeeded, true)
+    }
+    const bridgeInfo = await plugin.request('bridge.info', undefined, { timeoutMs: 10_000 })
+    set(bridgeTerminal, bridgeInfo.terminalId)
+  } catch {
+    // Settings are an extra, not a requirement: the panel works without them.
+  }
+}
+
+async function saveSettings(): Promise<void> {
+  await run('сохранение настроек', async () => {
+    const saved = await plugin.request(
+      'settings.save',
+      {
+        libraryDir: rd(cfgLibrary),
+        refreshMs: Number(rd(cfgRefresh).trim() || '10000'),
+        defaultAgent: rd(cfgAgent)
+      },
+      { timeoutMs: 10_000 }
+    )
+    set(cfgLibrary, saved.libraryDir)
+    set(cfgRefresh, String(saved.refreshMs))
+    set(cfgAgent, saved.defaultAgent)
+    set(cfgSaved, new Date().toLocaleTimeString())
+  })
+}
+
+async function resetBridge(): Promise<void> {
+  await run('пересоздание моста', async () => {
+    await plugin.request('bridge.reset', undefined, { timeoutMs: 10_000 })
+    const bridgeInfo = await plugin.request('bridge.info', undefined, { timeoutMs: 10_000 })
+    set(bridgeTerminal, bridgeInfo.terminalId)
+  })
+}
+
 async function copyTemplate(to: 'library' | 'project'): Promise<void> {
   await run('копирование шаблона', async () => {
     await plugin.request(
@@ -209,6 +262,7 @@ export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(plugin.on('job.progress', (payload) => set(job, payload.job)))
   void loadWorkspaces()
   void loadRuns().then(() => loadState())
+  void loadSettings()
   if (rd(tab) === 'templates') void loadTemplates()
 }
 
@@ -501,6 +555,75 @@ function TemplatesTab() {
   )
 }
 
+function SettingsTab() {
+  return (
+    <Stack gap="md">
+      <Card title="Настройки воркфлоу" description="Каталоги, обновление, агент по умолчанию">
+        <Stack gap="sm">
+          <Field label="Каталог библиотеки шаблонов" description="YAML-шаблоны переносимых воркфлоу (~ допустим)">
+            <Input
+              label="Каталог библиотеки"
+              labelHidden
+              placeholder="~/orca-plugins/workflow-view/workflows"
+              value={rd(cfgLibrary)}
+              onChange={(value) => set(cfgLibrary, value)}
+            />
+          </Field>
+          <Field label="Интервал обновления, мс" description="Как часто панель перечитывает оркестрацию (2000–120000)">
+            <Input
+              label="Интервал, мс"
+              labelHidden
+              placeholder="10000"
+              value={rd(cfgRefresh)}
+              onChange={(value) => set(cfgRefresh, value)}
+            />
+          </Field>
+          <Field label="Агент по умолчанию" description="Подставляется в форму «Стартовать» (claude, codex, zcode…)">
+            <Input
+              label="Агент по умолчанию"
+              labelHidden
+              placeholder="claude"
+              value={rd(cfgAgent)}
+              onChange={(value) => set(cfgAgent, value)}
+            />
+          </Field>
+          <Row gap="xs">
+            <Button tone="accent" icon="check" disabled={rd(busy) !== null} onPress={() => void saveSettings()}>
+              Сохранить
+            </Button>
+            {rd(cfgSaved) ? <Text muted size="xs">сохранено в {rd(cfgSaved)}</Text> : null}
+          </Row>
+        </Stack>
+      </Card>
+      <Card title="Мост" description="Служебный терминал, через который панель гоняет команды orca CLI">
+        <Stack gap="sm">
+          <KeyValue
+            label="Терминал моста"
+            items={[
+              {
+                label: rd(bridgeTerminal) ?? '—',
+                value: rd(bridgeTerminal) ? 'сохранён в storage' : 'ещё не создан',
+                code: true
+              }
+            ]}
+          />
+          <Button
+            variant="outline"
+            icon="refresh"
+            disabled={rd(busy) !== null}
+            onPress={() => void resetBridge()}
+          >
+            Пересоздать мост
+          </Button>
+          <Text muted size="xs">
+            Нужен, если терминал «workflow-view bridge» случайно закрыли: сброс забывает сохранённый handle, а следующий запрос создаст терминал заново.
+          </Text>
+        </Stack>
+      </Card>
+    </Stack>
+  )
+}
+
 export default function Panel() {
   const busyNow = rd(busy)
   const noticeNow = rd(notice)
@@ -522,14 +645,16 @@ export default function Panel() {
         label="Раздел"
         value={rd(tab)}
         onChange={(value) => {
-          set(tab, value as 'runs' | 'templates')
+          set(tab, value as 'runs' | 'templates' | 'settings')
           if (value === 'templates' && rd(templates) === null) void run('шаблоны', loadTemplates)
+          if (value === 'settings') void run('настройки', loadSettings)
         }}
       >
         <Tab value="runs" label="Runs" icon="activity" />
         <Tab value="templates" label="Templates" icon="blocks" />
+        <Tab value="settings" label="Настройки" icon="settings" />
       </Tabs>
-      {rd(tab) === 'runs' ? <RunsTab /> : <TemplatesTab />}
+      {rd(tab) === 'runs' ? <RunsTab /> : rd(tab) === 'templates' ? <TemplatesTab /> : <SettingsTab />}
     </Stack>
   )
 }

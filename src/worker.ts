@@ -7,8 +7,16 @@ import { applyPlaceholders, parseTemplate } from './workflow'
 import { parseYaml, type YamlValue } from './yaml'
 import type { OrcaWorkerApi } from 'orca/worker'
 
-const REFRESH_MS = 10_000
 const DEFAULT_LIBRARY = '~/orca-plugins/workflow-view/workflows'
+const DEFAULT_REFRESH_MS = 10_000
+const MIN_REFRESH_MS = 2_000
+const MAX_REFRESH_MS = 120_000
+
+function clampRefresh(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value)
+  if (!Number.isFinite(n)) return DEFAULT_REFRESH_MS
+  return Math.min(MAX_REFRESH_MS, Math.max(MIN_REFRESH_MS, Math.round(n)))
+}
 
 type Envelope<T> = { ok: boolean; result: T; error?: { message?: string } }
 
@@ -178,10 +186,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     })
   }
 
-  // The runtime is Node: unref lets a host process (and test child processes) not wait
-  // for this poller when nothing else keeps the worker alive.
-  const timer = setInterval(() => void refresh(), REFRESH_MS)
-  ;(timer as unknown as { unref?: () => void }).unref?.()
+  // The refresh loop reads the interval setting every cycle, so Settings changes apply at once.
+  let stopped = false
   let wakeTimer: ReturnType<typeof setTimeout> | null = null
   const eventsSub = orca.events.on('agent.status.changed', () => {
     if (wakeTimer) clearTimeout(wakeTimer)
@@ -190,8 +196,18 @@ export default function activate(orca: OrcaWorkerApi): void {
       void refresh()
     }, 1_000)
   })
+  const loop = async (): Promise<void> => {
+    while (!stopped) {
+      const storedMs = await orca.settings.get('refreshMs')
+      const ms = clampRefresh(storedMs)
+      await new Promise((resolve) => setTimeout(resolve, ms))
+      if (stopped) break
+      await refresh()
+    }
+  }
+  void loop()
   stopTimer = () => {
-    clearInterval(timer)
+    stopped = true
     if (wakeTimer) clearTimeout(wakeTimer)
     eventsSub.dispose()
   }
@@ -528,6 +544,36 @@ export default function activate(orca: OrcaWorkerApi): void {
     const stored = await orca.storage.get('jobs')
     const jobs = (typeof stored === 'object' && stored !== null ? stored : {}) as Record<string, WfJob>
     return { job: jobs[jobId] ?? null }
+  })
+
+  orca.panels.handle('settings.get', async () => {
+    const library = await orca.settings.get('libraryDir')
+    const agent = await orca.settings.get('defaultAgent')
+    return {
+      libraryDir: typeof library === 'string' && library.trim() !== '' ? library.trim() : DEFAULT_LIBRARY,
+      refreshMs: clampRefresh(await orca.settings.get('refreshMs')),
+      defaultAgent: typeof agent === 'string' && agent.trim() !== '' ? agent.trim() : 'claude'
+    }
+  })
+
+  orca.panels.handle('settings.save', async (input) => {
+    const libraryDir = input.libraryDir.trim() !== '' ? input.libraryDir.trim() : DEFAULT_LIBRARY
+    const defaultAgent = input.defaultAgent.trim() !== '' ? input.defaultAgent.trim() : 'claude'
+    const refreshMs = clampRefresh(input.refreshMs)
+    await orca.settings.set('libraryDir', libraryDir)
+    await orca.settings.set('refreshMs', refreshMs)
+    await orca.settings.set('defaultAgent', defaultAgent)
+    return { libraryDir, refreshMs, defaultAgent }
+  })
+
+  orca.panels.handle('bridge.reset', async () => {
+    await bridge.reset()
+    return { ok: true as const }
+  })
+
+  orca.panels.handle('bridge.info', async () => {
+    const stored = await orca.storage.get('bridge.terminalId')
+    return { terminalId: typeof stored === 'string' && stored !== '' ? stored : null }
   })
 }
 

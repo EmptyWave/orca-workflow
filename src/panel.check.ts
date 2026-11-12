@@ -61,5 +61,15 @@ export default defineCheck({
         error: 'мост: таймаут 25000 мс для команды: orca orchestration run-list'
       }
     }
+  },
+  settings: {
+    results,
+    persisted: { plugin: { 'ui.tab': 'settings' } },
+    settings: {
+      libraryDir: '~/orca-plugins/workflow-view/workflows',
+      refreshMs: 10000,
+      defaultAgent: 'claude'
+    },
+    storage: { 'bridge.terminalId': 'term_92fe4436-d1fa-491b-89b4-e7598725dd88' }
   }
 })

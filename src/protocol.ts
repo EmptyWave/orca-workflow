@@ -114,6 +114,18 @@ declare module 'orca' {
     }
     /** Jobs (long operations) keyed by id. */
     'job.get': { input: { jobId: string }; output: { job: WfJob | null } }
+    /** Plugin settings the Settings tab shows and saves. */
+    'settings.get': {
+      output: { libraryDir: string; refreshMs: number; defaultAgent: string }
+    }
+    'settings.save': {
+      input: { libraryDir: string; refreshMs: number; defaultAgent: string }
+      output: { libraryDir: string; refreshMs: number; defaultAgent: string }
+    }
+    /** Drops the stored bridge terminal; the next command recreates it. */
+    'bridge.reset': { output: { ok: true } }
+    /** Bridge state for the Settings tab. */
+    'bridge.info': { output: { terminalId: string | null } }
   }
   interface PluginPanelEvents {
     /** Posted after a snapshot refresh changed something the panel shows. */

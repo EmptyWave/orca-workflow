@@ -176,6 +176,29 @@ test('template.instantiate создаёт Run, задачи и гейты бар
     assert.ok(specWrite, 'спека пишется через base64')
   }))
 
+test('settings.save нормализует и пишет настройки; bridge.reset чистит handle', () =>
+  withWorker(async (worker, host) => {
+    const saved = await worker.request('settings.save', {
+      libraryDir: '  ',
+      refreshMs: 500,
+      defaultAgent: '  codex '
+    })
+    assert.equal(saved.libraryDir, '~/orca-plugins/workflow-view/workflows', 'пустой путь -> дефолт')
+    assert.equal(saved.refreshMs, 2000, 'интервал зажат снизу')
+    assert.equal(saved.defaultAgent, 'codex', 'агент обрезан')
+    assert.deepEqual(host.data().settings, {
+      libraryDir: '~/orca-plugins/workflow-view/workflows',
+      refreshMs: 2000,
+      defaultAgent: 'codex'
+    })
+    const read = await worker.request('settings.get')
+    assert.equal(read.refreshMs, 2000)
+    await worker.request('bridge.reset')
+    assert.equal((host.data().storage['bridge.terminalId'] ?? null), null)
+    const info = await worker.request('bridge.info')
+    assert.equal(info.terminalId, null)
+  }))
+
 test('gate.resolve и task.start доходят до CLI с флагами', () =>
   withWorker(async (worker, host) => {
     await worker.request('gate.resolve', { gateId: 'gate_1', resolution: 'approve' })
