@@ -288,24 +288,27 @@ const STATUS_TEXT: Record<string, string> = {
 
 /** Status as the person reads it: a step whose chain runs into a pending gate waits for that
  *  gate, even when the engine says plain "pending" (no gate directly on it). */
-function effectiveStatuses(tasks: WfTask[], gates: WfGate[]): Record<string, string> {
-  const gateBlocked = new Set(gates.filter((g) => g.status === 'pending').map((g) => g.taskId))
+type EffectiveStatus = { status: string; gate?: WfGate; via?: string }
+
+function effectiveStatuses(tasks: WfTask[], gates: WfGate[]): Record<string, EffectiveStatus> {
+  const pendingGates = gates.filter((g) => g.status === 'pending')
+  const gateOnTask = new Map(pendingGates.map((g) => [g.taskId, g]))
   const byId = new Map(tasks.map((t) => [t.id, t]))
-  const memo = new Map<string, string>()
-  const calc = (id: string): string => {
+  const memo = new Map<string, EffectiveStatus>()
+  const calc = (id: string): EffectiveStatus => {
     const hit = memo.get(id)
     if (hit) return hit
-    memo.set(id, 'queued') // cycle guard
+    memo.set(id, { status: 'queued' }) // cycle guard
     const t = byId.get(id)
-    let out = 'queued'
-    if (!t) out = 'unknown'
-    else if (t.status === 'succeeded' || t.status === 'failed' || t.status === 'dispatched') out = t.status
-    else if (gateBlocked.has(id)) out = 'blocked'
+    let out: EffectiveStatus = { status: 'queued' }
+    if (!t) out = { status: 'unknown' }
+    else if (t.status === 'succeeded' || t.status === 'failed' || t.status === 'dispatched') out = { status: t.status }
+    else if (gateOnTask.has(id)) out = { status: 'blocked', gate: gateOnTask.get(id) }
     else {
-      const depEff = t.deps.map(calc)
-      if (depEff.some((s) => s === 'blocked')) out = 'blocked'
-      else if (t.status === 'ready') out = 'ready'
-      else out = 'queued'
+      const blockers = t.deps.map((dep) => ({ dep, eff: calc(dep) })).filter((d) => d.eff.status === 'blocked')
+      if (blockers.length > 0) {
+        out = { status: 'blocked', gate: blockers[0].eff.gate, via: byId.get(blockers[0].dep)?.title ?? blockers[0].dep }
+      } else if (t.status === 'ready') out = { status: 'ready' }
     }
     memo.set(id, out)
     return out
@@ -380,12 +383,22 @@ function RunsTab() {
           <Card title="Шаги">
             <List label="Шаги">
               {(snap.tasks ?? []).map((t) => {
-                const eff = effective[t.id] ?? t.status
+                const eff = effective[t.id] ?? { status: t.status }
+                const gateHint =
+                  eff.status === 'blocked'
+                    ? [
+                        eff.gate ? `гейт: «${eff.gate.question.slice(0, 48)}${eff.gate.question.length > 48 ? '…' : ''}»` : null,
+                        eff.via ? `(через ${eff.via})` : null
+                      ]
+                        .filter(Boolean)
+                        .join(' ')
+                    : null
                 return (
                   <ListItem
                     key={t.id}
                     description={[
-                      STATUS_TEXT[eff] ?? eff,
+                      STATUS_TEXT[eff.status] ?? eff.status,
+                      gateHint,
                       t.deps.length > 0 ? `после: ${t.deps.map((d) => d.replace('task_', '')).join(', ')}` : null,
                       t.dispatchId ? `воркер ${t.dispatchId.replace('ctx_', '')}` : null
                     ]
@@ -393,7 +406,7 @@ function RunsTab() {
                       .join(' · ')}
                   >
                     <Row gap="xs" align="center">
-                      {statusBadge(eff)}
+                      {statusBadge(eff.status)}
                       <Text weight="semibold">{t.title || t.id}</Text>
                     </Row>
                   </ListItem>
