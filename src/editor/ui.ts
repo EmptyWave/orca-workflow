@@ -22,6 +22,8 @@ const STYLE = `
 .wfv-node text{fill:var(--orca-foreground);user-select:none;pointer-events:none}
 .wfv-node.subblock rect{stroke-dasharray:4 3;fill:var(--orca-card)}
 .wfv-edge.sub-edge{stroke-dasharray:4 3}
+.wfv-edge.reject-edge{stroke:var(--orca-warning, #d29922);stroke-dasharray:2 4}
+.wfv-edge.reject-edge.selected{stroke-width:2.4}
 .wfv-node .sub{fill:var(--orca-muted-foreground);font-size:11px}
 .wfv-port{fill:var(--orca-muted);stroke:var(--orca-border);cursor:crosshair}
 .wfv-port:hover{fill:var(--orca-accent)}
@@ -63,6 +65,7 @@ type Selection =
   | { kind: 'node'; id: string }
   | { kind: 'sub'; parentId: string; id: string }
   | { kind: 'edge'; from: string; to: string }
+  | { kind: 'reject'; from: string }
   | null
 
 export function createEditor(doc: EditorSession<WfGraph>): void {
@@ -79,7 +82,9 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     '<div class="wfv-error" hidden></div>' +
     '<div class="wfv-body"><div class="wfv-canvas"><svg><defs>' +
     '<marker id="wfv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
-    '<path d="M0,0 L10,5 L0,10 z" fill="var(--orca-muted-foreground)"/></marker></defs>' +
+    '<path d="M0,0 L10,5 L0,10 z" fill="var(--orca-muted-foreground)"/></marker>' +
+    '<marker id="wfv-arrow-reject" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
+    '<path d="M0,0 L10,5 L0,10 z" fill="var(--orca-warning, #d29922)"/></marker></defs>' +
     '<g class="wfv-viewport"></g></svg></div>' +
     '<aside class="wfv-inspector"></aside></div>'
   document.body.append(root)
@@ -411,6 +416,9 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         if (s.onReject && s.onReject.goto === id) s.onReject = null
       }
       delete graph.layout[id]
+    } else if (selection.kind === 'reject') {
+      const step = stepById(selection.from)
+      if (step) step.onReject = null
     } else if (selection.kind === 'sub') {
       const sel = selection
       const parent = stepById(sel.parentId)
@@ -459,6 +467,30 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         })
         viewport.append(path)
       }
+    }
+    // on_reject returns: an arc on the LEFT from the review step back to its goto target.
+    for (const step of graph.steps) {
+      if (!step.onReject) continue
+      const target = stepById(step.onReject.goto)
+      const fromP = graph.layout[step.id]
+      const toP = graph.layout[step.onReject.goto]
+      if (!fromP || !toP || !target) continue
+      const fy = fromP.y + NODE_H / 2
+      const ty = toP.y + NODE_H / 2
+      const bend = Math.min(fromP.x, toP.x) - 70
+      const rej = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+      rej.setAttribute('d', `M ${fromP.x} ${fy} C ${bend} ${fy}, ${bend} ${ty}, ${toP.x - 6} ${ty}`)
+      rej.setAttribute('class', 'wfv-edge reject-edge' + (selection?.kind === 'reject' && selection.from === step.id ? ' selected' : ''))
+      rej.setAttribute('marker-end', 'url(#wfv-arrow-reject)')
+      const rejTitle = document.createElementNS('http://www.w3.org/2000/svg', 'title')
+      rejTitle.textContent = `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds} кругов) — клик + Del уберёт`
+      rej.append(rejTitle)
+      rej.addEventListener('click', (e) => {
+        e.stopPropagation()
+        selection = { kind: 'reject', from: step.id }
+        render()
+      })
+      viewport.append(rej)
     }
     for (const step of graph.steps) {
       const p = graph.layout[step.id] ?? { x: 0, y: 0 }
