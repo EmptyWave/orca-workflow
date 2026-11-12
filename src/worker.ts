@@ -1102,6 +1102,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { libraryDir, refreshMs, defaultAgent }
   })
 
+  orca.panels.handle('ui.set', async ({ key, value }) => {
+    everUsed = true
+    if (!key.startsWith('html.')) throw new BridgeError('ui.set пишет только ключи html.*', 'cli_error')
+    await orca.storage.set(key, value)
+    return { ok: true as const }
+  })
+
   orca.panels.handle('run.agents.set', async ({ runId, agents }) => {
     everUsed = true
     await orca.storage.set(`agents.${runId}`, agents)

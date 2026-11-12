@@ -57,7 +57,7 @@ filesystem outside `/tmp` spec files and the template directories.
 
 | File | Role |
 | --- | --- |
-| `src/panel.tsx` | the UI (components panel, state in atoms) |
+| `src/panel.html` | the UI (HTML panel in a sandboxed frame: inline SVG agent/status icons, aip-style rows) |
 | `src/worker.ts` | handlers: snapshot, gates, task start, templates, instantiation jobs |
 | `src/bridge.ts` | the terminal CLI bridge (markers, queue, timeouts) |
 | `src/yaml.ts` | dependency-free strict YAML subset parser for templates |
@@ -69,8 +69,8 @@ filesystem outside `/tmp` spec files and the template directories.
 
 ```sh
 npx -y -p typescript@5.9 tsc -p .   # typecheck (typings live in .orca/types)
-orca plugin test .                  # 15 tests: yaml, workflow, worker (mock bridge), panel
-orca plugin check .                 # renders the panel per src/panel.check.ts scenario
+orca plugin test .                  # 26 tests: yaml, workflow, worker (mock bridge), editor
+orca plugin check .                 # manifest + editor load; shoot the panel with `plugin shot`
 orca plugin validate .
 orca plugin dev watch .             # load into Orca and follow logs; Ctrl-C unloads
 ```

@@ -1,0 +1,588 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Workflow</title>
+    <style>
+      :root { color-scheme: dark light; }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        padding: 10px 10px 16px;
+        font: 12.5px/1.45 -apple-system, system-ui, sans-serif;
+        color: var(--orca-foreground);
+        background: var(--orca-background);
+        -webkit-font-smoothing: antialiased;
+      }
+      h1 { font-size: 13px; font-weight: 650; margin: 2px 0 8px; letter-spacing: .01em; }
+
+      /* ---- tabs ---- */
+      .tabs { display: flex; gap: 2px; border-bottom: 1px solid var(--orca-border); margin-bottom: 10px; }
+      .tab {
+        appearance: none; border: 0; background: none; cursor: pointer;
+        font: inherit; color: var(--orca-muted-foreground);
+        padding: 5px 9px 6px; border-radius: 6px 6px 0 0;
+        border-bottom: 2px solid transparent; margin-bottom: -1px;
+      }
+      .tab:hover { color: var(--orca-foreground); }
+      .tab.active { color: var(--orca-foreground); border-bottom-color: var(--orca-accent); font-weight: 600; }
+
+      /* ---- cards, callouts ---- */
+      .card {
+        background: var(--orca-card); border: 1px solid var(--orca-border);
+        border-radius: var(--orca-radius, 8px); padding: 9px 10px; margin: 0 0 10px;
+      }
+      .card h2 { font-size: 12px; font-weight: 650; margin: 0 0 6px; }
+      .callout {
+        border-left: 3px solid var(--orca-border); background: var(--orca-muted);
+        border-radius: 6px; padding: 7px 9px; margin: 0 0 10px; white-space: pre-wrap;
+      }
+      .callout.danger { border-left-color: var(--orca-destructive); }
+      .callout.warning { border-left-color: var(--orca-warning); }
+      .callout.ok { border-left-color: #3fb950; }
+      .muted { color: var(--orca-muted-foreground); }
+      .tiny { font-size: 11px; }
+      .rowline { display: flex; align-items: center; gap: 8px; }
+      .spread { justify-content: space-between; }
+      .chip {
+        display: inline-flex; align-items: center; gap: 4px;
+        background: var(--orca-muted); border-radius: 999px; padding: 1px 8px;
+        font-size: 11px; color: var(--orca-muted-foreground);
+      }
+
+      /* ---- controls ---- */
+      button.btn {
+        appearance: none; font: inherit; cursor: pointer;
+        border: 1px solid var(--orca-border); background: var(--orca-card);
+        color: var(--orca-foreground); border-radius: 6px; padding: 4px 10px;
+      }
+      button.btn:hover { border-color: var(--orca-muted-foreground); }
+      button.btn:disabled { opacity: .5; cursor: default; }
+      button.btn.primary { background: var(--orca-accent); border-color: var(--orca-accent); color: #fff; }
+      button.btn.ghost { border-color: transparent; background: none; padding: 3px 6px; }
+      button.btn.mini { padding: 2px 8px; font-size: 11px; }
+      input, select {
+        font: inherit; color: var(--orca-foreground); background: var(--orca-input);
+        border: 1px solid var(--orca-border); border-radius: 6px; padding: 4px 7px; width: 100%;
+      }
+      input:focus, select:focus { outline: 1.5px solid var(--orca-accent); outline-offset: -1px; }
+      label.f { display: block; margin: 7px 0 0; }
+      label.f > span { display: block; font-size: 10.5px; color: var(--orca-muted-foreground); margin: 0 0 3px 1px; }
+      .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
+
+      /* ---- step rows (aip-like) ---- */
+      .steps { display: flex; flex-direction: column; gap: 2px; }
+      .step { display: flex; gap: 8px; padding: 5px 6px 5px 4px; border-radius: 7px; align-items: flex-start; }
+      .step:hover { background: var(--orca-muted); }
+      .step .st { flex: 0 0 16px; height: 16px; margin-top: 1px; display: flex; align-items: center; justify-content: center; }
+      .step .ag { flex: 0 0 15px; height: 15px; margin-top: 1.5px; display: flex; align-items: center; justify-content: center; }
+      .step .body { flex: 1; min-width: 0; }
+      .step .title { font-weight: 600; overflow-wrap: anywhere; }
+      .step .meta { font-size: 11px; color: var(--orca-muted-foreground); margin-top: 1px; overflow-wrap: anywhere; }
+      .step.sub { padding-left: 28px; }
+      .step.sub .title { font-weight: 400; color: var(--orca-muted-foreground); }
+      .step .start { margin: 6px 0 2px; display: flex; flex-direction: column; gap: 6px; }
+      .spin {
+        width: 13px; height: 13px; border-radius: 50%;
+        border: 2px solid var(--orca-muted); border-top-color: var(--orca-accent);
+        animation: wf-spin .8s linear infinite;
+      }
+      @keyframes wf-spin { to { transform: rotate(360deg); } }
+
+      /* ---- gates ---- */
+      .gate-q { font-weight: 600; margin: 0 0 2px; }
+      .gate-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+      .gate-btns .btn.primary { background: #238636; border-color: #238636; }
+      .gate-btns .btn.danger { background: var(--orca-destructive); border-color: var(--orca-destructive); color: var(--orca-destructive-foreground, #fff); }
+
+      .notice { position: sticky; top: 0; z-index: 5; margin: 0 0 8px; }
+      .skeleton { height: 12px; border-radius: 6px; background: var(--orca-muted); margin: 6px 0; animation: wf-pulse 1.4s ease infinite; }
+      @keyframes wf-pulse { 50% { opacity: .45; } }
+      .empty { color: var(--orca-muted-foreground); padding: 14px 4px; text-align: center; }
+      .kv { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; font-size: 11.5px; }
+      .kv span:nth-child(odd) { color: var(--orca-muted-foreground); }
+      code { font: 11px ui-monospace, monospace; background: var(--orca-muted); border-radius: 4px; padding: 0 4px; }
+    </style>
+  </head>
+  <body>
+    <h1>Workflow</h1>
+    <div class="tabs" id="tabs"></div>
+    <div id="notice"></div>
+    <div id="view"></div>
+
+    <script>
+      // ------------------------------------------------------------------ icons
+      const GREEN = '#3fb950', RED = '#f85149'
+      const ring = (color, mark) =>
+        `<svg width="16" height="16" viewBox="0 0 16 16" fill="none">` +
+        `<circle cx="8" cy="8" r="6.4" stroke="${color}" stroke-width="1.5"/>${mark}</svg>`
+      const ICON = {
+        ok: ring(GREEN, `<path d="M5 8.3l2 2 4-4.6" stroke="${GREEN}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`),
+        fail: ring(RED, `<path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="${RED}" stroke-width="1.6" stroke-linecap="round"/>`),
+        flag: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 14.5V2m0 .8c1.7-1.1 3.4-1.1 5.1-.4 1.7.7 3.4.7 4.9-.4v6.4c-1.5 1.1-3.2 1.1-4.9.4C7.4 8.1 5.7 8.1 4 9.2" stroke="var(--orca-warning, #d29922)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
+        pause: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M5.5 4v8M10.5 4v8" stroke="var(--orca-muted-foreground)" stroke-width="1.8" stroke-linecap="round"/></svg>`,
+        play: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M5 3.5v9l7.5-4.5z" fill="var(--orca-accent)"/></svg>`,
+        dot: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.6" fill="var(--orca-muted-foreground)"/></svg>`,
+        pencil: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M11.3 2.1l2.6 2.6-8.3 8.3-3.1.5.5-3.1zM10 3.4l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,
+        refresh: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v2.7h-2.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+      }
+      const AGENT_SVG = {
+        // Claude sunburst — from the Orca material-icons pack (Apache-2.0/MIT, © Google)
+        claude: `<svg width="14" height="14" viewBox="0 0 16 16"><g fill="#e8703f"><path d="m14.375 6.48.49.28v.209l-.14.489-5.937 1.397-.558-1.387zm0 0"/><path d="m12.155 2.373.683.143.182.224.173.535-.072.342-3.983 5.447L7.81 7.737l3.673-4.82z"/><path d="m8.719 1.522.419-.28.349.14.349.49-.957 5.748-.65-.441-.279-.769.49-4.33z"/><path d="m4.239 1.614.43-.55L4.95 1l.558.081.275.216 2.004 4.442.724 2.11-.848.471-3.231-5.864z"/><path d="m2.154 4.665-.14-.56.42-.488.488.07h.14l2.933 2.165.908.698 1.257.978-.698 1.187-.629-.489-.419-.419-4.05-2.863z"/><path d="M1.316 8.296 1 7.946v-.31l.316-.108 3.562.21 3.491.279-.113.695-6.66-.346z"/><path d="M3.411 11.931h-.698l-.278-.32v-.382l1.186-.838 4.82-3.068.487.833z"/><path d="m4.738 13.883-.28.07-.418-.21.07-.35 4.12-5.446.558.768-3.072 4.05z"/><path d="m8.23 14.581-.21.28-.419.14-.349-.28-.21-.42L8.09 8.646l.629.07z"/><path d="M11.791 13.045v.558l-.07.21-.279.14-.489-.066-3.356-4.996 1.331-1.014 1.117 2.025.105.733z"/><path d="m13.398 12.207.07.349-.21.279-.21-.07-1.187-.838-1.815-1.606-1.397-.978.419-1.326.698.419.42.768z"/><path d="m12.49 8.645 1.746.14.419.28.279.418v.302l-.768.327-3.911-.978-1.606-.07.419-1.466 1.117.838z"/></g></svg>`,
+        // OpenAI-style blossom, drawn here: six interlocking rings
+        codex: `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">${[0,1,2,3,4,5].map((k) => { const a = (Math.PI / 3) * k - Math.PI / 2; const x = 12 + 4 * Math.cos(a), y = 12 + 4 * Math.sin(a); return `<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="6.6"/>` }).join('')}</svg>`,
+        // Generic agent robot — from the Orca material-icons pack, recolored to the theme
+        robot: `<svg width="14" height="14" viewBox="0 0 32 32"><path fill="currentColor" d="M2.636 24H6v-8H2.636a.63.63 0 0 0-.636.625v6.75a.63.63 0 0 0 .636.625M26 16v8h3.364c.351 0 .636-.355.636-.7v-6.675a.63.63 0 0 0-.636-.625zM17.417 6H14.69a.63.63 0 0 0-.636.625V12H8.69a.63.63 0 0 0-.636.625L8 25.375c0 .345.305.625.637.625h14.727a.63.63 0 0 0 .636-.625v-12.75a.63.63 0 0 0-.636-.625h-5.31V6.625A.63.63 0 0 0 17.416 6m-5.363 8c1.781 0 2.674 2.154 1.414 3.414s-3.414.368-3.414-1.414a2 2 0 0 1 2-2M22 24H10v-2h12zm-1.946-10c1.781 0 2.674 2.154 1.414 3.414s-3.414.368-3.414-1.414a2 2 0 0 1 2-2"/></svg>`,
+        // GitHub Copilot — from the Orca material-icons pack, recolored to the theme
+        copilot: `<svg width="14" height="14" viewBox="0 0 16 16"><path fill="currentColor" d="M7.998 14C4.006 14 1.11 11.457 1 10.728v-1.7c.074-.549.592-1.472 1.39-1.803l.031-.19a4 4 0 0 1 .11-.534c-.176-.444-.222-.946-.222-1.446 0-.759.112-1.544.606-2.168.507-.64 1.308-.98 2.384-1.1 1.055-.117 1.98.03 2.576.605l.037.036c.142-.06.298-.033.441-.063.32-.066.654-.132 1.015-.132.873 0 1.745.297 2.372.97.66.708.933 1.736.933 2.866 0 .685-.085 1.395-.318 2.037l.014.087c.203.987.3 1.822.3 2.617v.432c-.123.735-2.922 3.401-6.999 3.401z"/></svg>`
+      }
+      const agentIcon = (agent) => {
+        if (!agent) return ''
+        const a = agent.toLowerCase()
+        if (a.startsWith('claude')) return AGENT_SVG.claude
+        if (a.startsWith('codex')) return AGENT_SVG.codex
+        if (a.startsWith('copilot')) return AGENT_SVG.copilot
+        return AGENT_SVG.robot
+      }
+
+      // ------------------------------------------------------------------ state
+      const S = {
+        tab: 'runs',
+        runs: null, runId: null, snap: null,
+        project: null,
+        tplSource: 'project', templates: null, tplId: null,
+        objective: '', baseBranch: '', worktreeName: '',
+        agent: 'claude', model: '', effort: '', worktree: '',
+        startFor: null,           // task id with the start form open
+        job: null, notice: null, busy: null,
+        cfg: null, bridge: null, autoPilot: null
+      }
+      const STATUS_TEXT = {
+        pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает',
+        blocked: 'ждёт гейт', queued: 'в очереди', succeeded: 'готово',
+        failed: 'провал', unknown: 'неизвестно'
+      }
+      const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]))
+      const req = (name, input, timeoutMs = 30000) => orca.plugin.request(name, input, { timeoutMs })
+      const short = (id, p) => (id || '').replace(p, '')
+      const setNotice = (m) => { S.notice = m; render() }
+      const setBusy = (m) => { S.busy = m; render() }
+
+      // persistence (the plugin's own storage, shared with the worker)
+      const PERSIST = {
+        tab: (v) => ['runs', 'templates', 'settings'].includes(v),
+        runId: () => true, tplSource: (v) => ['library', 'project'].includes(v),
+        tplId: () => true, objective: () => true, baseBranch: () => true, worktreeName: () => true,
+        agent: () => true, model: () => true, effort: () => true, worktree: () => true
+      }
+      const remember = async (key, value) => {
+        S[key] = value
+        if (PERSIST[key] && PERSIST[key](value)) await orca.storage.set('html.' + key, value).catch(() => {})
+      }
+      const recall = async () => {
+        for (const key of Object.keys(PERSIST)) {
+          const v = await orca.storage.get('html.' + key).catch(() => null)
+          if (v !== null && v !== undefined) S[key] = v
+        }
+      }
+
+      // ------------------------------------------------------------------ effective status
+      function effectiveStatuses(tasks, gates) {
+        const gateOnTask = new Map(gates.filter((g) => g.status === 'pending').map((g) => [g.taskId, g]))
+        const byId = new Map(tasks.map((t) => [t.id, t]))
+        const memo = new Map()
+        const calc = (id, depth = 0) => {
+          if (memo.has(id)) return memo.get(id)
+          if (depth > 50) return { status: 'queued' }
+          const t = byId.get(id)
+          let out = { status: 'queued' }
+          if (!t) out = { status: 'unknown' }
+          else if (['succeeded', 'failed', 'dispatched'].includes(t.status)) out = { status: t.status }
+          else if (gateOnTask.has(id)) out = { status: 'blocked', gate: gateOnTask.get(id) }
+          else {
+            const blockers = t.deps.map((dep) => ({ dep, eff: calc(dep, depth + 1) })).filter((d) => d.eff.status === 'blocked')
+            if (blockers.length > 0) {
+              out = { status: 'blocked', gate: blockers[0].eff.gate, via: byId.get(blockers[0].dep)?.title ?? blockers[0].dep }
+            } else if (t.status === 'ready') out = { status: 'ready' }
+          }
+          memo.set(id, out)
+          return out
+        }
+        for (const t of tasks) calc(t.id)
+        return memo
+      }
+      const statusIcon = (status) =>
+        status === 'succeeded' ? ICON.ok
+        : status === 'failed' ? ICON.fail
+        : status === 'dispatched' ? `<div class="spin" title="работает"></div>`
+        : status === 'blocked' ? ICON.flag
+        : status === 'ready' ? ICON.play
+        : status === 'queued' || status === 'pending' ? ICON.pause
+        : ICON.dot
+
+      // ------------------------------------------------------------------ loads
+      async function loadRuns() {
+        try {
+          const answer = await req('runs.list')
+          S.runs = answer.runs
+          const ids = answer.runs.map((r) => r.runId)
+          if (S.runId && !ids.includes(S.runId)) S.runId = null
+          if (!S.runId && ids.length > 0) S.runId = ids[0]
+        } catch (e) { S.runs = []; setNotice('Запуски не читаются: ' + esc(e.message || e)) }
+        render()
+      }
+      async function loadState() {
+        try {
+          S.snap = await req('state.get', { runId: S.runId }, 60000)
+        } catch (e) {
+          S.snap = { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: e.message || String(e) }
+        }
+        render()
+      }
+      async function loadProject() {
+        try { S.project = (await req('project.current')).project } catch { S.project = null }
+        render()
+      }
+      async function loadTemplates() {
+        try {
+          const answer = await req('template.list', {
+            source: S.tplSource,
+            projectPath: S.tplSource === 'project' ? S.project?.path ?? null : null
+          }, 60000)
+          S.templates = answer.templates
+          if (answer.templates.length > 0 && !answer.templates.some((t) => t.id === S.tplId)) S.tplId = answer.templates[0].id
+        } catch (e) { S.templates = []; setNotice('Шаблоны не читаются: ' + esc(e.message || e)) }
+        render()
+      }
+      async function loadSettings() {
+        try {
+          S.cfg = await req('settings.get', undefined, 10000)
+          if (!S.agent) S.agent = S.cfg.defaultAgent
+          S.bridge = (await req('bridge.info', undefined, 10000)).terminalId
+        } catch { /* extras, not required */ }
+        try { S.autoPilot = (await orca.settings.get()).autoPilot !== false } catch { S.autoPilot = null }
+        render()
+      }
+
+      // ------------------------------------------------------------------ actions
+      async function resolveGate(gate, resolution) {
+        setBusy('гейт ' + short(gate.id, 'gate_').slice(0, 10) + '…')
+        try { await req('gate.resolve', { gateId: gate.id, resolution }); await loadState() }
+        catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+      }
+      async function startTask(task) {
+        setBusy('старт ' + task.title)
+        try {
+          if (!S.worktree.trim()) throw new Error('выбери ворктри для запуска воркера')
+          await req('task.start', {
+            taskId: task.id, agent: S.agent,
+            model: S.model.trim() === '' ? null : S.model.trim(),
+            effort: S.effort.trim() === '' ? null : S.effort.trim(),
+            worktree: S.worktree
+          }, 120000)
+          S.startFor = null
+          await loadState()
+        } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+      }
+      async function instantiate() {
+        const tpl = (S.templates || []).find((t) => t.id === S.tplId)
+        if (!tpl) return
+        setBusy('поднятие ' + tpl.title)
+        try {
+          if (S.objective.trim() === '') throw new Error('заполни цель (objective)')
+          if (S.worktreeName.trim() === '') throw new Error('заполни имя ворктри')
+          const answer = await req('template.instantiate', {
+            source: S.tplSource,
+            projectPath: S.tplSource === 'project' ? S.project?.path ?? null : null,
+            templateId: tpl.id, objective: S.objective.trim(),
+            baseBranch: S.baseBranch.trim() === '' ? null : S.baseBranch.trim(),
+            worktreeName: S.worktreeName.trim(), agent: S.agent
+          })
+          for (let i = 0; i < 40; i++) {
+            await new Promise((r) => setTimeout(r, 2000))
+            const poll = await req('job.get', { jobId: answer.jobId }, 10000)
+            S.job = poll.job
+            render()
+            if (!poll.job || poll.job.status !== 'running') break
+          }
+          if (S.job && S.job.status === 'done' && S.job.runId) {
+            S.runId = S.job.runId
+            await orca.storage.set('html.runId', S.runId).catch(() => {})
+            S.tab = 'runs'
+            await loadRuns(); await loadState()
+          }
+        } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+      }
+      async function copyTemplate(to) {
+        setBusy('копирование шаблона')
+        try {
+          await req('template.copy', {
+            from: S.tplSource, to, templateId: S.tplId,
+            fromProjectPath: S.tplSource === 'project' ? S.project?.path ?? null : null,
+            toProjectPath: to === 'project' ? S.project?.path ?? null : null
+          })
+          setNotice('шаблон скопирован (' + (to === 'library' ? 'в библиотеку' : 'в проект') + ')')
+        } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+      }
+      async function editTemplate() {
+        setBusy('открытие редактора')
+        try {
+          if (S.tplSource !== 'project' || !S.project) throw new Error('граф-редактор открывает шаблоны проекта — перенеси шаблон в проект кнопкой ниже')
+          await req('template.edit', { projectPath: S.project.path, templateId: S.tplId })
+        } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+      }
+      async function saveSettings() {
+        setBusy('сохранение настроек')
+        try {
+          const saved = await req('settings.save', {
+            libraryDir: S.cfg.libraryDir, refreshMs: Number(S.cfg.refreshMs) || 10000, defaultAgent: S.cfg.defaultAgent
+          })
+          S.cfg = { ...S.cfg, ...saved }
+          setNotice('настройки сохранены')
+        } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+      }
+      async function resetBridge() {
+        setBusy('пересоздание моста')
+        try { await req('bridge.reset', undefined, 10000); S.bridge = (await req('bridge.info', undefined, 10000)).terminalId }
+        catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+      }
+      async function toggleAutoPilot(on) {
+        S.autoPilot = on
+        await orca.settings.set('autoPilot', on).catch(() => {})
+        render()
+      }
+
+      // ------------------------------------------------------------------ render
+      const el = () => document.getElementById('view')
+      function render() {
+        // tabs
+        const tabs = [['runs', 'Запуски'], ['templates', 'Шаблоны'], ['settings', 'Настройки']]
+        document.getElementById('tabs').innerHTML = tabs.map(([id, label]) =>
+          `<button class="tab${S.tab === id ? ' active' : ''}" data-tab="${id}">${label}</button>`).join('')
+        // notice / busy
+        const nb = document.getElementById('notice')
+        nb.innerHTML = S.notice
+          ? `<div class="callout danger">${S.notice}<button class="btn ghost mini" data-act="dismiss" style="float:right">×</button></div>`
+          : S.busy ? `<div class="callout tiny">${esc(S.busy)}…</div>` : ''
+        el().innerHTML = S.tab === 'runs' ? viewRuns() : S.tab === 'templates' ? viewTemplates() : viewSettings()
+        wire()
+      }
+      function wire() {
+        document.querySelectorAll('[data-tab]').forEach((b) =>
+          b.onclick = () => { remember('tab', b.dataset.tab); if (b.dataset.tab === 'templates' && !S.templates) void loadTemplates(); if (b.dataset.tab === 'settings' && !S.cfg) void loadSettings(); render() })
+        document.querySelectorAll('[data-act]').forEach((b) => {
+          const [act, arg] = b.dataset.act.split(':')
+          const map = {
+            dismiss: () => { S.notice = null; render() },
+            refresh: () => { void loadRuns(); void loadState() },
+            'refresh-tpl': () => { S.templates = null; render(); void loadTemplates() },
+            'resolve-approve': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), 'approve'),
+            'resolve-custom': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), b.dataset.option),
+            'start-open': () => { S.startFor = S.startFor === arg ? null : arg; render() },
+            'start-run': () => void startTask(S.snap.tasks.find((t) => t.id === arg)),
+            'instantiate': () => void instantiate(),
+            'copy-project': () => void copyTemplate('project'),
+            'copy-library': () => void copyTemplate('library'),
+            'edit-tpl': () => void editTemplate(),
+            'save-cfg': () => void saveSettings(),
+            'reset-bridge': () => void resetBridge()
+          }
+          if (map[act]) b.onclick = map[act]
+        })
+        document.querySelectorAll('[data-bind]').forEach((node) => {
+          const key = node.dataset.bind
+          const handler = () => void remember(key, node.type === 'number' ? node.value : node.value)
+          node.oninput = handler
+          node.onchange = handler
+        })
+        document.querySelectorAll('[data-bind-select]').forEach((node) => {
+          node.onchange = async () => {
+            const key = node.dataset.bindSelect
+            await remember(key, node.value)
+            if (key === 'tplSource') { S.templates = null; S.tplId = null; render(); void loadTemplates() }
+            if (key === 'runId') void loadState()
+            if (key === 'tab') render()
+          }
+        })
+        const ap = document.getElementById('autopilot')
+        if (ap) ap.onchange = () => void toggleAutoPilot(ap.checked)
+      }
+
+      // ---- runs view
+      function viewRuns() {
+        if (!S.runs) return `<div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:90%"></div><div class="skeleton" style="width:50%"></div>`
+        if (S.runs.length === 0) return `<div class="empty">Нет запусков.<br/>Подними Run из шаблона на вкладке «Шаблоны».</div>`
+        const snap = S.snap
+        const sel = `<div class="rowline"><select data-bind-select="runId" style="flex:1">` +
+          S.runs.map((r) => `<option value="${esc(r.runId)}"${r.runId === S.runId ? ' selected' : ''}>${esc(r.objective).slice(0, 60)}</option>`).join('') + `</select>` +
+          `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button></div>`
+        if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
+        const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
+        const runTitle = snap.run ? `<div class="tiny muted" style="margin:6px 0 8px">${esc(snap.run.objective)}</div>` : ''
+
+        const gates = (snap.gates || []).filter((g) => g.status === 'pending')
+        const gateCards = gates.map((g) => {
+          const opts = (g.options && g.options.length > 0 ? g.options : ['approve', 'request-changes'])
+          const pretty = (o) => o === 'approve' ? 'approve ✓' : o === 'request-changes' ? 'request-changes ✗' : o
+          return `<div class="card"><div class="gate-q">${esc(g.question)}</div>` +
+            `<div class="tiny muted">гейт на шаге «${esc(g.taskTitle)}»</div><div class="gate-btns">` +
+            opts.map((o) => `<button class="btn mini${o === 'approve' ? ' primary' : o === 'request-changes' ? ' danger' : ''}" data-act="resolve-custom:${esc(g.id)}" data-option="${esc(o)}">${esc(pretty(o))}</button>`).join('') +
+            `</div></div>`
+        }).join('')
+
+        const eff = effectiveStatuses(snap.tasks || [], snap.gates || [])
+        const steps = (snap.tasks || []).map((t) => {
+          const e = eff.get(t.id) || { status: t.status }
+          const gateHint = e.gate ? `гейт: «${esc(e.gate.question.slice(0, 60))}${e.gate.question.length > 60 ? '…' : ''}»` : ''
+          const via = e.via ? `(через ${esc(e.via)})` : ''
+          const meta = [
+            t.agent, STATUS_TEXT[e.status] ?? e.status, gateHint, via,
+            (t.deps || []).length > 0 ? 'после: ' + t.deps.map((d) => short(d, 'task_')).join(', ') : null,
+            t.dispatchId ? 'воркер ' + short(t.dispatchId, 'ctx_') : null
+          ].filter(Boolean).join(' · ')
+          const startForm = e.status === 'ready' && S.startFor === t.id ? `
+            <div class="start">
+              <div class="grid2">
+                <label class="f"><span>агент</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
+                <label class="f"><span>модель (опц.)</span><input data-bind="model" value="${esc(S.model)}" placeholder="model"/></label>
+                <label class="f"><span>effort (опц.)</span><input data-bind="effort" value="${esc(S.effort)}" placeholder="high"/></label>
+                <label class="f"><span>ворктри</span><input data-bind="worktree" value="${esc(S.worktree)}" placeholder="name:my-task"/></label>
+              </div>
+              <div><button class="btn primary mini" data-act="start-run:${esc(t.id)}">Стартовать</button></div>
+            </div>` : ''
+          const startBtn = e.status === 'ready' ? ` <button class="btn ghost mini" data-act="start-open:${esc(t.id)}">${S.startFor === t.id ? 'скрыть' : 'старт'}</button>` : ''
+          return `<div class="step">
+            <div class="st">${statusIcon(e.status)}</div>
+            <div class="ag">${agentIcon(t.agent)}</div>
+            <div class="body">
+              <div class="title">${esc(t.title || t.id)}${startBtn}</div>
+              <div class="meta">${esc(meta)}</div>
+              ${startForm}
+            </div>
+          </div>`
+        }).join('')
+
+        const jobCard = S.job && S.job.status !== 'done' ? `<div class="callout ${S.job.status === 'failed' ? 'danger' : ''}">${esc(S.job.error || 'поднятие рана: ' + (S.job.status || '…'))}</div>` : ''
+        return sel + runTitle + errorCallout + jobCard + gateCards +
+          ((snap.tasks || []).length > 0 ? `<div class="card"><h2>Шаги</h2><div class="steps">${steps}</div></div>` : `<div class="empty">В этом ране нет шагов.</div>`)
+      }
+
+      // ---- templates view
+      function viewTemplates() {
+        const project = S.project
+          ? `<div class="rowline spread" style="margin-bottom:8px"><span class="chip">Проект: ${esc(S.project.name)}</span></div>`
+          : `<div class="callout warning">Проект не найден — открой workspace репозитория в Orca.</div>`
+        if (!S.templates) { void loadTemplates(); return project + `<div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:85%"></div>` }
+        if (S.templates.length === 0) {
+          return project + `<div class="empty">Нет шаблонов. Скопируй из библиотеки: источник «Библиотека» → «В проект».</div>`
+        }
+        const tpl = S.templates.find((t) => t.id === S.tplId) ?? S.templates[0]
+        const srcSelect = `<div class="rowline" style="margin-bottom:8px">
+          <select data-bind-select="tplSource" style="flex:1">
+            <option value="project"${S.tplSource === 'project' ? ' selected' : ''}>Проект (.orca/workflows)</option>
+            <option value="library"${S.tplSource === 'library' ? ' selected' : ''}>Библиотека</option>
+          </select>
+          <button class="btn ghost" data-act="refresh-tpl" title="Перечитать">${ICON.refresh}</button></div>`
+        const tplSelect = `<div class="rowline" style="margin-bottom:8px">
+          <select data-bind-select="tplId" style="flex:1">
+            ${S.templates.map((t) => `<option value="${esc(t.id)}"${t.id === tpl.id ? ' selected' : ''}>${esc(t.title || t.id)}</option>`).join('')}
+          </select>
+          <button class="btn ghost" data-act="edit-tpl" title="Открыть в граф-редакторе">${ICON.pencil}</button></div>`
+
+        let preview
+        if (tpl.error) preview = `<div class="callout danger">Шаблон не читается: ${esc(tpl.error)}</div>`
+        else {
+          const rows = tpl.steps.flatMap((step) => {
+            const meta = [
+              step.specialist ? 'специалист ' + step.specialist : null,
+              (step.deps || []).length > 0 ? 'deps: ' + step.deps.join(', ') : null,
+              step.gate ? 'гейт: ' + step.gate.question : null,
+              step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
+            ].filter(Boolean).join(' · ')
+            const main = `<div class="step">
+              <div class="ag">${agentIcon(step.agent)}</div>
+              <div class="body"><div class="title">${esc(step.id)}${step.title ? ' · ' + esc(step.title) : ''}</div><div class="meta">${esc(meta)}</div></div>
+            </div>`
+            const subs = (step.sub || []).map((child) => `<div class="step sub">
+              <div class="ag">${agentIcon(child.agent)}</div>
+              <div class="body"><div class="title">↳ ${esc(child.id)}${child.title ? ' · ' + esc(child.title) : ''}</div>
+              <div class="meta">${child.optional ? 'опциональный: стартует по RUN из отчёта' : ''}</div></div>
+            </div>`).join('')
+            return [main, subs]
+          }).join('')
+          preview = `<div class="steps">${rows}</div>`
+        }
+
+        return project + srcSelect + tplSelect +
+          `<div class="card"><h2>${esc(tpl.title || tpl.id)}</h2>
+            <div class="tiny muted" style="margin-bottom:6px">${esc(tpl.id)} · ${esc(tpl.file)}</div>
+            ${preview}</div>` +
+          `<div class="card"><h2>Поднять Run</h2>
+            <label class="f"><span>цель (objective)</span><input data-bind="objective" value="${esc(S.objective)}" placeholder="что делаем — одна фраза"/></label>
+            <div class="grid2">
+              <label class="f"><span>base branch (опц.)</span><input data-bind="baseBranch" value="${esc(S.baseBranch)}" placeholder="master"/></label>
+              <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>
+            </div>
+            <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
+            <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
+              <button class="btn primary" data-act="instantiate">Поднять Run</button>
+              ${S.tplSource === 'library' ? `<button class="btn" data-act="copy-project">↳ в проект</button>` : `<button class="btn" data-act="copy-library">↳ в библиотеку</button>`}
+            </div></div>`
+      }
+
+      // ---- settings view
+      function viewSettings() {
+        if (!S.cfg) { void loadSettings(); return `<div class="skeleton" style="width:60%"></div><div class="skeleton" style="width:80%"></div>` }
+        return `<div class="card"><h2>Настройки</h2>
+          <label class="f"><span>Каталог библиотеки шаблонов</span><input data-bind="cfg.libraryDir" value="${esc(S.cfg.libraryDir)}"/></label>
+          <div class="grid2">
+            <label class="f"><span>Интервал обновления, мс (2000–120000)</span><input type="number" data-bind="cfg.refreshMs" value="${esc(S.cfg.refreshMs)}"/></label>
+            <label class="f"><span>Агент по умолчанию</span><input data-bind="cfg.defaultAgent" value="${esc(S.cfg.defaultAgent)}"/></label>
+          </div>
+          <div class="rowline" style="margin-top:9px"><button class="btn primary" data-act="save-cfg">Сохранить</button></div></div>
+        <div class="card"><h2>Автопилот</h2>
+          <label class="rowline"><input type="checkbox" id="autopilot" style="width:auto"${S.autoPilot === false ? '' : ' checked'}/>
+          <span>вести пайплайн самому: стартовать готовые шаги, крутить циклы ревью — гейты всё равно ждут тебя</span></label></div>
+        <div class="card"><h2>Мост</h2>
+          <div class="kv">
+            <span>терминал</span><span>${S.bridge ? `<code>${esc(S.bridge)}</code> — жив, следует за фокусным воркспейсом` : 'не создан'}</span>
+          </div>
+          <div class="rowline" style="margin-top:8px"><button class="btn" data-act="reset-bridge">Пересоздать мост</button></div>
+          <div class="tiny muted" style="margin-top:6px">Orca пускает ввод только в терминалы фокусного воркспейса — мост живёт в нём и пересоздаётся при смене фокуса.</div></div>`
+      }
+
+      // ------------------------------------------------------------------ boot
+      void (async () => {
+        await recall()
+        if (!S.tab) S.tab = 'runs'
+        render()
+        void loadRuns().then(() => loadState())
+        void loadProject()
+        try {
+          orca.plugin.on('state.changed', () => { if (S.tab === 'runs') void loadState() })
+          orca.plugin.on('job.progress', (p) => { if (p && p.job) { S.job = p.job; render() } })
+        } catch { /* events are an extra */ }
+        // another surface (or a script) changed a persisted UI key: follow it
+        try {
+          orca.storage.onDidChange(async (change) => {
+            if (!change || change.key !== 'html.tab') return
+            const v = await orca.storage.get('html.tab')
+            if (typeof v === 'string' && ['runs', 'templates', 'settings'].includes(v)) { S.tab = v; render() }
+          })
+        } catch { /* older Orca */ }
+        // poll: the worker also refreshes on its own; this keeps the panel honest if posts are missed
+        const loop = async () => {
+          for (;;) {
+            let ms = 10000
+            try { ms = Math.min(120000, Math.max(2000, (await orca.settings.get()).refreshMs ?? 10000)) } catch {}
+            await new Promise((r) => setTimeout(r, ms))
+            if (S.tab === 'runs' && !S.busy) await loadState()
+          }
+        }
+        void loop()
+      })()
+
+    </script>
+  </body>
+</html>
