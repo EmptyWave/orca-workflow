@@ -2,8 +2,8 @@
 // template materialization. Runs for as long as the plugin is enabled (it owns a status
 // bar item), polls a light refresh, and pushes 'state.changed' to open panels.
 import { Bridge, BridgeError, shellPath } from './bridge'
-import type { WfGate, WfJob, WfRun, WfSnapshot, WfStep, WfTask, WfTemplate, WfWorker } from './protocol'
-import { applyPlaceholders, parseTemplate } from './workflow'
+import type { WfGate, WfJob, WfRun, WfSnapshot, WfSpecialist, WfStep, WfTask, WfTemplate, WfWorker } from './protocol'
+import { applyPlaceholders, materialize, parseTemplate, topoUnits } from './workflow'
 import { parseYaml, type YamlValue } from './yaml'
 import type { OrcaWorkerApi } from 'orca/worker'
 
@@ -219,9 +219,247 @@ export default function activate(orca: OrcaWorkerApi): void {
         })
       }
       await updateStatusBar(snap)
+      // Auto-pilot: drive the pipeline forward off the same snapshot.
+      if (runId) void autopilot(runId, snap).catch((error) => orca.log(`autopilot: ${message(error)}`))
     } finally {
       refreshing = false
     }
+  }
+
+  // ---- auto-pilot ---------------------------------------------------------------------------------
+  // One-time description, then the pipeline runs itself: ready tasks start with their
+  // template agent/model, review verdicts drive on_reject loops, RUN: <id> requests start
+  // optional sub-steps. Gates stay the only human stops.
+
+  type AutoState = {
+    worktreeName: string
+    repoPath: string | null
+    baseBranch: string | null
+    firstStarted: boolean
+    tasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null }>
+    reviews: Record<string, { devTaskId: string; devStepId: string; maxRounds: number; source: 'verdict' | 'failure' }>
+    optionals: Record<string, { parentTaskId: string; stepId: string }>
+    verdicts: Record<string, 'approve' | 'request-changes'>
+    rounds: Record<string, number>
+    actions: number
+    stopped: string | null
+  }
+
+  async function saveAuto(runId: string, state: AutoState): Promise<void> {
+    await orca.storage.set(`auto.${runId}`, state)
+  }
+
+  async function loadAuto(runId: string): Promise<AutoState | null> {
+    const stored = await orca.storage.get(`auto.${runId}`)
+    return stored && typeof stored === 'object' ? (stored as AutoState) : null
+  }
+
+  async function autopilot(runId: string, snap: WfSnapshot): Promise<void> {
+    const autopilotOn = await orca.settings.get('autoPilot')
+    if (autopilotOn === false) return
+    const state = await loadAuto(runId)
+    if (!state || state.stopped) return
+    const byId = new Map(snap.tasks.map((t) => [t.id, t]))
+    let acted = false
+    const act = async (what: string, fn: () => Promise<unknown>): Promise<void> => {
+      if (acted) return
+      acted = true
+      state.actions += 1
+      orca.log(`autopilot[${runId}]: ${what}`)
+      try {
+        await fn()
+      } catch (error) {
+        state.stopped = `ошибка: ${message(error)}`
+        await saveAuto(runId, state)
+        return
+      }
+      await saveAuto(runId, state)
+    }
+
+    // 1. Start ready tasks (the very first one creates the worktree).
+    for (const task of snap.tasks) {
+      if (acted) break
+      if (task.status !== 'ready') continue
+      const cfg = state.tasks[task.id]
+      if (!cfg) continue // not ours (manual task) — leave for the person
+      const from = await fromFlag()
+      let worktree = `name:${state.worktreeName}`
+      if (!state.firstStarted) {
+        state.firstStarted = true
+        const repoFlag = state.repoPath ? ` --repo path:${shellQuote(state.repoPath)}` : ''
+        const baseFlag = state.baseBranch ? ` --base-branch ${shellQuote(state.baseBranch)}` : ''
+        await act(`старт ${cfg.stepId} (new worktree ${state.worktreeName})`, async () =>
+          bridge.run(
+            `orca orchestration worker-start --task ${shellQuote(task.id)} --from ${from} --worktree new-top-level${repoFlag}${baseFlag} --name ${shellQuote(
+              state.worktreeName
+            )} --agent ${shellQuote(cfg.agent)}${cfg.model ? ` --model ${shellQuote(cfg.model)}` : ''}${
+              cfg.model && cfg.effort ? ` --effort ${shellQuote(cfg.effort)}` : ''
+            } --json`,
+            90_000
+          )
+        )
+        if (acted) break
+      }
+      await act(`старт ${cfg.stepId} (в ${worktree})`, async () =>
+        bridge.run(
+          `orca orchestration worker-start --task ${shellQuote(task.id)} --from ${from} --worktree ${shellQuote(
+            `name:${state.worktreeName}`
+          )} --agent ${shellQuote(cfg.agent)}${cfg.model ? ` --model ${shellQuote(cfg.model)}` : ''}${
+            cfg.model && cfg.effort ? ` --effort ${shellQuote(cfg.effort)}` : ''
+          } --json`,
+          90_000
+        )
+      )
+    }
+    if (acted) return
+
+    // 2. Freshly succeeded review units: parse the verdict once, then act.
+    for (const task of snap.tasks) {
+      if (acted) break
+      if (task.status !== 'succeeded' || !task.dispatchId) continue
+      const review = state.reviews[task.id]
+      if (!review || state.verdicts[task.id]) continue
+      const report = await readWorkerReport(task.dispatchId)
+      const verdict = parseVerdict(report)
+      state.verdicts[task.id] = verdict
+      if (verdict === 'request-changes') {
+        const round = (state.rounds[review.devTaskId] ?? 0) + 1
+        state.rounds[review.devTaskId] = round
+        if (round > review.maxRounds) {
+          state.stopped = `ревью отклонило работу ${review.maxRounds} раз — конвейер остановлен`
+          await saveAuto(runId, state)
+          return
+        }
+        const devTask = byId.get(review.devTaskId)
+        const devCfg = state.tasks[review.devTaskId]
+        const from2 = await fromFlag()
+        await act(`перезапуск ${review.devStepId} (раунд ${round}/${review.maxRounds})`, async () => {
+          if (devTask?.dispatchId) {
+            await bridge.run(
+              `orca orchestration send --to dispatch:${task.dispatchId} --subject "Замечания ревью (раунд ${round})" --body ${shellQuote(
+                extractRemarks(report)
+              )} --json`
+            )
+          }
+          return bridge.run(
+            `orca orchestration worker-start --task ${shellQuote(review.devTaskId)} --from ${from2} --worktree ${shellQuote(
+              `name:${state.worktreeName}`
+            )} --agent ${shellQuote(devCfg?.agent ?? 'claude')} --json`,
+            90_000
+          )
+        })
+        if (acted) return
+        // Restart the reviewer right after the reworked dev task finishes: record the pair.
+        state.rounds[`__retry_review_${review.devTaskId}`] = 1
+        await saveAuto(runId, state)
+        return
+      }
+      // approve: nothing to do, the DAG continues on its own.
+      await saveAuto(runId, state)
+    }
+    if (acted) return
+
+    // 3. After a reworked dev task completes, re-run its reviewer.
+    for (const [reviewTaskId, review] of Object.entries(state.reviews)) {
+      if (acted) break
+      if (review.source !== 'verdict') continue
+      const retryMark = state.rounds[`__retry_review_${review.devTaskId}`]
+      if (!retryMark) continue
+      const devTask = byId.get(review.devTaskId)
+      const reviewTask = byId.get(reviewTaskId)
+      if (devTask?.status === 'succeeded' && reviewTask?.status === 'succeeded' && state.verdicts[reviewTaskId] === 'request-changes') {
+        delete state.rounds[`__retry_review_${review.devTaskId}`]
+        const cfg = state.tasks[reviewTaskId]
+        const from3 = await fromFlag()
+        await act(`перепроверка после правок`, async () =>
+          bridge.run(
+            `orca orchestration worker-start --task ${shellQuote(reviewTaskId)} --from ${from3} --worktree ${shellQuote(
+              `name:${state.worktreeName}`
+            )} --agent ${shellQuote(cfg?.agent ?? 'claude')} --json`,
+            90_000
+          )
+        )
+      }
+    }
+    if (acted) return
+
+    // 4. Watched child failures (block on_reject): reject -> retry the goto task.
+    for (const [reviewTaskId, review] of Object.entries(state.reviews)) {
+      if (acted) break
+      if (review.source !== 'failure') continue
+      const childTask = byId.get(reviewTaskId)
+      if (childTask?.status !== 'failed' || state.verdicts[reviewTaskId]) continue
+      state.verdicts[reviewTaskId] = 'request-changes'
+      const round = (state.rounds[review.devTaskId] ?? 0) + 1
+      state.rounds[review.devTaskId] = round
+      if (round > review.maxRounds) {
+        state.stopped = `подшаг падал ${review.maxRounds} раз — конвейер остановлен`
+        await saveAuto(runId, state)
+        return
+      }
+      const devCfg = state.tasks[review.devTaskId]
+      const from4 = await fromFlag()
+      await act(`подшаг упал — перезапуск ${review.devStepId} (${round}/${review.maxRounds})`, async () =>
+        bridge.run(
+          `orca orchestration worker-start --task ${shellQuote(review.devTaskId)} --from ${from4} --worktree ${shellQuote(
+            `name:${state.worktreeName}`
+          )} --agent ${shellQuote(devCfg?.agent ?? 'claude')} --json`,
+          90_000
+        )
+      )
+    }
+    if (acted) return
+
+    // 5. RUN: <sub-step-id> requests in succeeded parent reports start optional sub-steps.
+    for (const [optionalTaskId, link] of Object.entries(state.optionals)) {
+      if (acted) break
+      if (byId.get(optionalTaskId)?.status && byId.get(optionalTaskId)?.status !== 'pending') continue
+      if (state.rounds[`__opt_started_${optionalTaskId}`]) continue
+      const parent = byId.get(link.parentTaskId)
+      if (!parent?.dispatchId || parent.status !== 'succeeded') continue
+      const report = await readWorkerReport(parent.dispatchId)
+      const wants = new RegExp(`RUN:\\s*${link.stepId}\\b`).test(report)
+      if (!wants) continue
+      state.rounds[`__opt_started_${optionalTaskId}`] = 1
+      const cfg = state.tasks[optionalTaskId]
+      const from5 = await fromFlag()
+      await act(`опциональный подшаг ${link.stepId} по запросу из отчёта`, async () =>
+        bridge.run(
+          `orca orchestration worker-start --task ${shellQuote(optionalTaskId)} --from ${from5} --worktree ${shellQuote(
+            `name:${state.worktreeName}`
+          )} --agent ${shellQuote(cfg?.agent ?? 'claude')} --json`,
+          90_000
+        )
+      )
+    }
+    void runId
+  }
+
+  /** Bounded worker report text (transcript source). */
+  async function readWorkerReport(dispatchId: string): Promise<string> {
+    try {
+      const out = await bridge.run(
+        `orca orchestration worker-read --dispatch ${shellQuote(dispatchId)} --limit 200 --json`,
+        15_000
+      )
+      const parsed = JSON.parse(extractJson(out)) as { result?: { rows?: Array<{ text?: string }> } }
+      return (parsed.result?.rows ?? []).map((r) => r.text ?? '').join('\n')
+    } catch {
+      return ''
+    }
+  }
+
+  /** `VERDICT: approve|request-changes` in the report tail; default approve on failure to say. */
+  function parseVerdict(report: string): 'approve' | 'request-changes' {
+    const tail = report.slice(-4000)
+    const match = tail.match(/VERDICT:\s*(approve|request-changes)/i)
+    return match && match[1].toLowerCase() === 'request-changes' ? 'request-changes' : 'approve'
+  }
+
+  function extractRemarks(report: string): string {
+    const idx = report.lastIndexOf('VERDICT:')
+    const remarks = idx >= 0 ? report.slice(Math.max(0, idx - 3000), idx) : report.slice(-3000)
+    return remarks.trim().slice(0, 2500) || 'См. полный отчёт ревьюера.'
   }
 
   async function updateStatusBar(snap: WfSnapshot): Promise<void> {
@@ -373,58 +611,95 @@ export default function activate(orca: OrcaWorkerApi): void {
     return step.specFile
   }
 
+  // ---- specialists (aip-style) -----------------------------------------------------------------
+
+  /** Loads `<repo>/.orca/specialists/*.yaml` and the library's `specialists/` in one batch. */
+  async function loadSpecialists(projectPath: string | null): Promise<WfSpecialist[]> {
+    const dirs: Array<string> = []
+    if (projectPath) dirs.push(`${projectPath.replace(/\/+$/, '')}/.orca/specialists`)
+    dirs.push((await libraryDir()).replace(/\/workflows$/, '/specialists'))
+    const out: WfSpecialist[] = []
+    for (const dir of dirs) {
+      let listing = ''
+      try {
+        listing = await bridge.run(
+          `for f in ${shellPath(dir)}/*.yaml; do [ -f "$f" ] || continue; echo "__WF_LS__\${f##*/}"; base64 < "$f"; echo __WF_LE__; done`
+        )
+      } catch {
+        continue
+      }
+      let current: string | null = null
+      const chunks: string[] = []
+      const flush = (): void => {
+        if (current) {
+          const slug = current.replace(/\.yaml$/, '')
+          try {
+            const raw = parseYaml(fromBase64(chunks.join(''))) as { [k: string]: unknown }
+            out.push({
+              slug,
+              agent: String(raw.agent ?? 'claude'),
+              model: typeof raw.model === 'string' ? raw.model : null,
+              effort: typeof raw.effort === 'string' ? raw.effort : null,
+              spec: typeof raw.spec === 'string' ? raw.spec : null,
+              error: null
+            })
+          } catch (error) {
+            out.push({ slug, agent: 'claude', model: null, effort: null, spec: null, error: message(error) })
+          }
+        }
+      }
+      for (const line of listing.split('\n')) {
+        if (line.startsWith('__WF_LS__')) {
+          flush()
+          current = line.slice('__WF_LS__'.length).trim()
+          chunks.length = 0
+        } else if (line.trim() === '__WF_LE__') {
+          flush()
+          current = null
+          chunks.length = 0
+        } else if (current !== null) {
+          chunks.push(line.trim())
+        }
+      }
+      flush()
+    }
+    return out
+  }
+
+  /** Resolves `specialist:` references into agent/model/spec, in steps and sub-children. */
+  function resolveSteps(template: WfTemplate, specialists: WfSpecialist[], specs: Record<string, string>): WfStep[] {
+    const bySlug = new Map(specialists.map((s) => [s.slug, s]))
+    const resolveUnit = (
+      specialist: string | null,
+      agent: string | null,
+      model: string | null,
+      effort: string | null,
+      spec: string | null,
+      specFile: string | null
+    ): { agent: string | null; model: string | null; effort: string | null; spec: string | null } => {
+      const specOverride = specFile ? (specs[specFile] ?? spec) : spec
+      if (!specialist) return { agent, model, effort: model ? effort : null, spec: specOverride ?? spec }
+      const sp = bySlug.get(specialist)
+      if (!sp) return { agent, model, effort: model ? effort : null, spec: specOverride ?? spec }
+      const finalModel = model ?? sp.model
+      return {
+        agent: agent ?? sp.agent,
+        model: finalModel,
+        effort: finalModel ? (effort ?? sp.effort) : null,
+        spec: specOverride ?? sp.spec
+      }
+    }
+    return template.steps.map((step) => {
+      const own = resolveUnit(step.specialist, step.agent, step.model, step.effort, step.spec, step.specFile)
+      const sub = (step.sub ?? []).map((child) => ({
+        ...child,
+        ...resolveUnit(child.specialist, child.agent, child.model, child.effort, child.spec, child.specFile)
+      }))
+      return { ...step, ...own, sub }
+    })
+  }
+
   // ---- instantiate ---------------------------------------------------------------------------------
-
-  function topoOrder(steps: WfStep[]): WfStep[] {
-    const byId = new Map(steps.map((s) => [s.id, s]))
-    const seen = new Set<string>()
-    const order: WfStep[] = []
-    const visit = (id: string, stack: Set<string>): void => {
-      if (seen.has(id)) return
-      if (stack.has(id)) throw new BridgeError(`цикл в deps через шаг "${id}"`, 'cli_error')
-      stack.add(id)
-      for (const dep of byId.get(id)?.deps ?? []) visit(dep, stack)
-      stack.delete(id)
-      seen.add(id)
-      const step = byId.get(id)
-      if (step) order.push(step)
-    }
-    for (const step of steps) visit(step.id, new Set())
-    return order
-  }
-
-  /** Task ids a step depends on, through barrier steps (steps without an agent). */
-  function taskDeps(step: WfStep, taskOf: Map<string, string>): string[] {
-    const out: string[] = []
-    const walk = (id: string): void => {
-      const dep = stepsById.get(id)
-      if (!dep) return
-      if (dep.agent && taskOf.has(dep.id)) {
-        out.push(taskOf.get(dep.id) as string)
-        return
-      }
-      for (const d of dep.deps) walk(d)
-    }
-    for (const dep of step.deps) walk(dep)
-    return [...new Set(out)]
-  }
-
-  /** Checkpoints of barrier ancestors plus the step's own; consumed set prevents duplicates. */
-  function gatesFor(step: WfStep, consumed: Set<string>): Array<NonNullable<WfStep['gate']>> {
-    const gates: Array<NonNullable<WfStep['gate']>> = []
-    if (step.agent && step.gate) gates.push(step.gate)
-    const walk = (id: string): void => {
-      const dep = stepsById.get(id)
-      if (!dep || dep.agent) return
-      if (dep.gate && !consumed.has(dep.id)) {
-        consumed.add(dep.id)
-        gates.push(dep.gate)
-      }
-      for (const d of dep.deps) walk(d)
-    }
-    for (const dep of step.deps) walk(dep)
-    return gates
-  }
 
   let stepsById = new Map<string, WfStep>()
 
@@ -489,31 +764,40 @@ export default function activate(orca: OrcaWorkerApi): void {
         job.step = 'tasks'
         await saveJob(job, run.runId)
         stepsById = new Map(template.steps.map((s) => [s.id, s]))
-        const order = topoOrder(template.steps)
+        // Resolve specialists into the steps, then flatten blocks into task units.
+        const specialists = await loadSpecialists(input.projectPath)
+        const specPaths = new Set<string>()
+        for (const step of template.steps) {
+          if (step.specFile) specPaths.add(step.specFile)
+          for (const child of step.sub ?? []) if (child.specFile) specPaths.add(child.specFile)
+        }
+        const dir = await workflowsDir(input.source, input.projectPath)
+        const specs = specPaths.size > 0 ? await readFiles(dir, [...specPaths]) : {}
+        const resolved = resolveSteps(template, specialists, specs)
+        const { units, blockWatches } = materialize(resolved)
         const taskOf = new Map<string, string>()
-        const consumed = new Set<string>()
-        for (const step of order) {
-          if (!step.agent) continue
-          const spec = applyPlaceholders(step.spec ?? '', vars)
-          const title = applyPlaceholders(step.title ?? step.id, vars)
-          const specFile = `/tmp/wfv-${job.id}-${step.id}.md`
+        for (const unit of topoUnits(units)) {
+          if (!unit.agent) continue
+          const spec = applyPlaceholders(unit.spec ?? '', vars)
+          const title = applyPlaceholders(unit.title ?? unit.id, vars)
+          const specFile = `/tmp/wfv-${job.id}-${unit.id}.md`
           await bridge.run(`printf %s ${shellQuote(toBase64(spec))} | base64 -d > ${specFile}`)
-          const deps = taskDeps(step, taskOf)
+          const deps = unit.deps.map((d) => taskOf.get(d)).filter((d): d is string => Boolean(d))
           const depsFlag = deps.length > 0 ? ` --deps ${shellQuote(JSON.stringify(deps))}` : ''
           const task = await cli<{ taskId: string; id?: string }>(
             `orca orchestration task-create ${from} --run ${shellQuote(run.runId)} --task-title ${shellQuote(
-              `${step.id} ${title}`
+              `${unit.id} ${title}`
             )} --spec-file ${specFile}${depsFlag} --json`
           )
-          taskOf.set(step.id, String(task.taskId ?? task.id ?? ''))
-          job.step = `gate ${step.id}`
+          taskOf.set(unit.id, String(task.taskId ?? task.id ?? ''))
+          job.step = `task ${unit.id}`
           await saveJob(job)
-          for (const gate of gatesFor(step, consumed)) {
+          if (unit.gate) {
             await bridge.run(
               `orca orchestration gate-create ${from} --task ${shellQuote(
-                taskOf.get(step.id) as string
-              )} --question ${shellQuote(applyPlaceholders(gate.question, vars))} --options ${shellQuote(
-                JSON.stringify(gate.options)
+                taskOf.get(unit.id) as string
+              )} --question ${shellQuote(applyPlaceholders(unit.gate.question, vars))} --options ${shellQuote(
+                JSON.stringify(unit.gate.options)
               )} --json`
             )
           }
@@ -521,6 +805,73 @@ export default function activate(orca: OrcaWorkerApi): void {
         job.step = 'done'
         job.status = 'done'
         await saveJob(job)
+        // Auto-pilot bookkeeping: per-task step configs, review retry pairs, optional subs.
+        const autoTasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null }> = {}
+        for (const unit of units) {
+          const taskId = taskOf.get(unit.id)
+          if (!taskId || !unit.agent) continue
+          autoTasks[taskId] = {
+            stepId: unit.id,
+            agent: unit.agent,
+            model: unit.model,
+            effort: unit.model ? unit.effort : null
+          }
+        }
+        // aip semantics: on_reject on a review unit sends the work back to on_reject.goto.
+        const autoReviews: Record<
+          string,
+          { devTaskId: string; devStepId: string; maxRounds: number; source: 'verdict' | 'failure' }
+        > = {}
+        for (const unit of units) {
+          if (!unit.onReject) continue
+          const reviewTaskId = taskOf.get(unit.id)
+          const devTaskId = taskOf.get(unit.onReject.goto)
+          if (reviewTaskId && devTaskId) {
+            autoReviews[reviewTaskId] = {
+              devTaskId,
+              devStepId: unit.onReject.goto,
+              maxRounds: unit.onReject.maxRounds,
+              source: 'verdict'
+            }
+          }
+        }
+        // A parentless block with on_reject: any watched child failing counts as rejection.
+        const stepIdToTask = new Map<string, string>()
+        for (const unit of units) {
+          const t = taskOf.get(unit.id)
+          if (t) stepIdToTask.set(unit.id, t)
+        }
+        for (const watch of blockWatches) {
+          const devTaskId = stepIdToTask.get(watch.goto)
+          if (!devTaskId) continue
+          for (const childId of watch.children) {
+            const childTask = stepIdToTask.get(childId)
+            if (childTask) {
+              autoReviews[childTask] = { devTaskId, devStepId: watch.goto, maxRounds: watch.maxRounds, source: 'failure' }
+            }
+          }
+        }
+        // Optional sub-steps: started on a RUN: <id> request from the parent's report.
+        const autoOptionals: Record<string, { parentTaskId: string; stepId: string }> = {}
+        for (const unit of units) {
+          if (!unit.optional) continue
+          const parentTaskId = stepIdToTask.get(unit.stepId)
+          const ownTaskId = taskOf.get(unit.id)
+          if (parentTaskId && ownTaskId) autoOptionals[ownTaskId] = { parentTaskId, stepId: unit.id }
+        }
+        await orca.storage.set(`auto.${run.runId}`, {
+          worktreeName: input.worktreeName,
+          repoPath: input.projectPath,
+          baseBranch: input.baseBranch,
+          firstStarted: false,
+          tasks: autoTasks,
+          reviews: autoReviews,
+          optionals: autoOptionals,
+          verdicts: {},
+          rounds: {},
+          actions: 0,
+          stopped: null
+        })
         await refresh()
       } catch (error) {
         job.status = 'failed'

@@ -7,16 +7,18 @@ const TEMPLATE_YAML = `id: demo
 title: Демо
 steps:
   - id: plan
-    agent: claude
-    specFile: specs/plan.md
-  - id: gate1
-    deps: [plan]
-    gate: { question: 'Пускать dev?', options: [approve, request-changes] }
-  - id: dev
-    agent: claude
-    specFile: specs/dev.md
-    deps: [gate1]
-    gate: { question: 'Отчёт принят?', options: [approve, request-changes] }
+    specialist: planner
+    sub:
+      - { id: research, specialist: researcher, optional: true }
+  - { id: review, specialist: reviewer, on_reject: { goto: plan, max_rounds: 2 } }
+  - id: tests
+    sub:
+      - { id: test-api, specialist: tester }
+      - { id: test-ui, specialist: tester }
+  - id: commit
+    specialist: committer
+    deps: [tests]
+    gate: { question: 'Коммитить?', options: [approve, request-changes] }
 `
 
 const b64 = (s: string): string => {
@@ -113,10 +115,22 @@ function makeHost() {
     }
     if (command.includes('__WF_LS__') && command.includes('base64')) {
       // The whole-directory listing: marker + base64 + end marker per yaml file.
+      const files: Record<string, string> = command.includes('/specialists')
+        ? {
+            planner: 'agent: claude\nspec: PLAN SPEC {{objective}}\n',
+            researcher: 'agent: claude\nspec: RESEARCH SPEC\n',
+            reviewer: 'agent: claude\nspec: REVIEW SPEC\n',
+            coder: 'agent: claude\nspec: CODE SPEC\n',
+            tester: 'agent: claude\nmodel: cheap-model\nspec: TEST SPEC\n',
+            committer: 'agent: claude\nspec: COMMIT SPEC\n'
+          }
+        : { demo: TEMPLATE_YAML }
       const chunks: string[] = []
-      chunks.push('__WF_LS__demo.yaml')
-      chunks.push(b64(TEMPLATE_YAML).replace(/(.{76})/g, '$1\n'))
-      chunks.push('__WF_LE__')
+      for (const [name, content] of Object.entries(files)) {
+        chunks.push(`__WF_LS__${name}.yaml`)
+        chunks.push(b64(content).replace(/(.{76})/g, '$1\n'))
+        chunks.push('__WF_LE__')
+      }
       return chunks.join('\n')
     }
     if (command.includes('__FILE__')) {
@@ -196,8 +210,8 @@ test('template.list читает библиотеку и резолвит specFi
     const template = answer.templates[0]
     assert.equal(template.id, 'demo')
     assert.equal(template.error, null)
-    assert.equal(template.steps.length, 3)
-    assert.equal(template.steps[0].spec, 'PLAN SPEC {{objective}}')
+    assert.equal(template.steps.length, 4)
+    assert.ok(template.steps.some((s) => s.sub && s.sub.length > 0), 'блок подшагов читается')
   }))
 
 test('template.instantiate создаёт Run, задачи и гейты барьера', () =>
@@ -221,9 +235,9 @@ test('template.instantiate создаёт Run, задачи и гейты бар
     assert.equal(job.status, 'done', job.error ?? '')
     assert.equal(job.runId, 'run_2')
     const commands = host.callsOf('terminal.sendText').map((c) => (c as { text: string }).text)
-    assert.equal(commands.filter((c) => c.includes('task-create')).length, 2, 'plan + dev')
-    // Гейт барьера gate1 + собственный гейт dev — оба на задаче dev (task_new).
-    assert.equal(commands.filter((c) => c.includes('gate-create') && c.includes('task_new')).length, 2)
+    // plan, research(optional), review, test-api, test-ui, commit — все материализуются.
+    assert.equal(commands.filter((c) => c.includes('task-create')).length, 6, 'все юниты')
+    assert.ok(commands.some((c) => c.includes('gate-create')), 'гейт commit создан')
     const specWrite = commands.find((c) => c.includes('base64 -d'))
     assert.ok(specWrite, 'спека пишется через base64')
   }))

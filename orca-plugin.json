@@ -25,7 +25,10 @@
         "id": "workflow-graph",
         "title": "Workflow Graph",
         "entry": "src/editor/entry.ts",
-        "extensions": [".workflow.yaml", ".yaml"],
+        "extensions": [
+          ".workflow.yaml",
+          ".yaml"
+        ],
         "frame": "isolated"
       }
     ],
@@ -72,16 +75,36 @@
         "type": "string",
         "default": "claude",
         "placeholder": "claude"
+      },
+      {
+        "key": "autoPilot",
+        "title": "Auto-pilot: start ready steps, drive review loops (gates still stop for you)",
+        "type": "boolean",
+        "default": true
       }
     ]
   },
   "capabilities": [
-    { "kind": "storage:own" },
-    { "kind": "settings:own" },
-    { "kind": "terminal:send" },
-    { "kind": "terminal:read" },
-    { "kind": "workspace:read" },
-    { "kind": "workspace:write" },
-    { "kind": "agent:read" }
+    {
+      "kind": "storage:own"
+    },
+    {
+      "kind": "settings:own"
+    },
+    {
+      "kind": "terminal:send"
+    },
+    {
+      "kind": "terminal:read"
+    },
+    {
+      "kind": "workspace:read"
+    },
+    {
+      "kind": "workspace:write"
+    },
+    {
+      "kind": "agent:read"
+    }
   ]
 }

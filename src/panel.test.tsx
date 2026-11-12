@@ -73,6 +73,7 @@ test('вкладка Шаблоны: селектор + карандаш, пол
   const steps = Array.from({ length: 8 }, (_, i) => ({
     id: `step${i}`,
     title: `Шаг ${i}`,
+    specialist: null,
     agent: i % 3 === 0 ? 'claude' : null,
     model: null,
     effort: null,
@@ -80,7 +81,8 @@ test('вкладка Шаблоны: селектор + карандаш, пол
     specFile: i % 2 ? `specs/s${i}.md` : null,
     deps: i ? [`step${i - 1}`] : [],
     gate: i % 2 ? { question: 'Готов?'.repeat(50), options: ['approve', 'request-changes'] } : null,
-    onReject: null
+    onReject: null,
+    sub: []
   }))
   const tpl = {
     id: 'task-dev',

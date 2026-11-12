@@ -55,6 +55,8 @@ export type WfJob = {
 export type WfStep = {
   id: string
   title: string | null
+  /** aip-style: reference to a specialist file (`.orca/specialists/<slug>.yaml`). */
+  specialist: string | null
   agent: string | null
   model: string | null
   effort: string | null
@@ -66,6 +68,30 @@ export type WfStep = {
    *  materialized step after it (the explicit multi-target form). */
   gate: { question: string; options: string[] } | null
   onReject: { goto: string; maxRounds: number } | null
+  /** Block children (`sub:`): parallel by default; optional ones start only on RUN: request. */
+  sub: WfSubStepLike[]
+}
+
+export type WfSubStepLike = {
+  id: string
+  title: string | null
+  specialist: string | null
+  agent: string | null
+  model: string | null
+  effort: string | null
+  spec: string | null
+  specFile: string | null
+  deps: string[]
+  optional: boolean
+}
+
+export type WfSpecialist = {
+  slug: string
+  agent: string
+  model: string | null
+  effort: string | null
+  spec: string | null
+  error: string | null
 }
 
 export type WfTemplate = {

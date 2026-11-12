@@ -21,6 +21,11 @@ steps:
   - id: dev-gate
     deps: [plan-review]
     gate: { question: 'План аппрувнут?', options: [approve, request-changes] }
+  - id: research
+    specialist: researcher
+    deps: [plan]
+    sub:
+      - { id: probe, specialist: researcher, optional: true }
   - id: dev
     agent: claude
     model: some-model
@@ -35,14 +40,17 @@ test('парсер: блоки, потоки, кавычки, блочные с�
   assert.equal(value.id, 'feature-dev')
   assert.equal(value.title, 'Фича: план → ревью')
   const steps = value.steps as Array<{ [k: string]: unknown }>
-  assert.equal(steps.length, 4)
+  assert.equal(steps.length, 5)
   assert.equal(steps[0].agent, 'claude')
   assert.equal(steps[0].spec, 'строка 1\n\nстрока 3 с {{objective}}\n')
   assert.deepEqual(steps[1].deps, ['plan'])
   const gate = steps[2].gate as { [k: string]: unknown }
   assert.equal(gate.question, 'План аппрувнут?')
   assert.deepEqual(gate.options, ['approve', 'request-changes'])
-  const reject = steps[3].on_reject as { [k: string]: unknown }
+  assert.equal(steps[3].specialist, 'researcher')
+  const subChild = (steps[3].sub as Array<{ [k: string]: unknown }>)[0]
+  assert.equal(subChild.optional, true)
+  const reject = steps[4].on_reject as { [k: string]: unknown }
   assert.equal(reject.goto, 'dev')
   assert.equal(reject.max_rounds, 2)
 })
@@ -72,7 +80,7 @@ test('парсер: невалидный отступ падает с номер
 test('шаблон: валидация проходит, поля на месте', () => {
   const parsed = parseTemplate('feature-dev.yaml', parseYaml(TEMPLATE))
   assert.equal(parsed.id, 'feature-dev')
-  assert.equal(parsed.steps[3].model, 'some-model')
+  assert.equal(parsed.steps[4].model, 'some-model')
   assert.equal(parsed.specFiles['plan-review'], 'specs/plan-review.md')
 })
 
@@ -81,7 +89,7 @@ test('шаблон: неизвестная зависимость отклоня
   assert.throws(() => parseTemplate('feature-dev.yaml', parseYaml(bad)), /nope/)
 })
 
-test('шаблон: спецификация без агента отклоняется', () => {
+test('шаблон: спецификация без агента и специалиста отклоняется', () => {
   const bad = TEMPLATE.replace('  - id: dev\n    agent: claude\n    model: some-model', '  - id: dev\n    model: some-model')
   assert.throws(() => parseTemplate('feature-dev.yaml', parseYaml(bad)), /dev/)
 })
@@ -91,6 +99,7 @@ test('шаблон: checkpoint — старое имя gate — тоже чит�
     "    gate: { question: 'План аппрувнут?', options: [approve, request-changes] }",
     "    checkpoint: { question: 'План аппрувнут?', options: [approve, request-changes] }"
   )
+  if (legacy === TEMPLATE) throw new Error('fixture replace not applied')
   const parsed = parseTemplate('feature-dev.yaml', parseYaml(legacy))
   assert.equal(parsed.steps[2].gate?.question, 'План аппрувнут?')
 })

@@ -171,7 +171,9 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       specFile: null,
       deps: selection?.kind === 'node' && selection.id !== id ? [selection.id] : [],
       gate: null,
-      onReject: null
+      onReject: null,
+      specialist: null,
+      sub: []
     }
     // New nodes land right below the selection, or under the bottom-most node.
     const anchor = selection?.kind === 'node' ? graph.layout[selection.id] : null
@@ -494,8 +496,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     while (stepById(`step${n}`)) n += 1
     const id = `step${n}`
     graph.steps.push({
-      id, title: `Шаг ${n}`, agent: 'claude', model: null, effort: null,
-      spec: 'Новая задача: {{objective}}.', specFile: null, deps: [], gate: null, onReject: null
+      id, title: `Шаг ${n}`, specialist: null, agent: 'claude', model: null, effort: null,
+      spec: 'Новая задача: {{objective}}.', specFile: null, deps: [], gate: null, onReject: null, sub: []
     })
     graph.layout[id] = p
     selection = { kind: 'node', id }

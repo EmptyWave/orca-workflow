@@ -88,6 +88,7 @@ export function emit(graph: WfGraph): string {
   for (const step of topoSortSteps(graph.steps)) {
     lines.push(`  - id: ${step.id}`)
     if (step.title) lines.push(`    title: ${yamlScalar(step.title)}`)
+    if (step.specialist) lines.push(`    specialist: ${step.specialist}`)
     if (step.agent) lines.push(`    agent: ${step.agent}`)
     if (step.model) lines.push(`    model: ${step.model}`)
     if (step.model && step.effort) lines.push(`    effort: ${step.effort}`)
@@ -104,6 +105,19 @@ export function emit(graph: WfGraph): string {
     }
     if (step.onReject) {
       lines.push(`    on_reject: { goto: ${step.onReject.goto}, max_rounds: ${step.onReject.maxRounds} }`)
+    }
+    if (step.sub.length > 0) {
+      lines.push('    sub:')
+      for (const child of step.sub) {
+        const bits = [`id: ${child.id}`]
+        if (child.title) bits.push(`title: ${yamlScalar(child.title)}`)
+        if (child.specialist) bits.push(`specialist: ${child.specialist}`)
+        if (child.agent) bits.push(`agent: ${child.agent}`)
+        if (child.model) bits.push(`model: ${child.model}`)
+        if (child.optional) bits.push('optional: true')
+        if (child.specFile) bits.push(`specFile: ${child.specFile}`)
+        lines.push(`      - { ${bits.join(', ')} }`)
+      }
     }
   }
   return lines.join('\n') + '\n'
@@ -197,6 +211,7 @@ export function mergeGraphs(base: WfGraph, outside: WfGraph, mine: WfGraph): WfG
       merged.push({
         id,
         title: pick('title'),
+        specialist: pick('specialist'),
         agent: pick('agent'),
         model: pick('model'),
         effort: pick('effort'),
@@ -204,7 +219,8 @@ export function mergeGraphs(base: WfGraph, outside: WfGraph, mine: WfGraph): WfG
         specFile: pick('specFile'),
         deps: pick('deps'),
         gate: pick('gate'),
-        onReject: pick('onReject')
+        onReject: pick('onReject'),
+        sub: pick('sub')
       })
     }
   }
