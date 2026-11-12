@@ -433,6 +433,20 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     return { x: (e.clientX - rect.left - view.x) / view.k, y: (e.clientY - rect.top - view.y) / view.k }
   }
 
+  /** Scales the initial view so the whole graph fits: vertical layouts can get tall. */
+  function fitView(): void {
+    const points = Object.values(graph.layout)
+    if (points.length === 0) return
+    const maxX = Math.max(...points.map((p) => p.x)) + NODE_W
+    const maxY = Math.max(...points.map((p) => p.y)) + NODE_H
+    const rect = svg.getBoundingClientRect()
+    const w = Math.max(200, rect.width - 30)
+    const h = Math.max(200, rect.height - 30)
+    view.k = Math.min(1, w / maxX, h / maxY)
+    view.x = 15
+    view.y = 15
+  }
+
   function beginNodeDrag(e: PointerEvent, id: string): void {
     const p = svgPoint(e)
     const at = graph.layout[id] ?? { x: 0, y: 0 }
@@ -529,6 +543,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     return
   }
   ensureLayout()
+  fitView()
   render()
   doc.onReplace((next) => {
     graph = next
@@ -536,4 +551,5 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     ensureLayout()
     render()
   })
+  window.addEventListener('resize', () => render())
 }
