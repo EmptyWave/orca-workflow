@@ -352,7 +352,6 @@ function RunsTab() {
               {(snap.tasks ?? []).map((t) => (
                 <ListItem
                   key={t.id}
-                  title={t.title || t.id}
                   description={[
                     STATUS_TEXT[t.status] ?? t.status,
                     t.deps.length > 0 ? `после: ${t.deps.map((d) => d.replace('task_', '')).join(', ')}` : null,
@@ -361,7 +360,10 @@ function RunsTab() {
                     .filter(Boolean)
                     .join(' · ')}
                 >
-                  {statusBadge(t.status)}
+                  <Row gap="xs" align="center">
+                    {statusBadge(t.status)}
+                    <Text weight="semibold">{t.title || t.id}</Text>
+                  </Row>
                 </ListItem>
               ))}
             </List>
