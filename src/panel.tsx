@@ -10,7 +10,6 @@ import {
   Field,
   Heading,
   IconButton,
-  Image,
   Input,
   KeyValue,
   List,
@@ -318,37 +317,18 @@ function effectiveStatuses(tasks: WfTask[], gates: WfGate[]): Record<string, Eff
   return Object.fromEntries(memo)
 }
 
-/** Heavy status mark, aip-style: a green ring with a check for done, a red ring with a
- *  cross for failure, a live spinner while working. Waiting states keep the light glyph. */
+/** A live spinner while a worker runs; every other state shows the row glyph. */
 function statusMark(status: string): OrcaNode {
   if (status === 'dispatched') return <Spinner label="работает" labelHidden />
-  if (status === 'succeeded') return <Image src="assets/status/done.png" alt="" size="xs" />
-  if (status === 'failed') return <Image src="assets/status/fail.png" alt="" size="xs" />
   return null
 }
 
-/** The agent's own brand icon (Claude sunburst, Copilot, OpenAI blossom, …); any other
- *  agent gets the generic robot mark, a bare barrier gets nothing. */
-function agentIconSrc(agent: string | null): string | null {
-  if (!agent) return null
-  const name = agent.toLowerCase()
-  if (name.startsWith('claude')) return 'assets/agents/claude.png'
-  if (name.startsWith('codex')) return 'assets/agents/codex.png'
-  if (name.startsWith('copilot')) return 'assets/agents/copilot.png'
-  if (name.startsWith('opencode')) return 'assets/agents/opencode.png'
-  return 'assets/agents/agent.png'
-}
-
-function agentIcon(agent: string | null): OrcaNode {
-  const src = agentIconSrc(agent)
-  return src ? <Image src={src} alt={agent ?? ''} size="xs" /> : null
-}
-
-/** Native glyph for the row icon slot (waiting states; done/failed show a badge instead). */
-function statusGlyph(status: string): 'check' | 'play' | 'flag' | 'error' | 'pause' | 'more' | null {
-  if (status === 'succeeded' || status === 'failed') return null // a badge mark instead
+/** Native glyph for the row icon slot: small, theme-tinted, no background tile. */
+function statusGlyph(status: string): 'check' | 'play' | 'flag' | 'error' | 'pause' | 'more' {
+  if (status === 'succeeded') return 'check'
   if (status === 'ready') return 'play'
   if (status === 'blocked') return 'flag'
+  if (status === 'failed') return 'error'
   if (status === 'queued') return 'pause'
   return 'more'
 }
@@ -422,8 +402,9 @@ function RunsTab() {
                 return (
                   <ListItem
                     key={t.id}
-                    icon={statusGlyph(eff.status) ?? undefined}
+                    icon={statusGlyph(eff.status)}
                     description={[
+                      t.agent,
                       STATUS_TEXT[eff.status] ?? eff.status,
                       gateHint,
                       t.deps.length > 0 ? `после: ${t.deps.map((d) => d.replace('task_', '')).join(', ')}` : null,
@@ -434,7 +415,6 @@ function RunsTab() {
                   >
                     <Row gap="xs" align="center">
                       {statusMark(eff.status)}
-                      {agentIcon(t.agent)}
                       <Text weight="semibold">{t.title || t.id}</Text>
                     </Row>
                   </ListItem>
@@ -628,7 +608,6 @@ function TemplatesTab() {
                       .join(' · ')}
                   >
                     <Row gap="xs" align="center">
-                      {agentIcon(step.agent)}
                       <Text weight="semibold">{step.id}{step.title ? ` · ${step.title}` : ''}</Text>
                     </Row>
                   </ListItem>,
@@ -638,7 +617,6 @@ function TemplatesTab() {
                       description={child.optional ? 'опциональный: стартует по RUN из отчёта' : undefined}
                     >
                       <Row gap="xs" align="center">
-                        {agentIcon(child.agent)}
                         <Text muted>↳ {child.id}{child.title ? ` · ${child.title}` : ''}</Text>
                       </Row>
                     </ListItem>
