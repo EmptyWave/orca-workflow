@@ -241,14 +241,15 @@ async function resetBridge(): Promise<void> {
   })
 }
 
-async function editTemplate(): Promise<void> {
+async function editTemplate(templateId?: string): Promise<void> {
+  const id = templateId ?? rd(selectedTemplate)
   await run('открытие редактора', async () => {
     if (rd(tplSource) !== 'project' || !rd(tplProjectPath)) {
       throw new Error('граф-редактор открывает шаблоны проекта — перенеси шаблон в проект кнопкой ниже')
     }
     await plugin.request(
       'template.edit',
-      { projectPath: rd(tplProjectPath), templateId: rd(selectedTemplate) },
+      { projectPath: rd(tplProjectPath), templateId: id },
       { timeoutMs: 30_000 }
     )
   })
@@ -514,26 +515,26 @@ function TemplatesTab() {
               description={t.error ? t.error : `${t.id} · ${t.steps.length} шагов`}
               current={t.id === rd(selectedTemplate)}
               onPress={() => set(selectedTemplate, t.id)}
-            />
+            >
+              <IconButton
+                icon="edit"
+                label={`Редактировать ${t.id}`}
+                tooltip="Открыть в граф-редакторе"
+                variant="ghost"
+                size="sm"
+                disabled={rd(busy) !== null || t.error !== null}
+                onPress={() => void editTemplate(t.id)}
+              />
+            </ListItem>
           ))}
         </List>
       )}
       {selected ? (
         <Card>
           <Stack gap="sm">
-            <Row justify="between" align="center">
-              <Text weight="semibold" truncate>
-                {selected.title}
-              </Text>
-              <IconButton
-                icon="edit"
-                label="Редактировать в граф-редакторе"
-                tooltip="Открыть в граф-редакторе"
-                variant="ghost"
-                disabled={rd(busy) !== null || selected.error !== null}
-                onPress={() => void editTemplate()}
-              />
-            </Row>
+            <Text weight="semibold" truncate>
+              {selected.title}
+            </Text>
             <Text muted size="xs" truncate>
               {selected.id} · {selected.file}
             </Text>
