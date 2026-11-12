@@ -231,7 +231,7 @@
           const answer = await req('runs.list')
           S.runs = answer.runs
           delete loadingSince['запуски']
-          const ids = answer.runs.map((r) => r.runId)
+          const ids = visibleRuns().visible.map((r) => r.runId)
           if (S.runId && !ids.includes(S.runId)) S.runId = null
           if (!S.runId && ids.length > 0) S.runId = ids[0]
         } catch (e) { S.runs = []; setNotice('Запуски не читаются: ' + esc(e.message || e)) }
@@ -398,6 +398,7 @@
           const map = {
             dismiss: () => { S.notice = null; render() },
             reload: () => location.reload(),
+            'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
             refresh: () => { void loadRuns(); void loadState() },
             'refresh-tpl': () => { S.templates = null; render(); void loadTemplates() },
             'resolve-approve': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), 'approve'),
@@ -441,13 +442,28 @@
       }
 
       // ---- runs view
+      /** Runs of the current project; when it has none, everything (so the tab still works). */
+      function visibleRuns() {
+        const all = S.runs || []
+        if (!S.project) return all
+        const mine = all.filter((r) => r.projectPath === S.project.path)
+        return { visible: mine.length > 0 ? mine : all, mine: mine.length, others: all.length - mine.length }
+      }
+      function scopeHint() {
+        if (!S.project) return ''
+        const v = visibleRuns()
+        if (v.mine > 0 && v.others > 0) return `<div class="tiny muted" style="margin:4px 0 8px">Раны проекта «${esc(S.project.name)}» · из других проектов скрыто: ${v.others}</div>`
+        if (v.mine === 0 && v.others > 0) return `<div class="tiny muted" style="margin:4px 0 8px">В проекте «${esc(S.project.name)}» ещё нет ранов — показаны все.</div>`
+        return ''
+      }
       function viewRuns() {
         if (!S.runs) return stuck('запуски')
-        if (S.runs.length === 0) return `<div class="empty">Нет запусков.<br/>Подними Run из шаблона на вкладке «Шаблоны».</div>`
+        const rows = visibleRuns().visible
+        if (rows.length === 0) return `<div class="empty">Нет запусков.<br/><button class="btn mini" data-act="go-templates" style="margin-top:8px">Поднять Run из шаблона</button></div>`
         const snap = S.snap
         const sel = `<div class="rowline"><select data-bind-select="runId" style="flex:1">` +
-          S.runs.map((r) => `<option value="${esc(r.runId)}"${r.runId === S.runId ? ' selected' : ''}>${esc(r.objective).slice(0, 60)}</option>`).join('') + `</select>` +
-          `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button></div>`
+          rows.map((r) => `<option value="${esc(r.runId)}"${r.runId === S.runId ? ' selected' : ''}>${esc(r.objective).slice(0, 60)}</option>`).join('') + `</select>` +
+          `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button></div>` + scopeHint()
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
         const runTitle = snap.run ? `<div class="tiny muted" style="margin:6px 0 8px">${esc(snap.run.objective)}</div>` : ''
@@ -591,12 +607,40 @@
         await recall()
         if (!S.tab) S.tab = 'runs'
         render()
-        void loadRuns().then(() => loadState())
-        void loadProject()
+        const autoTab = () => {
+          // The session's project has no Runs yet: land on Templates, ready to raise one.
+          if (S.tab !== 'runs' || !S.project) return false
+          if (visibleRuns().mine > 0) return false
+          S.tab = 'templates'
+          S.templates = null
+          void loadTemplates()
+          return true
+        }
+        void loadProject().then(async () => {
+          await loadRuns()
+          if (autoTab()) return
+          if (S.tab === 'runs') void loadState()
+        })
         try {
           orca.plugin.on('state.changed', () => { if (S.tab === 'runs') void loadState() })
           orca.plugin.on('job.progress', (p) => { if (p && p.job) { S.job = p.job; render() } })
         } catch { /* events are an extra */ }
+        // focus moved to another workspace: rescope the project, its runs and templates
+        let wsTimer = null
+        try {
+          orca.on('workspace.changed', () => {
+            clearTimeout(wsTimer)
+            wsTimer = setTimeout(async () => {
+              await loadProject()
+              await loadRuns()
+              S.templates = null
+              if (autoTab()) return
+              if (S.tab === 'templates') { render(); void loadTemplates() }
+              else if (S.tab === 'runs') await loadState()
+              else render()
+            }, 800)
+          })
+        } catch { /* focus events are an extra */ }
         // another surface (or a script) changed a persisted UI key: follow it
         try {
           orca.storage.onDidChange(async (change) => {

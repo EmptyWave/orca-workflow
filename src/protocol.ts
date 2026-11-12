@@ -33,6 +33,8 @@ export type WfWorker = {
 export type WfRun = {
   runId: string
   objective: string
+  /** The repo this Run belongs to, when known (set at instantiate time, or bound by hand). */
+  projectPath: string | null
 }
 
 export type WfSnapshot = {
@@ -166,6 +168,8 @@ declare module 'orca' {
       input: { libraryDir: string; refreshMs: number; defaultAgent: string }
       output: { libraryDir: string; refreshMs: number; defaultAgent: string }
     }
+    /** Bind a Run to a project (for runs raised before instantiate recorded it). */
+    'run.meta.set': { input: { runId: string; projectPath: string }; output: { ok: true } }
     /** Write one panel-UI storage key (html.*), for scripts and shots. */
     'ui.set': { input: { key: string; value: string | number | boolean | null }; output: { ok: true } }
     /** Remember which agent ran each task of a legacy Run (raised before step configs

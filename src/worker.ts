@@ -100,10 +100,30 @@ export default function activate(orca: OrcaWorkerApi): void {
     const rows: Record<string, unknown>[] = Array.isArray(result)
       ? (result as Record<string, unknown>[])
       : asArray<Record<string, unknown>>(result.runs)
-    return rows.map((row) => ({
-      runId: String(field(row, 'runId', 'id') ?? ''),
-      objective: String(field(row, 'objective') ?? '')
-    }))
+    const out: WfRun[] = []
+    for (const row of rows) {
+      const runId = String(field(row, 'runId', 'id') ?? '')
+      let projectPath: string | null = null
+      try {
+        const meta = await orca.storage.get(`runmeta.${runId}`)
+        if (meta && typeof meta === 'object') {
+          const path = (meta as { projectPath?: unknown }).projectPath
+          if (typeof path === 'string' && path !== '') projectPath = path
+        }
+        if (!projectPath) {
+          // Runs the autopilot raised know their repo from their own state.
+          const auto = await orca.storage.get(`auto.${runId}`)
+          if (auto && typeof auto === 'object') {
+            const path = (auto as { repoPath?: unknown }).repoPath
+            if (typeof path === 'string' && path !== '') projectPath = path
+          }
+        }
+      } catch {
+        // metadata is an extra; the run still lists without a project
+      }
+      out.push({ runId, objective: String(field(row, 'objective') ?? ''), projectPath })
+    }
+    return out
   }
 
   async function snapshot(runId: string | null): Promise<WfSnapshot> {
@@ -112,7 +132,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (!runId) {
       return { at, run: null, tasks: [], gates: [], workers: [], error: null }
     }
-    const run = runs.find((r) => r.runId === runId) ?? (runId ? { runId, objective: '' } : null)
+    const run = runs.find((r) => r.runId === runId) ?? (runId ? { runId, objective: '', projectPath: null } : null)
     const [taskRows, readyRows, gateRows, workerRows] = await Promise.all([
       cli<{ tasks?: unknown }>(`orca orchestration task-list --run ${shellQuote(runId)} --json`),
       cli<{ tasks?: unknown }>(`orca orchestration task-list --run ${shellQuote(runId)} --ready --brief --json`),
@@ -795,6 +815,13 @@ export default function activate(orca: OrcaWorkerApi): void {
         const run = await cli<{ runId: string }>(
           `orca orchestration run-create ${from} --objective ${shellQuote(`${template.title} — ${input.objective}`)} --json`
         )
+        // Which project this Run belongs to, so the panel can scope its Runs list.
+        await orca.storage.set(`runmeta.${run.runId}`, {
+          projectPath: input.projectPath,
+          templateId: template.id,
+          objective: input.objective,
+          at: Date.now()
+        })
         job.step = 'tasks'
         await saveJob(job, run.runId)
         stepsById = new Map(template.steps.map((s) => [s.id, s]))
@@ -1100,6 +1127,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     await orca.settings.set('refreshMs', refreshMs)
     await orca.settings.set('defaultAgent', defaultAgent)
     return { libraryDir, refreshMs, defaultAgent }
+  })
+
+  orca.panels.handle('run.meta.set', async ({ runId, projectPath }) => {
+    everUsed = true
+    await orca.storage.set(`runmeta.${runId}`, { projectPath, at: Date.now() })
+    void refresh()
+    return { ok: true as const }
   })
 
   orca.panels.handle('ui.set', async ({ key, value }) => {

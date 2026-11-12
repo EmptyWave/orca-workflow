@@ -189,7 +189,7 @@ async function withWorker(fn: (worker: Awaited<ReturnType<typeof mountWorker>>, 
 test('runs.list и state.get читают оркестрацию через мост', () =>
   withWorker(async (worker) => {
     const runs = await worker.request('runs.list')
-    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель' }])
+    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель', projectPath: null }])
     assert.equal(runs.error, null)
 
     const state = await worker.request('state.get', { runId: 'run_1' })
@@ -263,6 +263,13 @@ test('settings.save нормализует и пишет настройки; bri
     assert.equal((host.data().storage['bridge.terminalId'] ?? null), null)
     const info = await worker.request('bridge.info')
     assert.equal(info.terminalId, 't1')
+  }))
+
+test('run.meta.set привязывает ран к проекту, runs.list её отдаёт', () =>
+  withWorker(async (worker) => {
+    await worker.request('run.meta.set', { runId: 'run_1', projectPath: '/x/biz.erp' })
+    const runs = await worker.request('runs.list')
+    assert.equal(runs.runs[0].projectPath, '/x/biz.erp')
   }))
 
 test('мост следует за фокусным воркспейсом', () =>
