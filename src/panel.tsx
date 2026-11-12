@@ -45,8 +45,9 @@ const model = atom('ui.model', '', { persist: 'plugin' })
 const effort = atom('ui.effort', '', { persist: 'plugin' })
 const worktree = atom('ui.worktree', '', { persist: 'plugin' })
 
-const tplSource = atom<'library' | 'project'>('ui.tplSource', 'library', { persist: 'plugin' })
-const tplWorkspacePath = atom('ui.tplWorkspacePath', '', { persist: 'plugin' })
+const tplSource = atom<'library' | 'project'>('ui.tplSource', 'project', { persist: 'plugin' })
+const tplProjectPath = atom('ui.tplProjectPath', '', { persist: 'plugin' })
+const projects = atom<{ repoId: string; name: string; path: string }[]>([])
 const templates = atom<WfTemplate[] | null>(null)
 const selectedTemplate = atom('ui.selectedTemplate', '', { persist: 'plugin' })
 const objective = atom('ui.objective', '', { persist: 'plugin' })
@@ -83,16 +84,23 @@ async function loadWorkspaces(): Promise<void> {
     const wt = answer.workspaces.find((w) => w.kind === 'worktree' && w.name.includes('ycl-104'))
     if (wt) set(worktree, `name:${wt.name}`)
   }
-  if (rd(tplSource) === 'project' && !rd(tplWorkspacePath)) {
-    const wt = answer.workspaces.find((w) => w.kind === 'worktree' && w.path.includes('biz.erp'))
-    if (wt) set(tplWorkspacePath, wt.path)
+}
+
+async function loadProjects(): Promise<void> {
+  try {
+    const answer = await plugin.request('projects.list', undefined, { timeoutMs: 30_000 })
+    set(projects, answer.projects)
+    const current = rd(tplProjectPath)
+    if (!current && answer.projects.length > 0) set(tplProjectPath, answer.projects[0].path)
+  } catch {
+    // The Runs tab works without projects; the Templates tab will show the error.
   }
 }
 
 async function loadTemplates(): Promise<void> {
   const answer = await plugin.request(
     'template.list',
-    { source: rd(tplSource), workspacePath: rd(tplSource) === 'project' ? rd(tplWorkspacePath) || null : null },
+    { source: rd(tplSource), projectPath: rd(tplSource) === 'project' ? rd(tplProjectPath) || null : null },
     { timeoutMs: 60_000 }
   )
   set(templates, answer.templates)
@@ -150,10 +158,9 @@ async function instantiate(): Promise<void> {
       'template.instantiate',
       {
         source: rd(tplSource),
-        workspacePath: rd(tplSource) === 'project' ? rd(tplWorkspacePath) || null : null,
+        projectPath: rd(tplSource) === 'project' ? rd(tplProjectPath) || null : null,
         templateId: template.id,
         objective: rd(objective).trim(),
-        repoPath: rd(tplSource) === 'project' ? rd(tplWorkspacePath) || null : null,
         baseBranch: rd(baseBranch).trim() === '' ? null : rd(baseBranch).trim(),
         worktreeName: rd(worktreeName).trim(),
         agent: rd(agent)
@@ -228,8 +235,8 @@ async function copyTemplate(to: 'library' | 'project'): Promise<void> {
         from: rd(tplSource),
         to,
         templateId: rd(selectedTemplate),
-        fromWorkspacePath: rd(tplSource) === 'project' ? rd(tplWorkspacePath) || null : null,
-        toWorkspacePath: to === 'project' ? rd(tplWorkspacePath) || null : null
+        fromProjectPath: rd(tplSource) === 'project' ? rd(tplProjectPath) || null : null,
+        toProjectPath: to === 'project' ? rd(tplProjectPath) || null : null
       },
       { timeoutMs: 30_000 }
     )
@@ -261,9 +268,10 @@ export function setup(ctx: PanelContext): void {
   ctx.subscriptions.push(plugin.on('state.changed', () => void loadState()))
   ctx.subscriptions.push(plugin.on('job.progress', (payload) => set(job, payload.job)))
   void loadWorkspaces()
+  const projectsReady = loadProjects()
   void loadRuns().then(() => loadState())
   void loadSettings()
-  if (rd(tab) === 'templates') void loadTemplates()
+  if (rd(tab) === 'templates') void projectsReady.then(() => run('шаблоны', loadTemplates))
 }
 
 // ---- renders -----------------------------------------------------------------------------------
@@ -431,8 +439,8 @@ function TemplatesTab() {
           label="Источник"
           value={rd(tplSource)}
           options={[
-            { value: 'library', label: 'Библиотека' },
-            { value: 'project', label: 'Проект (.orca/workflows)' }
+            { value: 'project', label: 'Проект (.orca/workflows)' },
+            { value: 'library', label: 'Библиотека' }
           ]}
           onChange={(value) => {
             set(tplSource, value as 'library' | 'project')
@@ -442,13 +450,11 @@ function TemplatesTab() {
         />
         {rd(tplSource) === 'project' ? (
           <Select
-            label="Workspace"
-            value={rd(tplWorkspacePath) || undefined}
-            options={rd(workspaces)
-              .filter((w) => w.kind === 'worktree')
-              .map((w) => ({ value: w.path, label: w.name }))}
+            label="Проект"
+            value={rd(tplProjectPath) || undefined}
+            options={rd(projects).map((p) => ({ value: p.path, label: p.name }))}
             onChange={(value) => {
-              set(tplWorkspacePath, value)
+              set(tplProjectPath, value)
               void run('шаблоны', loadTemplates)
             }}
           />

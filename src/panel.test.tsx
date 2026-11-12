@@ -89,14 +89,19 @@ test('вкладка Настройки показывает значения и
   await view.unmount()
 })
 
-test('вкладка Templates: пустая библиотека показывает подсказку', async () => {
+test('вкладка Templates: пустой проект показывает подсказку', async () => {
   const host = mockHost({
     storage: {},
     requests: {
       'runs.list': { runs: [], error: null },
       'state.get': { at: 1, run: null, tasks: [], gates: [], workers: [], error: null },
       'workspaces.list': { workspaces: [] },
-      'template.list': { templates: [] },
+      'projects.list': { projects: [{ repoId: 'r1', name: 'biz.erp', path: '/x/biz.erp' }] },
+      'template.list': (input: { source: string; projectPath: string | null }) => {
+        assert.equal(input.source, 'project', 'источник по умолчанию — проект')
+        assert.equal(input.projectPath, '/x/biz.erp')
+        return { templates: [] }
+      },
       'settings.get': { libraryDir: '~/l', refreshMs: 10000, defaultAgent: 'claude' },
       'bridge.info': { terminalId: null }
     }

@@ -82,9 +82,13 @@ declare module 'orca' {
   interface PluginRequests {
     /** Runs known to Orca (newest first). */
     'runs.list': { output: { runs: WfRun[]; error: string | null } }
-    /** Workspaces for template sources and worker placement. */
+    /** Workspaces for worker placement (task start). */
     'workspaces.list': {
       output: { workspaces: { id: string; kind: string; name: string; path: string; branch: string | null }[] }
+    }
+    /** Projects (repositories) known to Orca; templates bind to these, not to workspaces. */
+    'projects.list': {
+      output: { projects: { repoId: string; name: string; path: string }[] }
     }
     /** Fresh orchestration snapshot for a Run (runId null = latest runs summary only). */
     'state.get': { input: { runId: string | null }; output: WfSnapshot }
@@ -95,16 +99,15 @@ declare module 'orca' {
       input: { taskId: string; agent: string; model: string | null; effort: string | null; worktree: string }
       output: { dispatchId: string; state: string }
     }
-    /** Workflow templates from the library or a project workspace path. */
-    'template.list': { input: { source: 'library' | 'project'; workspacePath: string | null }; output: { templates: WfTemplate[] } }
+    /** Workflow templates from the library or a project's .orca/workflows/. */
+    'template.list': { input: { source: 'library' | 'project'; projectPath: string | null }; output: { templates: WfTemplate[] } }
     /** Materialize a template into a Run + task DAG + gates; answers a job id at once. */
     'template.instantiate': {
       input: {
         source: 'library' | 'project'
-        workspacePath: string | null
+        projectPath: string | null
         templateId: string
         objective: string
-        repoPath: string | null
         baseBranch: string | null
         worktreeName: string
         agent: string
@@ -113,7 +116,7 @@ declare module 'orca' {
     }
     /** Copy a template file between library and a project's .orca/workflows/. */
     'template.copy': {
-      input: { from: 'library' | 'project'; to: 'library' | 'project'; templateId: string; fromWorkspacePath: string | null; toWorkspacePath: string | null }
+      input: { from: 'library' | 'project'; to: 'library' | 'project'; templateId: string; fromProjectPath: string | null; toProjectPath: string | null }
       output: { ok: true }
     }
     /** Jobs (long operations) keyed by id. */

@@ -220,10 +220,10 @@ export default function activate(orca: OrcaWorkerApi): void {
     return raw.startsWith('~/') ? (await bridge.run('echo $HOME')).trim() + raw.slice(1) : raw
   }
 
-  async function workflowsDir(source: 'library' | 'project', workspacePath: string | null): Promise<string> {
+  async function workflowsDir(source: 'library' | 'project', projectPath: string | null): Promise<string> {
     if (source === 'library') return libraryDir()
-    if (!workspacePath) throw new BridgeError('project-источник требует workspacePath', 'no_terminal')
-    return `${workspacePath.replace(/\/+$/, '')}/.orca/workflows`
+    if (!projectPath) throw new BridgeError('project-источник требует projectPath', 'no_terminal')
+    return `${projectPath.replace(/\/+$/, '')}/.orca/workflows`
   }
 
   /** Reads many files in one bridge command; answers path -> content. */
@@ -247,9 +247,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     return out
   }
 
-  async function listTemplates(source: 'library' | 'project', workspacePath: string | null): Promise<WfTemplate[]> {
+  async function listTemplates(source: 'library' | 'project', projectPath: string | null): Promise<WfTemplate[]> {
     everUsed = true
-    const dir = await workflowsDir(source, workspacePath)
+    const dir = await workflowsDir(source, projectPath)
     const listing = await bridge.run(`ls -1 ${shellPath(dir)}/*.yaml 2>/dev/null || true`)
     const yamlFiles = listing
       .split('\n')
@@ -357,10 +357,10 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   async function loadTemplate(
     source: 'library' | 'project',
-    workspacePath: string | null,
+    projectPath: string | null,
     templateId: string
   ): Promise<WfTemplate> {
-    const templates = await listTemplates(source, workspacePath)
+    const templates = await listTemplates(source, projectPath)
     const template = templates.find((t) => t.id === templateId)
     if (!template) throw new BridgeError(`шаблон "${templateId}" не найден`, 'cli_error')
     if (template.error) throw new BridgeError(`шаблон "${templateId}": ${template.error}`, 'cli_error')
@@ -383,15 +383,14 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   async function runInstantiate(input: {
     source: 'library' | 'project'
-    workspacePath: string | null
+    projectPath: string | null
     templateId: string
     objective: string
-    repoPath: string | null
     baseBranch: string | null
     worktreeName: string
     agent: string
   }): Promise<string> {
-    const template = await loadTemplate(input.source, input.workspacePath, input.templateId)
+    const template = await loadTemplate(input.source, input.projectPath, input.templateId)
     const job: WfJob = {
       id: `job_${Date.now().toString(36)}`,
       kind: 'instantiate',
@@ -407,7 +406,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         const from = await fromFlag()
         const vars: Record<string, string> = {
           objective: input.objective,
-          repo: input.repoPath ?? '',
+          repo: input.projectPath ?? '',
           base_branch: input.baseBranch ?? '',
           worktree: input.worktreeName
         }
@@ -478,6 +477,22 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
   })
 
+  orca.panels.handle('projects.list', async () => {
+    everUsed = true
+    const result = await cli<{ repos?: unknown }>('orca repo list --json')
+    const repos = asArray<Record<string, unknown>>(result.repos)
+    return {
+      projects: repos
+        .filter((repo) => field(repo, 'kind') === 'git')
+        .map((repo) => ({
+          repoId: String(field(repo, 'id') ?? ''),
+          name: String(field(repo, 'displayName') ?? ''),
+          path: String(field(repo, 'path') ?? '')
+        }))
+        .filter((p) => p.path !== '')
+    }
+  })
+
   orca.panels.handle('state.get', async ({ runId }) => {
     everUsed = true
     void refresh()
@@ -518,20 +533,23 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { dispatchId: result.dispatchId, state: result.state }
   })
 
-  orca.panels.handle('template.list', async ({ source, workspacePath }) => ({
-    templates: await listTemplates(source, workspacePath ?? null)
+  orca.panels.handle('template.list', async ({ source, projectPath }) => ({
+    templates: await listTemplates(source, projectPath ?? null)
   }))
 
   orca.panels.handle('template.instantiate', async (input) => ({
     jobId: await runInstantiate(input)
   }))
 
-  orca.panels.handle('template.copy', async ({ from, to, templateId, fromWorkspacePath, toWorkspacePath }) => {
+  orca.panels.handle('template.copy', async ({ from, to, templateId, fromProjectPath, toProjectPath }) => {
     everUsed = true
-    const fromDir = await workflowsDir(from, fromWorkspacePath ?? null)
-    const toDir = await workflowsDir(to, toWorkspacePath ?? null)
+    const templates = await listTemplates(from, fromProjectPath ?? null)
+    const template = templates.find((t) => t.id === templateId)
+    if (!template) throw new BridgeError(`шаблон "${templateId}" не найден`, 'cli_error')
+    const fromDir = template.sourcePath as string
+    const toDir = await workflowsDir(to, toProjectPath ?? null)
     await bridge.run(
-      `mkdir -p ${shellPath(toDir)} && cp ${shellQuote(`${fromDir}/${templateId}.yaml`)} ${shellPath(
+      `mkdir -p ${shellPath(toDir)} && cp ${shellQuote(`${fromDir}/${template.file}`)} ${shellPath(
         toDir
       )}/ && { [ -d ${shellQuote(`${fromDir}/specs`)} ] && cp -R ${shellQuote(`${fromDir}/specs`)} ${shellPath(
         toDir

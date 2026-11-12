@@ -65,6 +65,17 @@ function makeHost() {
     if (command.includes('worker-start')) {
       return '{"ok":true,"result":{"dispatchId":"ctx_9","state":"ready"}}'
     }
+    if (command.includes('repo list')) {
+      return JSON.stringify({
+        ok: true,
+        result: {
+          repos: [
+            { id: 'r1', displayName: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp', kind: 'git' },
+            { id: 'f1', displayName: '~', path: '/Users/tester', kind: 'folder' }
+          ]
+        }
+      })
+    }
     if (command.includes('echo $HOME')) {
       return '/Users/tester'
     }
@@ -139,7 +150,7 @@ test('runs.list и state.get читают оркестрацию через мо
 
 test('template.list читает библиотеку и резолвит specFile', () =>
   withWorker(async (worker) => {
-    const answer = await worker.request('template.list', { source: 'library', workspacePath: null })
+    const answer = await worker.request('template.list', { source: 'library', projectPath: null })
     assert.equal(answer.templates.length, 1)
     const template = answer.templates[0]
     assert.equal(template.id, 'demo')
@@ -152,10 +163,9 @@ test('template.instantiate создаёт Run, задачи и гейты бар
   withWorker(async (worker, host) => {
     const { jobId } = await worker.request('template.instantiate', {
       source: 'library',
-      workspacePath: null,
+      projectPath: null,
       templateId: 'demo',
       objective: 'цель X',
-      repoPath: null,
       baseBranch: null,
       worktreeName: 'demo-wt',
       agent: 'claude'
@@ -198,6 +208,14 @@ test('settings.save нормализует и пишет настройки; bri
     assert.equal((host.data().storage['bridge.terminalId'] ?? null), null)
     const info = await worker.request('bridge.info')
     assert.equal(info.terminalId, null)
+  }))
+
+test('projects.list отдаёт git-репозитории с путями', () =>
+  withWorker(async (worker) => {
+    const answer = await worker.request('projects.list')
+    assert.deepEqual(answer.projects, [
+      { repoId: 'r1', name: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp' }
+    ])
   }))
 
 test('gate.resolve и task.start доходят до CLI с флагами', () =>
