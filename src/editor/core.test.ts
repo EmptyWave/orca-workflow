@@ -108,3 +108,27 @@ test('mergeGraphs: по id — чужая правка полем, моя — д
   assert.equal(dev?.model, 'my-model')
   assert.equal(dev?.title, 'Мой заголовок')
 })
+
+test('aip-шаблон: specialist вместо агента валиден, подшаги не теряются', () => {
+  const text = `id: feature-dev
+title: 'Фича'
+steps:
+  - id: plan
+    title: 'План'
+    specialist: planner
+    sub:
+      - { id: research, title: 'Ресерч', specialist: researcher, optional: true }
+  - { id: dev, title: 'Разработка', specialist: coder, gate: { question: 'Пустить?', options: [approve] } }
+  - { id: commit, title: 'Коммит', specialist: committer, deps: [dev] }
+`
+  const graph = decode(text)
+  assert.deepEqual(validate(graph), [], 'специалист — не барьер')
+  const back = decode(emit(graph))
+  assert.equal(back.steps[0].specialist, 'planner')
+  assert.equal(back.steps[0].sub.length, 1)
+  assert.equal(back.steps[0].sub[0].optional, true)
+  assert.equal(back.steps[1].gate?.question, 'Пустить?')
+  const noGate = structuredClone(graph.steps)
+  noGate[1].gate = null
+  assert.deepEqual(validate({ ...graph, steps: noGate }), [])
+})

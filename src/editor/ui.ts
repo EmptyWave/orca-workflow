@@ -262,7 +262,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       sub.setAttribute('class', 'sub')
       sub.setAttribute('x', '10')
       sub.setAttribute('y', '38')
-      sub.textContent = step.agent
+      sub.textContent = step.specialist ? `${step.specialist} (специалист)` : step.agent ?? ''
         ? `${step.agent}${step.model ? ' · ' + step.model : ''}${step.specFile ? ' · ' + step.specFile : ''}`
         : 'барьер / гейт'
       const sub2 = document.createElementNS('http://www.w3.org/2000/svg', 'text')
@@ -371,7 +371,31 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       push()
     }))
     inspector.append(field('Заголовок', step.title ?? '', (v) => { step.title = v === '' ? null : v; push() }))
-    inspector.append(field('Агент (пусто = барьер)', step.agent ?? '', (v) => { step.agent = v.trim() === '' ? null : v.trim(); push() }))
+    inspector.append(field('Специалист (slug из .orca/specialists, вместо агента)', step.specialist ?? '', (v) => {
+      step.specialist = v.trim() === '' ? null : v.trim()
+      if (step.specialist) step.agent = null // либо specialist, либо agent
+      push()
+    }))
+    inspector.append(field('Агент (пусто = барьер, если нет специалиста)', step.agent ?? '', (v) => {
+      step.agent = v.trim() === '' ? null : v.trim()
+      if (step.agent) step.specialist = null
+      push()
+    }))
+    if (step.sub.length > 0) {
+      const subHead = document.createElement('label')
+      subHead.textContent = `Подшаги (${step.sub.length}) — параллельный блок`
+      inspector.append(subHead)
+      for (const child of step.sub) {
+        const line = document.createElement('div')
+        line.style.cssText = 'font-size:11.5px;color:var(--orca-muted-foreground);margin:2px 0'
+        line.textContent = `↳ ${child.id}${child.title ? ' · ' + child.title : ''} — ${child.specialist ?? child.agent ?? '?'}${child.optional ? ' · опциональный' : ''}`
+        inspector.append(line)
+      }
+      const subHint = document.createElement('div')
+      subHint.style.cssText = 'font-size:11px;color:var(--orca-muted-foreground);margin:4px 0 0'
+      subHint.textContent = 'Подшаги задаются в YAML (sub:) — редактор сохраняет их как есть.'
+      inspector.append(subHint)
+    }
     inspector.append(field('Модель (опц.)', step.model ?? '', (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }))
     inspector.append(field('Effort (только с моделью)', step.effort ?? '', (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }))
     inspector.append(field('specFile (путь в каталоге шаблонов)', step.specFile ?? '', (v) => { step.specFile = v.trim() === '' ? null : v.trim(); step.spec = null; push() }))

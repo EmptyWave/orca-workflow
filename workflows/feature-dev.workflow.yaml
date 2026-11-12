@@ -1,7 +1,7 @@
 # Переносимый воркфлоу (aip-style): специалисты в specialists/, шаги идут по порядку,
 # on_reject на ревью возвращает работу назад, тесты — один блок из трёх проверок.
 id: feature-dev
-title: 'Фича: план → ревью плана → разработка → ревью кода → тесты → коммит'
+title: 'biz/erp'
 steps:
   - id: plan
     title: 'План (openspec)'
@@ -25,6 +25,7 @@ steps:
     gate:
       question: 'Код аппрувнут? Запускать тесты?'
       options: [approve, request-changes]
+    on_reject: { goto: dev, max_rounds: 2 }
   - id: commit
     title: 'Коммит'
     specialist: committer

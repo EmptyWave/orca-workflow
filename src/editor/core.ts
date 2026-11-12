@@ -139,8 +139,11 @@ export function validate(graph: WfGraph): string[] {
     if (step.agent && !step.spec && !step.specFile) {
       errors.push(`шаг "${step.id}": агенту нужна спека (spec или specFile)`)
     }
-    if (!step.agent && step.deps.length === 0) {
+    if (!step.agent && !step.specialist && step.deps.length === 0) {
       errors.push(`шаг "${step.id}": барьер без зависимостей ничего не делает`)
+    }
+    if (step.agent && step.specialist) {
+      errors.push(`шаг "${step.id}": либо specialist, либо agent — не оба`)
     }
     if (step.gate && step.gate.question.trim() === '') errors.push(`шаг "${step.id}": пустой вопрос гейта`)
     if (step.onReject && !ids.has(step.onReject.goto)) {
