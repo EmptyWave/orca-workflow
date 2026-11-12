@@ -185,6 +185,9 @@
           const v = await orca.storage.get('html.' + key).catch(() => null)
           if (v !== null && v !== undefined) S[key] = v
         }
+        // The last detected project, so the Templates tab works before (or without) focus
+        const remembered = await orca.storage.get('html.project').catch(() => null)
+        if (remembered && typeof remembered === 'object' && remembered.path) S.project = remembered
       }
 
       // ------------------------------------------------------------------ effective status
@@ -243,19 +246,28 @@
         render()
       }
       async function loadProject() {
-        try { S.project = (await req('project.current')).project } catch { S.project = null }
+        try { S.project = (await req('project.current')).project } catch { /* keep the remembered one */ }
+        if (S.project) await orca.storage.set('html.project', S.project).catch(() => {})
+        // Templates may have failed while the project was still unknown — retry now.
+        if (S.tab === 'templates' && (S.templates === null || S.templates.length === 0) && S.project) void loadTemplates()
         render()
       }
+      let tplInFlight = false
       async function loadTemplates() {
+        if (tplInFlight) return
+        tplInFlight = true
         try {
-          const answer = await req('template.list', {
-            source: S.tplSource,
-            projectPath: S.tplSource === 'project' ? S.project?.path ?? null : null
-          }, 60000)
-          S.templates = answer.templates
-          delete loadingSince['шаблоны']
-          if (answer.templates.length > 0 && !answer.templates.some((t) => t.id === S.tplId)) S.tplId = answer.templates[0].id
+        if (S.tplSource === 'project' && !S.project) await loadProject()
+        const answer = await req('template.list', {
+          source: S.tplSource,
+          projectPath: S.tplSource === 'project' ? S.project?.path ?? null : null
+        }, 60000)
+        S.templates = answer.templates
+        S.notice = null
+        delete loadingSince['шаблоны']
+        if (answer.templates.length > 0 && !answer.templates.some((t) => t.id === S.tplId)) S.tplId = answer.templates[0].id
         } catch (e) { S.templates = []; setNotice('Шаблоны не читаются: ' + esc(e.message || e)) }
+        finally { tplInFlight = false }
         render()
       }
       async function loadSettings() {
@@ -494,7 +506,10 @@
           : `<div class="callout warning">Проект не найден — открой workspace репозитория в Orca.</div>`
         if (!S.templates) { void loadTemplates(); return project + stuck('шаблоны') }
         if (S.templates.length === 0) {
-          return project + `<div class="empty">Нет шаблонов. Скопируй из библиотеки: источник «Библиотека» → «В проект».</div>`
+          const noProject = S.tplSource === 'project' && !S.project
+          return project + (noProject
+            ? `<div class="empty">Проект не определён: кликни workspace репозитория в Orca и обнови (↻).</div>`
+            : `<div class="empty">Нет шаблонов. Скопируй из библиотеки: источник «Библиотека» → «В проект».</div>`)
         }
         const tpl = S.templates.find((t) => t.id === S.tplId) ?? S.templates[0]
         const srcSelect = `<div class="rowline" style="margin-bottom:8px">
