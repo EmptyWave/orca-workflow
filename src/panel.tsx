@@ -703,7 +703,7 @@ export default function Panel() {
         value={rd(tab)}
         onChange={(value) => {
           set(tab, value as 'runs' | 'templates' | 'settings')
-          if (value === 'templates' && rd(templates) === null) void run('шаблоны', loadTemplates)
+          if (value === 'templates') void run('шаблоны', loadTemplates)
           if (value === 'settings') void run('настройки', loadSettings)
         }}
       >
