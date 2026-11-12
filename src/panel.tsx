@@ -38,7 +38,9 @@ import type { WfGate, WfJob, WfRun, WfSnapshot, WfTask, WfTemplate } from './pro
 const snapshot = atom<WfSnapshot | null>('state.snapshot', null, { persist: 'storage' })
 const selectedRun = atom<string | null>('state.selectedRunId', null, { persist: 'storage' })
 const runs = atom<WfRun[] | null>(null)
-const tab = atom<'runs' | 'templates' | 'settings'>('ui.tab', 'runs', { persist: 'plugin' })
+// New key (was 'ui.tab') so the panel lands on Templates once for everyone, even those
+// whose last open tab was Runs or Настройки.
+const tab = atom<'runs' | 'templates' | 'settings'>('ui.tab2', 'templates', { persist: 'plugin' })
 const busy = atom<string | null>(null)
 const notice = atom<string | null>(null)
 
@@ -707,8 +709,8 @@ export default function Panel() {
           if (value === 'settings') void run('настройки', loadSettings)
         }}
       >
-        <Tab value="runs" label="Runs" icon="activity" />
-        <Tab value="templates" label="Templates" icon="blocks" />
+        <Tab value="templates" label="Шаблоны" icon="blocks" />
+        <Tab value="runs" label="Запуски" icon="activity" />
         <Tab value="settings" label="Настройки" icon="settings" />
       </Tabs>
       {rd(tab) === 'runs' ? <RunsTab /> : rd(tab) === 'templates' ? <TemplatesTab /> : <SettingsTab />}

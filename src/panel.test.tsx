@@ -33,11 +33,11 @@ test('рисует шаги, гейты и воркеров из снапшот�
       'workspaces.list': { workspaces: [{ id: 'w1', kind: 'worktree', name: 'ycl-104-momento', path: '/x', branch: 'b' }] }
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, persisted: { plugin: { 'ui.tab2': 'runs' } } })
   await new Promise((resolve) => setTimeout(resolve, 50))
   const summary = view.summary().join('\n')
   assert.ok(summary.includes('Table "Шаги": 2 row(s)'), `таблица шагов видна: ${summary}`)
-  assert.ok(summary.includes('Tabs "Раздел": "Runs" selected'), 'вкладка Runs выбрана')
+  assert.ok(summary.includes('Tabs "Раздел": "Запуски" selected'), 'вкладка Запуски выбрана')
   assert.ok(view.find({ text: 'request-changes' }), 'кнопка гейта видна')
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])
@@ -58,7 +58,7 @@ test('кнопка гейта зовёт gate.resolve с выбранной ре
       }
     }
   })
-  const view = await mount(panel, { host })
+  const view = await mount(panel, { host, persisted: { plugin: { 'ui.tab2': 'runs' } } })
   await view.press({ text: 'request-changes' })
   const requests = host.callsOf('plugin.request') as Array<{ name: string; input?: unknown }>
   assert.ok(
@@ -80,7 +80,7 @@ test('вкладка Настройки показывает значения и
       'bridge.info': { terminalId: 'term_1' }
     }
   })
-  const view = await mount(panel, { host, persisted: { plugin: { 'ui.tab': 'settings' } } })
+  const view = await mount(panel, { host, persisted: { plugin: { 'ui.tab2': 'settings' } } })
   await new Promise((resolve) => setTimeout(resolve, 50))
   assert.ok(view.find({ text: 'Сохранить' }), 'кнопка сохранения видна')
   assert.ok(view.find({ text: 'Пересоздать мост' }), 'кнопка моста видна')
@@ -108,7 +108,7 @@ test('вкладка Templates: пустой проект показывает �
     }
   })
   // The Tab control is not pressable in the harness: start on the Templates tab instead.
-  const view = await mount(panel, { host, persisted: { plugin: { 'ui.tab': 'templates' } } })
+  const view = await mount(panel, { host, persisted: { plugin: { 'ui.tab2': 'templates' } } })
   await new Promise((resolve) => setTimeout(resolve, 50))
   const summary = view.summary().join('\n')
   assert.ok(summary.includes('EmptyState "Шаблонов нет"'), `пустое состояние видно: ${summary}`)
