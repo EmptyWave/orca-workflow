@@ -29,15 +29,21 @@ export class Bridge {
     const stored = await this.orca.storage.get('bridge.terminalId')
     if (typeof stored === 'string' && stored !== '') {
       try {
-        // A dead pty can still answer terminal.read with empty output, so probe it with a
-        // real command: a terminal that cannot echo is a zombie and gets recreated.
+        // A dead pty can still answer terminal.read with empty output, so probe with a real
+        // command; and a LIVE terminal is not necessarily ours — a stale stored handle can
+        // point at a person's terminal. Adopt it only when Orca still lists it as the bridge.
         const probe = await this.exec(`echo __WF_ALIVE__`, stored, 3_000)
         if (probe.includes('__WF_ALIVE__')) {
-          this.terminal = stored
-          return stored
+          const listing = await this.exec('orca terminal list --json', stored, 8_000)
+          const envelope = parseJson<{ ok?: boolean; result?: { terminals?: Array<{ handle?: string; title?: string }> } }>(listing)
+          const entry = (envelope.result?.terminals ?? []).find((t) => t.handle === stored)
+          if (entry && entry.title === 'workflow-view bridge') {
+            this.terminal = stored
+            return stored
+          }
         }
       } catch {
-        // The stored terminal is gone; fall through and create a fresh one.
+        // The stored terminal is gone or not ours; fall through and create a fresh one.
       }
     }
     const list = await this.orca.host.call('workspace.list', undefined)

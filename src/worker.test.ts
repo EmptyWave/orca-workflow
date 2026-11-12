@@ -79,6 +79,14 @@ function makeHost() {
     if (command.includes('__WF_ALIVE__')) {
       return '__WF_ALIVE__'
     }
+    if (command.includes('terminal list')) {
+      return JSON.stringify({
+        ok: true,
+        result: {
+          terminals: [{ handle: 't1', title: 'workflow-view bridge' }]
+        }
+      })
+    }
     if (command.includes('echo $HOME')) {
       return '/Users/tester'
     }
