@@ -608,6 +608,26 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { ok: true as const }
   })
 
+  orca.panels.handle('template.edit', async ({ projectPath, templateId }) => {
+    everUsed = true
+    const templates = await listTemplates('project', projectPath)
+    const template = templates.find((t) => t.id === templateId)
+    if (!template) throw new BridgeError(`шаблон "${templateId}" не найден`, 'cli_error')
+    const filePath = `${template.sourcePath}/${template.file}`
+    const list = await orca.host.call('workspace.list', undefined)
+    // The project's main checkout is the workspace that owns the workflows directory.
+    const home = list.workspaces.find((w) => w.path === projectPath)
+    if (!home) {
+      throw new BridgeError(
+        `у проекта "${projectPath}" нет открытого воркспейса с корнем репозитория — открой файл вручную: ${filePath}`,
+        'no_terminal'
+      )
+    }
+    // editor.open takes a path relative to the workspace root.
+    await orca.host.call('editor.open', { workspaceId: home.id, path: filePath.slice(projectPath.length + 1) })
+    return { opened: true as const }
+  })
+
   orca.panels.handle('job.get', async ({ jobId }) => {
     const stored = await orca.storage.get('jobs')
     const jobs = (typeof stored === 'object' && stored !== null ? stored : {}) as Record<string, WfJob>

@@ -81,6 +81,7 @@
     { "kind": "terminal:send" },
     { "kind": "terminal:read" },
     { "kind": "workspace:read" },
+    { "kind": "workspace:write" },
     { "kind": "agent:read" }
   ]
 }

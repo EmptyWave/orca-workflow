@@ -123,6 +123,11 @@ declare module 'orca' {
       input: { from: 'library' | 'project'; to: 'library' | 'project'; templateId: string; fromProjectPath: string | null; toProjectPath: string | null }
       output: { ok: true }
     }
+    /** Open a project template in Orca — the graph editor for .workflow.yaml. */
+    'template.edit': {
+      input: { projectPath: string; templateId: string }
+      output: { opened: true }
+    }
     /** Jobs (long operations) keyed by id. */
     'job.get': { input: { jobId: string }; output: { job: WfJob | null } }
     /** Plugin settings the Settings tab shows and saves. */

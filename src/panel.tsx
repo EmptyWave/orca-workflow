@@ -241,6 +241,19 @@ async function resetBridge(): Promise<void> {
   })
 }
 
+async function editTemplate(): Promise<void> {
+  await run('открытие редактора', async () => {
+    if (rd(tplSource) !== 'project' || !rd(tplProjectPath)) {
+      throw new Error('граф-редактор открывает шаблоны проекта — перенеси шаблон в проект кнопкой ниже')
+    }
+    await plugin.request(
+      'template.edit',
+      { projectPath: rd(tplProjectPath), templateId: rd(selectedTemplate) },
+      { timeoutMs: 30_000 }
+    )
+  })
+}
+
 async function copyTemplate(to: 'library' | 'project'): Promise<void> {
   await run('копирование шаблона', async () => {
     await plugin.request(
@@ -555,6 +568,14 @@ function TemplatesTab() {
             <Row gap="xs">
               <Button tone="accent" icon="play" disabled={rd(busy) !== null} onPress={() => void instantiate()}>
                 Поднять Run
+              </Button>
+              <Button
+                variant="outline"
+                icon="edit"
+                disabled={rd(busy) !== null}
+                onPress={() => void editTemplate()}
+              >
+                Редактировать
               </Button>
               <Button
                 variant="outline"

@@ -120,6 +120,7 @@ function makeHost() {
         workspaces: [{ id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/x/biz.erp', branch: 'master', project: 'p', hostId: 'local' }],
         truncated: false
       },
+      'editor.open': { opened: true },
       'terminal.create': { terminalId: 't1' },
       'terminal.sendText': (params: { text: string }) => {
         sends += 1
@@ -234,6 +235,15 @@ test('projects.list отдаёт git-репозитории с путями', ()
     ])
     const current = await worker.request('project.current')
     assert.deepEqual(current.project, { repoId: 'r1', name: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp' })
+  }))
+
+test('template.edit открывает файл шаблона в Orca', () =>
+  withWorker(async (worker, host) => {
+    await worker.request('template.edit', { projectPath: '/x/biz.erp', templateId: 'demo' })
+    const opens = host.callsOf('editor.open') as Array<{ workspaceId: string; path: string }>
+    assert.equal(opens.length, 1)
+    assert.equal(opens[0].workspaceId, 'w1')
+    assert.equal(opens[0].path, '.orca/workflows/demo.yaml')
   }))
 
 test('gate.resolve и task.start доходят до CLI с флагами', () =>
