@@ -38,9 +38,8 @@ import type { WfGate, WfJob, WfRun, WfSnapshot, WfTask, WfTemplate } from './pro
 const snapshot = atom<WfSnapshot | null>('state.snapshot', null, { persist: 'storage' })
 const selectedRun = atom<string | null>('state.selectedRunId', null, { persist: 'storage' })
 const runs = atom<WfRun[] | null>(null)
-// New key (was 'ui.tab') so the panel lands on Templates once for everyone, even those
-// whose last open tab was Runs or Настройки.
-const tab = atom<'runs' | 'templates' | 'settings'>('ui.tab2', 'templates', { persist: 'plugin' })
+// New key (was 'ui.tab') so the tab choice resets once; Запуски is the landing tab.
+const tab = atom<'runs' | 'templates' | 'settings'>('ui.tab2', 'runs', { persist: 'plugin' })
 const busy = atom<string | null>(null)
 const notice = atom<string | null>(null)
 
@@ -509,29 +508,24 @@ function TemplatesTab() {
           icon="folder"
         />
       ) : (
-        <List label="Шаблоны">
-          {templatesNow.map((t) => (
-            <ListItem
-              key={t.id}
-              title={t.title}
-              description={t.error ? t.error : `${t.id} · ${t.steps.length} шагов`}
-              current={t.id === rd(selectedTemplate)}
-              onPress={() => set(selectedTemplate, t.id)}
-            >
-              {t.id === rd(selectedTemplate) ? (
-                <IconButton
-                  icon="edit"
-                  label={`Редактировать ${t.id}`}
-                  tooltip="Открыть в граф-редакторе"
-                  variant="ghost"
-                  size="sm"
-                  disabled={rd(busy) !== null || t.error !== null}
-                  onPress={() => void editTemplate(t.id)}
-                />
-              ) : null}
-            </ListItem>
-          ))}
-        </List>
+        // A select with the pencil beside it: an interactive control cannot sit inside a
+        // pressable list item (Orca refuses that layout), and one template needs no list.
+        <Row gap="xs" align="center">
+          <Select
+            label="Шаблон"
+            value={rd(selectedTemplate) || undefined}
+            options={templatesNow.map((t) => ({ value: t.id, label: t.error ? `${t.id} (ошибка)` : t.id }))}
+            onChange={(value) => set(selectedTemplate, value)}
+          />
+          <IconButton
+            icon="edit"
+            label="Редактировать шаблон"
+            tooltip="Открыть в граф-редакторе"
+            variant="ghost"
+            disabled={rd(busy) !== null || (selected?.error ?? null) !== null}
+            onPress={() => void editTemplate()}
+          />
+        </Row>
       )}
       {selected ? (
         <Card>
@@ -709,8 +703,8 @@ export default function Panel() {
           if (value === 'settings') void run('настройки', loadSettings)
         }}
       >
-        <Tab value="templates" label="Шаблоны" icon="blocks" />
         <Tab value="runs" label="Запуски" icon="activity" />
+        <Tab value="templates" label="Шаблоны" icon="blocks" />
         <Tab value="settings" label="Настройки" icon="settings" />
       </Tabs>
       {rd(tab) === 'runs' ? <RunsTab /> : rd(tab) === 'templates' ? <TemplatesTab /> : <SettingsTab />}

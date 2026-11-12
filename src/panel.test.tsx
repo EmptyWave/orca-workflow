@@ -69,6 +69,49 @@ test('кнопка гейта зовёт gate.resolve с выбранной ре
   await view.unmount()
 })
 
+test('вкладка Шаблоны: селектор + карандаш, полные данные рендерятся без ошибок', async () => {
+  const steps = Array.from({ length: 8 }, (_, i) => ({
+    id: `step${i}`,
+    title: `Шаг ${i}`,
+    agent: i % 3 === 0 ? 'claude' : null,
+    model: null,
+    effort: null,
+    spec: 'SPEC '.repeat(200),
+    specFile: i % 2 ? `specs/s${i}.md` : null,
+    deps: i ? [`step${i - 1}`] : [],
+    gate: i % 2 ? { question: 'Готов?'.repeat(50), options: ['approve', 'request-changes'] } : null,
+    onReject: null
+  }))
+  const tpl = {
+    id: 'task-dev',
+    title: 'biz.erp: фича — план → ревью → разработка → ревью кода → тесты → коммит',
+    source: 'project' as const,
+    sourcePath: '/x',
+    file: 'workflow.yaml',
+    steps,
+    error: null
+  }
+  const host = mockHost({
+    storage: {},
+    requests: {
+      'runs.list': { runs: [], error: null },
+      'state.get': { at: 1, run: null, tasks: [], gates: [], workers: [], error: null },
+      'workspaces.list': { workspaces: [] },
+      'projects.list': { projects: [{ repoId: 'r1', name: 'biz.erp', path: '/x' }] },
+      'project.current': { project: { repoId: 'r1', name: 'biz.erp', path: '/x' } },
+      'template.list': { templates: [tpl] },
+      'settings.get': { libraryDir: '~/l', refreshMs: 10000, defaultAgent: 'claude' },
+      'bridge.info': { terminalId: null }
+    }
+  })
+  const view = await mount(panel, { host, persisted: { plugin: { 'ui.tab2': 'templates' } } })
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.deepEqual(view.errors, [], 'Orca не должен отказывать в раскладке')
+  assert.ok(view.find({ label: 'Шаблон' }), 'селектор шаблона виден')
+  assert.ok(view.find({ label: 'Редактировать шаблон' }), 'карандаш виден')
+  await view.unmount()
+})
+
 test('вкладка Настройки показывает значения и мост', async () => {
   const host = mockHost({
     storage: {},
