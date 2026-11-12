@@ -112,6 +112,7 @@ test('вкладка Шаблоны: селектор + карандаш, пол
   await new Promise((resolve) => setTimeout(resolve, 80))
   assert.deepEqual(view.errors, [], 'Orca не должен отказывать в раскладке')
   assert.ok(view.find({ label: 'Шаблон' }), 'селектор шаблона виден')
+  assert.ok(view.find({ text: /🤖 claude/ }), 'чип агента/модели у шага шаблона')
   assert.ok(view.find({ label: 'Редактировать шаблон' }), 'карандаш виден')
   await view.unmount()
 })

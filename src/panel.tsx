@@ -317,22 +317,20 @@ function effectiveStatuses(tasks: WfTask[], gates: WfGate[]): Record<string, Eff
   return Object.fromEntries(memo)
 }
 
-/** Orca-style status visuals: a live spinner while working, a coloured badge otherwise. */
-function statusBadge(status: string): OrcaNode {
+/** Heavy status mark, aip-style: green check circle for done, red cross for failure,
+ *  live spinner while working. Waiting states keep the light row glyph instead. */
+function statusMark(status: string): OrcaNode {
   if (status === 'dispatched') return <Spinner label="работает" labelHidden />
   if (status === 'succeeded') return <Badge tone="success">✓</Badge>
-  if (status === 'ready') return <Badge tone="accent">▶</Badge>
-  if (status === 'blocked') return <Badge tone="warning">⏳</Badge>
   if (status === 'failed') return <Badge tone="danger">✗</Badge>
-  return <Badge tone="neutral">○</Badge>
+  return null
 }
 
-/** Native glyph for the row icon slot. */
-function statusGlyph(status: string): 'check' | 'play' | 'flag' | 'error' | 'pause' | 'more' {
-  if (status === 'succeeded') return 'check'
+/** Native glyph for the row icon slot (waiting states; done/failed show a badge instead). */
+function statusGlyph(status: string): 'check' | 'play' | 'flag' | 'error' | 'pause' | 'more' | null {
+  if (status === 'succeeded' || status === 'failed') return null // a badge mark instead
   if (status === 'ready') return 'play'
   if (status === 'blocked') return 'flag'
-  if (status === 'failed') return 'error'
   if (status === 'queued') return 'pause'
   return 'more'
 }
@@ -406,7 +404,7 @@ function RunsTab() {
                 return (
                   <ListItem
                     key={t.id}
-                    icon={statusGlyph(eff.status)}
+                    icon={statusGlyph(eff.status) ?? undefined}
                     description={[
                       STATUS_TEXT[eff.status] ?? eff.status,
                       gateHint,
@@ -417,7 +415,7 @@ function RunsTab() {
                       .join(' · ')}
                   >
                     <Row gap="xs" align="center">
-                      {eff.status === 'dispatched' ? statusBadge(eff.status) : null}
+                      {statusMark(eff.status)}
                       <Text weight="semibold">{t.title || t.id}</Text>
                       {t.model ? (
                         <Badge tone="neutral">
@@ -609,21 +607,43 @@ function TemplatesTab() {
             </Text>
             {selected.error ? <Callout tone="danger" title="Шаблон не читается">{selected.error}</Callout> : (
               <List label="Шаги">
-                {selected.steps.map((step) => (
+                {selected.steps.flatMap((step) => [
                   <ListItem
                     key={step.id}
-                    title={`${step.id}${step.title ? ` · ${step.title}` : ''}`}
                     description={[
-                      step.agent ? `агент ${step.agent}` : 'барьер',
-                      step.model ? `модель ${step.model}${step.effort ? ` · ${step.effort}` : ''}` : null,
+                      step.specialist ? `специалист ${step.specialist}` : null,
                       step.deps.length > 0 ? `deps: ${step.deps.join(', ')}` : null,
                       step.gate ? `гейт: ${step.gate.question}` : null,
                       step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
                     ]
                       .filter(Boolean)
                       .join(' · ')}
-                  />
-                ))}
+                  >
+                    <Row gap="xs" align="center">
+                      <Text weight="semibold">{step.id}{step.title ? ` · ${step.title}` : ''}</Text>
+                      {step.model ? (
+                        <Badge tone="neutral">{'🤖 '}{step.model}</Badge>
+                      ) : step.agent ? (
+                        <Badge tone="neutral">{'🤖 '}{step.agent}</Badge>
+                      ) : null}
+                    </Row>
+                  </ListItem>,
+                  ...(step.sub ?? []).map((child) => (
+                    <ListItem
+                      key={`${step.id}:${child.id}`}
+                      description={child.optional ? 'опциональный: стартует по RUN из отчёта' : undefined}
+                    >
+                      <Row gap="xs" align="center">
+                        <Text muted>↳ {child.id}{child.title ? ` · ${child.title}` : ''}</Text>
+                        {child.model ? (
+                          <Badge tone="neutral">{'🤖 '}{child.model}</Badge>
+                        ) : child.agent ? (
+                          <Badge tone="neutral">{'🤖 '}{child.agent}</Badge>
+                        ) : null}
+                      </Row>
+                    </ListItem>
+                  ))
+                ])}
               </List>
             )}
             <Row gap="xs">
