@@ -4,7 +4,8 @@
 import type { OrcaWorkerApi } from 'orca/worker'
 
 const READ_INTERVAL_MS = 120
-const DEFAULT_TIMEOUT_MS = 25_000
+// 12s keeps probe + one zombie-retry inside the 30s plugin.request budget.
+const DEFAULT_TIMEOUT_MS = 12_000
 const READ_LINES = 400
 
 export class BridgeError extends Error {
