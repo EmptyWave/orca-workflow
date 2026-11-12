@@ -166,6 +166,9 @@ declare module 'orca' {
       input: { libraryDir: string; refreshMs: number; defaultAgent: string }
       output: { libraryDir: string; refreshMs: number; defaultAgent: string }
     }
+    /** Remember which agent ran each task of a legacy Run (raised before step configs
+     *  existed), so the panel can show the agents' icons. */
+    'run.agents.set': { input: { runId: string; agents: Record<string, string> }; output: { ok: true } }
     /** Drops the stored bridge terminal; the next command recreates it. */
     'bridge.reset': { output: { ok: true } }
     /** Bridge state for the Settings tab. */

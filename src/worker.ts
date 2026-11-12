@@ -148,13 +148,26 @@ export default function activate(orca: OrcaWorkerApi): void {
         }
       }
     }
+    // Manual agent notes for runs raised before per-step configuration existed.
+    const agentsStored = await orca.storage.get(`agents.${runId}`)
+    if (agentsStored && typeof agentsStored === 'object') {
+      const noted = agentsStored as Record<string, string>
+      for (const task of tasks) {
+        const agent = noted[task.id]
+        if (agent && !task.agent) task.agent = agent
+      }
+    }
     const byTitleAgent = new Map(
       asArray<Record<string, unknown>>(workerRows.workers ?? workerRows.dispatches).map((row) => [
         String(field(row, 'taskId') ?? ''),
         String(field(row, 'agent') ?? '') || null
       ])
     )
-    for (const task of tasks) if (byTitleAgent.has(task.id)) task.agent = byTitleAgent.get(task.id) ?? null
+    for (const task of tasks) {
+      // A finished dispatch's row can outlive its agent identity; never erase a known agent.
+      const live = byTitleAgent.get(task.id)
+      if (live) task.agent = live
+    }
     const gates: WfGate[] = asArray<Record<string, unknown>>(gateRows.gates).map((row) => {
       const taskId = String(field(row, 'taskId') ?? '')
       return {
@@ -1087,6 +1100,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     await orca.settings.set('refreshMs', refreshMs)
     await orca.settings.set('defaultAgent', defaultAgent)
     return { libraryDir, refreshMs, defaultAgent }
+  })
+
+  orca.panels.handle('run.agents.set', async ({ runId, agents }) => {
+    everUsed = true
+    await orca.storage.set(`agents.${runId}`, agents)
+    void refresh()
+    return { ok: true as const }
   })
 
   orca.panels.handle('bridge.reset', async () => {
