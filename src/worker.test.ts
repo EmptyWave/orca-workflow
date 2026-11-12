@@ -76,6 +76,9 @@ function makeHost() {
         }
       })
     }
+    if (command.includes('__WF_ALIVE__')) {
+      return '__WF_ALIVE__'
+    }
     if (command.includes('echo $HOME')) {
       return '/Users/tester'
     }

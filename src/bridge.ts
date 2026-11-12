@@ -29,9 +29,13 @@ export class Bridge {
     const stored = await this.orca.storage.get('bridge.terminalId')
     if (typeof stored === 'string' && stored !== '') {
       try {
-        await this.orca.host.call('terminal.read', { terminalId: stored, maxLines: 1 })
-        this.terminal = stored
-        return stored
+        // A dead pty can still answer terminal.read with empty output, so probe it with a
+        // real command: a terminal that cannot echo is a zombie and gets recreated.
+        const probe = await this.exec(`echo __WF_ALIVE__`, stored, 3_000)
+        if (probe.includes('__WF_ALIVE__')) {
+          this.terminal = stored
+          return stored
+        }
       } catch {
         // The stored terminal is gone; fall through and create a fresh one.
       }
@@ -48,37 +52,51 @@ export class Bridge {
     return created.terminalId
   }
 
-  /** Runs one shell command; resolves with everything it printed between the markers. */
+  /** Runs one shell command; resolves with everything it printed between the markers.
+   *  A timeout means the terminal went zombie: reset it and retry once on a fresh one. */
   async run(command: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string> {
-    const runOnce = async (): Promise<string> => {
-      const terminalId = await this.ensure()
-      const n = ++this.counter
-      const begin = `__WF${n}B__`
-      const end = `__WF${n}E`
-      await this.orca.host.call('terminal.sendText', {
-        terminalId,
-        text: `echo "${begin}"; ${command}; echo "${end}_$?__"`,
-        enter: true
-      })
-      const deadline = Date.now() + timeoutMs
-      for (;;) {
-        await sleep(READ_INTERVAL_MS)
-        const read = await this.orca.host.call('terminal.read', { terminalId, maxLines: READ_LINES })
-        const found = capture(read.lines, n)
-        if (found) {
-          if (found.exit !== 0) {
-            throw new BridgeError(tail(found.output, 600) || `команда завершилась с кодом ${found.exit}`, 'cli_error')
-          }
-          return found.output
-        }
-        if (Date.now() > deadline) {
-          throw new BridgeError(`мост: таймаут ${timeoutMs} мс для команды: ${tail(command, 120)}`, 'bridge_timeout')
-        }
+    try {
+      return await this.enqueue(command, timeoutMs)
+    } catch (error) {
+      if (error instanceof BridgeError && error.code === 'bridge_timeout') {
+        await this.reset()
+        return await this.enqueue(command, timeoutMs)
       }
+      throw error
     }
+  }
+
+  private enqueue(command: string, timeoutMs: number): Promise<string> {
+    const runOnce = async (): Promise<string> => this.exec(command, await this.ensure(), timeoutMs)
     const next = this.queue.then(runOnce, runOnce)
     this.queue = next.catch(() => undefined)
     return next
+  }
+
+  private async exec(command: string, terminalId: string, timeoutMs: number): Promise<string> {
+    const n = ++this.counter
+    const begin = `__WF${n}B__`
+    const end = `__WF${n}E`
+    await this.orca.host.call('terminal.sendText', {
+      terminalId,
+      text: `echo "${begin}"; ${command}; echo "${end}_$?__"`,
+      enter: true
+    })
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      await sleep(READ_INTERVAL_MS)
+      const read = await this.orca.host.call('terminal.read', { terminalId, maxLines: READ_LINES })
+      const found = capture(read.lines, n)
+      if (found) {
+        if (found.exit !== 0) {
+          throw new BridgeError(tail(found.output, 600) || `команда завершилась с кодом ${found.exit}`, 'cli_error')
+        }
+        return found.output
+      }
+      if (Date.now() > deadline) {
+        throw new BridgeError(`мост: таймаут ${timeoutMs} мс для команды: ${tail(command, 120)}`, 'bridge_timeout')
+      }
+    }
   }
 
   /** Forgets the stored terminal handle; the next command creates a fresh bridge. */
