@@ -81,11 +81,16 @@ test('validate: цикл, битая зависимость, агент без �
   assert.ok(errors.some((e) => e.includes('ghost')), errors.join('; '))
 })
 
-test('autoLayout: колонки по глубине, параллельные — рядом', () => {
+test('autoLayout: вертикально — уровни вниз, параллельные рядом', () => {
   const graph = decode(YAML)
   const layout = autoLayout(graph)
-  assert.ok(layout.rev.x > layout.plan.x, 'rev правее plan')
-  assert.ok(layout.dev.x > layout.rev.x, 'dev правее rev')
+  assert.ok(layout.rev.y > layout.plan.y, 'rev ниже plan')
+  assert.ok(layout.dev.y > layout.rev.y, 'dev ниже rev')
+  // Параллельные ветки на одном уровне — в строке, бок о бок.
+  graph.steps.push({ ...graph.steps[0], id: 'parallel', deps: ['rev'], title: 'Параллельный' })
+  const withParallel = autoLayout(graph)
+  assert.equal(withParallel.parallel.y, withParallel.dev.y, 'один уровень зависимостей — одна строка')
+  assert.ok(Math.abs(withParallel.parallel.x - withParallel.dev.x) > 100, 'стоят рядом по горизонтали')
 })
 
 test('mergeGraphs: по id — чужая правка полем, моя — другим полем', () => {

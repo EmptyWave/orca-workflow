@@ -1,4 +1,4 @@
-# workflow-view: layout plan:40,40; review:300,40; dev:560,40
+# workflow-view: layout plan:95,40; review:95,200; dev:95,360
 id: my-workflow
 title: 'Мой воркфлоу'
 steps:

@@ -521,6 +521,16 @@ function TemplatesTab() {
       {selected ? (
         <Card title={selected.title} description={`${selected.id} · ${selected.file}`}>
           <Stack gap="sm">
+            <Row justify="end">
+              <IconButton
+                icon="edit"
+                label="Редактировать в граф-редакторе"
+                tooltip="Открыть в граф-редакторе"
+                variant="ghost"
+                disabled={rd(busy) !== null || selected.error !== null}
+                onPress={() => void editTemplate()}
+              />
+            </Row>
             {selected.error ? <Callout tone="danger" title="Шаблон не читается">{selected.error}</Callout> : (
               <List label="Шаги">
                 {selected.steps.map((step) => (
@@ -568,14 +578,6 @@ function TemplatesTab() {
             <Row gap="xs">
               <Button tone="accent" icon="play" disabled={rd(busy) !== null} onPress={() => void instantiate()}>
                 Поднять Run
-              </Button>
-              <Button
-                variant="outline"
-                icon="edit"
-                disabled={rd(busy) !== null}
-                onPress={() => void editTemplate()}
-              >
-                Редактировать
               </Button>
               <Button
                 variant="outline"

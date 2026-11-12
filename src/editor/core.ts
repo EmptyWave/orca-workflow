@@ -150,7 +150,7 @@ export function validate(graph: WfGraph): string[] {
   return [...new Set(errors)]
 }
 
-/** Layered layout: column = longest distance from a root, row = order inside the layer. */
+/** Layered layout, top to bottom: a row per dependency depth, parallel steps side by side. */
 export function autoLayout(graph: WfGraph): Record<string, { x: number; y: number }> {
   const byId = new Map(graph.steps.map((s) => [s.id, s]))
   const depth = new Map<string, number>()
@@ -174,7 +174,7 @@ export function autoLayout(graph: WfGraph): Record<string, { x: number; y: numbe
   const layout: Record<string, { x: number; y: number }> = {}
   for (const [d, layerIds] of [...layers.entries()].sort((a, b) => a[0] - b[0])) {
     layerIds.forEach((id, i) => {
-      layout[id] = { x: 40 + d * (NODE_W + 70), y: 40 + i * (NODE_H + 36) }
+      layout[id] = { x: 40 + i * (NODE_W + 50), y: 40 + d * (NODE_H + 90) }
     })
   }
   return layout

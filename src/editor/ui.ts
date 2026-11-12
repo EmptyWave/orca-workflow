@@ -36,6 +36,11 @@ const STYLE = `
 .wfv-yaml{position:absolute;inset:0;margin:0;padding:12px;overflow:auto;background:var(--orca-background);font:12px ui-monospace,monospace;white-space:pre;border:0}
 .wfv-error{padding:8px 12px;background:var(--orca-destructive);color:var(--orca-destructive-foreground);font-size:12px}
 .wfv-hint{padding:4px 12px;font-size:11px;color:var(--orca-muted-foreground)}
+.wfv-head{display:flex;gap:8px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--orca-border);background:var(--orca-card)}
+.wfv-head input{font:13px inherit;padding:3px 8px;border:1px solid var(--orca-input);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground)}
+.wfv-head .title{flex:1;font-weight:600}
+.wfv-head .ident{width:150px;font-family:ui-monospace,monospace;font-size:12px}
+.wfv-head .cap{font-size:11px;color:var(--orca-muted-foreground)}
 `
 
 type Selection = { kind: 'node'; id: string } | { kind: 'edge'; from: string; to: string } | null
@@ -50,6 +55,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   root.className = 'wfv'
   root.innerHTML =
     '<div class="wfv-toolbar"></div>' +
+    '<div class="wfv-head"></div>' +
     '<div class="wfv-error" hidden></div>' +
     '<div class="wfv-body"><div class="wfv-canvas"><svg><defs>' +
     '<marker id="wfv-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">' +
@@ -87,6 +93,35 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   const status = document.createElement('span')
   status.className = 'wfv-status'
   toolbar.append(status)
+
+  // The workflow header: title and id live with the graph, edited in place.
+  const head = root.querySelector<HTMLElement>('.wfv-head') as HTMLElement
+  const titleCap = document.createElement('span')
+  titleCap.className = 'cap'
+  titleCap.textContent = 'название'
+  const titleInput = document.createElement('input')
+  titleInput.className = 'title'
+  titleInput.placeholder = 'Название воркфлоу'
+  titleInput.addEventListener('input', () => {
+    graph.title = titleInput.value
+    push()
+  })
+  const idCap = document.createElement('span')
+  idCap.className = 'cap'
+  idCap.textContent = 'id'
+  const idInput = document.createElement('input')
+  idInput.className = 'ident'
+  idInput.addEventListener('input', () => {
+    const clean = idInput.value.trim().replace(/[^a-z0-9-]/g, '-')
+    if (clean === graph.id) return
+    graph.id = clean
+    push()
+  })
+  head.append(titleCap, titleInput, idCap, idInput)
+  function syncHead(): void {
+    if (document.activeElement !== titleInput) titleInput.value = graph.title
+    if (document.activeElement !== idInput) idInput.value = graph.id
+  }
   let yamlPre: HTMLPreElement | null = null
   function toggleYaml(): void {
     if (yamlPre) {
@@ -116,6 +151,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     ensureLayout()
     graph = { ...graph, steps: [...graph.steps] }
     if (yamlPre) yamlPre.textContent = emit(graph)
+    syncHead()
     render()
     doc.change(graph)
   }
@@ -137,11 +173,11 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       gate: null,
       onReject: null
     }
-    // New nodes land next to the selection, or in the last column.
+    // New nodes land right below the selection, or under the bottom-most node.
     const anchor = selection?.kind === 'node' ? graph.layout[selection.id] : null
-    const maxX = Math.max(40, ...Object.values(graph.layout).map((p) => p.x))
+    const maxY = Math.max(40, ...Object.values(graph.layout).map((p) => p.y))
     graph.steps.push(step)
-    graph.layout[id] = anchor ? { x: anchor.x + NODE_W + 70, y: anchor.y } : { x: maxX + NODE_W + 70, y: 40 }
+    graph.layout[id] = anchor ? { x: anchor.x, y: anchor.y + NODE_H + 90 } : { x: 40, y: maxY + NODE_H + 90 }
     selection = { kind: 'node', id }
     push()
   }
@@ -167,7 +203,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   // ---- rendering -----------------------------------------------------------------------
   function nodeCenter(id: string, side: 'in' | 'out'): { x: number; y: number } {
     const p = graph.layout[id] ?? { x: 0, y: 0 }
-    return { x: p.x + (side === 'in' ? 0 : NODE_W), y: p.y + NODE_H / 2 }
+    // Vertical flow: deps enter from the top, leave from the bottom.
+    return side === 'in' ? { x: p.x + NODE_W / 2, y: p.y } : { x: p.x + NODE_W / 2, y: p.y + NODE_H }
   }
 
   function render(): void {
@@ -178,8 +215,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         const a = nodeCenter(dep, 'out')
         const b = nodeCenter(step.id, 'in')
         const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
-        const mid = (a.x + b.x) / 2
-        path.setAttribute('d', `M ${a.x} ${a.y} C ${mid} ${a.y}, ${mid} ${b.y}, ${b.x} ${b.y}`)
+        const mid = (a.y + b.y) / 2
+        path.setAttribute('d', `M ${a.x} ${a.y} C ${a.x} ${mid}, ${b.x} ${mid}, ${b.x} ${b.y}`)
         path.setAttribute('class', 'wfv-edge')
         path.setAttribute('marker-end', 'url(#wfv-arrow)')
         if (selection?.kind === 'edge' && selection.from === dep && selection.to === step.id) {
@@ -235,8 +272,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       for (const side of ['in', 'out'] as const) {
         const port = document.createElementNS('http://www.w3.org/2000/svg', 'circle')
         port.setAttribute('class', 'wfv-port')
-        port.setAttribute('cx', String(side === 'in' ? 0 : NODE_W))
-        port.setAttribute('cy', String(NODE_H / 2))
+        port.setAttribute('cx', String(NODE_W / 2))
+        port.setAttribute('cy', String(side === 'in' ? 0 : NODE_H))
         port.setAttribute('r', '6')
         port.dataset.step = step.id
         port.dataset.side = side
