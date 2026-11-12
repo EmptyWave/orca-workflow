@@ -250,12 +250,15 @@ export default function activate(orca: OrcaWorkerApi): void {
   async function listTemplates(source: 'library' | 'project', projectPath: string | null): Promise<WfTemplate[]> {
     everUsed = true
     const dir = await workflowsDir(source, projectPath)
-    const listing = await bridge.run(`ls -1 ${shellPath(dir)}/*.yaml 2>/dev/null || true`)
+    // Basename-only markers: a full path is longer than a terminal line and would wrap.
+    const listing = await bridge.run(
+      `for f in ${shellPath(dir)}/*.yaml; do echo "__WF_LS__\${f##*/}"; done`
+    )
     const yamlFiles = listing
       .split('\n')
       .map((l) => l.trim())
-      .filter((l) => l.endsWith('.yaml'))
-      .map((l) => l.slice(dir.length + 1))
+      .filter((l) => l.startsWith('__WF_LS__'))
+      .map((l) => l.slice('__WF_LS__'.length))
     if (yamlFiles.length === 0) return []
     const contents = await readFiles(dir, yamlFiles)
     const templates: WfTemplate[] = []

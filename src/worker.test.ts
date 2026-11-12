@@ -22,9 +22,9 @@ steps:
 function makeHost() {
   let sends = 0
   let lastCommand = ''
-  let lsDir = '/lib' // captured when the ls command is typed, reused by later reads
+  const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
-    const dir = lsDir
+    const dir = LS_DIR
     if (command.includes('run-list')) {
       return '{"ok":true,"result":{"runs":[{"runId":"run_1","objective":"Демо — цель"}]}}'
     }
@@ -82,8 +82,8 @@ function makeHost() {
     if (command.includes('echo $HOME')) {
       return '/Users/tester'
     }
-    if (command.includes('ls -1')) {
-      return `${dir}/demo.yaml\n`
+    if (command.includes('__WF_LS__')) {
+      return '__WF_LS__demo.yaml'
     }
     if (command.includes('__FILE__')) {
       // One bridge command cats several files: answer with a marker per `cat '<dir>/<rel>'`.
@@ -110,8 +110,6 @@ function makeHost() {
       'terminal.sendText': (params: { text: string }) => {
         sends += 1
         lastCommand = params.text
-        const match = params.text.match(/ls -1 '([^']+)'\/\*\.yaml/)
-        if (match) lsDir = match[1]
         return { accepted: true }
       },
       'terminal.read': () => ({
