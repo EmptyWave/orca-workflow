@@ -262,7 +262,35 @@ test('settings.save нормализует и пишет настройки; bri
     await worker.request('bridge.reset')
     assert.equal((host.data().storage['bridge.terminalId'] ?? null), null)
     const info = await worker.request('bridge.info')
-    assert.equal(info.terminalId, null)
+    assert.equal(info.terminalId, 't1')
+  }))
+
+test('мост следует за фокусным воркспейсом', () =>
+  withWorker(async (worker, host) => {
+    const before = await worker.request('bridge.info')
+    assert.equal(before.terminalId, 't1', 'мост усыновлён из фокусного воркспейса')
+    // Фокус ушёл в воркспейс без моста: событие скидывает мост, следующий запрос создаёт
+    // терминал уже в новом фокусном воркспейсе.
+    host.respond('workspace.readContext', {
+      branch: 'feature/x',
+      displayName: 'other',
+      terminals: []
+    })
+    host.respond('workspace.list', {
+      workspaces: [
+        { id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/x/biz.erp', branch: 'master', project: 'p', hostId: 'local' },
+        { id: 'w2', kind: 'worktree', name: 'other', path: '/x/other', branch: 'feature/x', project: 'p', hostId: 'local' }
+      ],
+      truncated: false
+    })
+    host.respond('terminal.create', { terminalId: 't2' })
+    await worker.emit('workspace.changed', {
+      context: { branch: 'feature/x', displayName: 'other', terminals: [] }
+    })
+    const after = await worker.request('bridge.info')
+    assert.equal(after.terminalId, 't2', 'после смены фокуса мост пересоздан')
+    const created = host.callsOf('terminal.create').at(-1) as { workspaceId: string }
+    assert.equal(created.workspaceId, 'w2', 'терминал создан в новом фокусном воркспейсе')
   }))
 
 test('projects.list отдаёт git-репозитории с путями', () =>

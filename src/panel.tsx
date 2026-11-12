@@ -719,14 +719,14 @@ function SettingsTab() {
           </Row>
         </Stack>
       </Card>
-      <Card title="Мост" description="Служебный терминал, через который панель гоняет команды orca CLI">
+      <Card title="Мост" description="Служебный терминал в фокусном воркспейсе, через который панель гоняет команды orca CLI">
         <Stack gap="sm">
           <KeyValue
             label="Терминал моста"
             items={[
               {
                 label: rd(bridgeTerminal) ?? '—',
-                value: rd(bridgeTerminal) ? 'сохранён в storage' : 'ещё не создан',
+                value: rd(bridgeTerminal) ? 'жив, следует за фокусным воркспейсом' : 'не создан',
                 code: true
               }
             ]}
@@ -740,7 +740,7 @@ function SettingsTab() {
             Пересоздать мост
           </Button>
           <Text muted size="xs">
-            Нужен, если терминал «workflow-view bridge» случайно закрыли: сброс забывает сохранённый handle, а следующий запрос создаст терминал заново.
+            Orca пускает ввод только в терминалы фокусного воркспейса, поэтому мост живёт в нём и пересоздаётся сам при смене фокуса. Кнопка нужна, если терминал «workflow-view bridge» случайно закрыли.
           </Text>
         </Stack>
       </Card>

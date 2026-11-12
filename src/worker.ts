@@ -490,12 +490,19 @@ export default function activate(orca: OrcaWorkerApi): void {
   // The refresh loop reads the interval setting every cycle, so Settings changes apply at once.
   let stopped = false
   let wakeTimer: ReturnType<typeof setTimeout> | null = null
-  const eventsSub = orca.events.on('agent.status.changed', () => {
+  const wakeSoon = (): void => {
     if (wakeTimer) clearTimeout(wakeTimer)
     wakeTimer = setTimeout(() => {
       wakeTimer = null
       void refresh()
     }, 1_000)
+  }
+  const eventsSub = orca.events.on('agent.status.changed', wakeSoon)
+  // Orca scopes plugin terminal input to the focused workspace; when focus moves, the bridge
+  // must be re-ensured in the new workspace before any command can run again.
+  const workspaceSub = orca.events.on('workspace.changed', () => {
+    void bridge.reset()
+    wakeSoon()
   })
   const loop = async (): Promise<void> => {
     while (!stopped) {
@@ -511,6 +518,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     stopped = true
     if (wakeTimer) clearTimeout(wakeTimer)
     eventsSub.dispose()
+    workspaceSub.dispose()
   }
 
   // ---- templates ---------------------------------------------------------------------------------
@@ -1087,8 +1095,9 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
 
   orca.panels.handle('bridge.info', async () => {
-    const stored = await orca.storage.get('bridge.terminalId')
-    return { terminalId: typeof stored === 'string' && stored !== '' ? stored : null }
+    everUsed = true
+    const terminalId = bridge.current() ?? (await bridge.ensure().catch(() => null))
+    return { terminalId }
   })
 }
 

@@ -7,7 +7,7 @@ const SNAPSHOT: WfSnapshot = {
   at: 1731400000000,
   run: { runId: 'run_1', objective: 'YCLYT-104: переименование' },
   tasks: [
-    { id: 'task_a', title: 'plan План', status: 'succeeded', deps: [], dispatchId: 'ctx_1', agent: 'claude', model: null },
+    { id: 'task_a', title: 'plan План', status: 'succeeded', deps: [], dispatchId: 'ctx_1', agent: 'claude', model: 'sonnet-4.6' },
     { id: 'task_c', title: 'dev Разработка', status: 'ready', deps: ['task_a'], dispatchId: null, agent: null, model: null }
   ],
   gates: [
@@ -39,6 +39,8 @@ test('рисует шаги, гейты и воркеров из снапшот�
   assert.ok(summary.includes('List "Шаги": 2 item(s)'), `список шагов виден: ${summary}`)
   assert.ok(summary.includes('Tabs "Раздел": "Запуски" selected'), 'вкладка Запуски выбрана')
   assert.ok(view.find({ text: 'request-changes' }), 'кнопка гейта видна')
+  assert.ok(view.find({ text: /🤖 sonnet-4\.6/ }), 'чип модели у шага plan')
+  assert.ok(!view.find({ text: /🤖 claude$/ }), 'шаг без модели не получает чип агента вперёд модели')
   assert.deepEqual(view.errors, [])
   assert.deepEqual(view.refusals, [])
   await view.unmount()

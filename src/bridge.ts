@@ -19,7 +19,7 @@ export class BridgeError extends Error {
 
 export class Bridge {
   private terminal: string | null = null
-  private widened = false
+  private widenedFor: string | null = null
   private counter = 0
   private queue: Promise<unknown> = Promise.resolve()
 
@@ -28,46 +28,67 @@ export class Bridge {
   /** A default-width pty wraps long lines (JSON rows, YAML questions), corrupting captured
    *  output; widen the terminal once — whether just adopted or freshly created. */
   private async widen(terminalId: string): Promise<void> {
-    if (this.widened) return
-    this.widened = true
+    if (this.widenedFor === terminalId) return
+    this.widenedFor = terminalId
     await this.exec('stty cols 4096 2>/dev/null || true', terminalId, 3_000).catch(() => undefined)
   }
 
-  /** The terminal handle, creating the bridge terminal on first use; reuses the stored one. */
+  /** The terminal handle. Orca scopes plugin terminal input to the FOCUSED workspace's
+   *  terminals, so the bridge must live there and follow focus: adopt a live bridge titled
+   *  ours among the focused workspace's terminals, else create one in that workspace. */
   async ensure(): Promise<string> {
     if (this.terminal) return this.terminal
-    const stored = await this.orca.storage.get('bridge.terminalId')
-    if (typeof stored === 'string' && stored !== '') {
-      try {
-        // A dead pty can still answer terminal.read with empty output, so probe with a real
-        // command; and a LIVE terminal is not necessarily ours — a stale stored handle can
-        // point at a person's terminal. Adopt it only when Orca still lists it as the bridge.
-        const probe = await this.exec(`echo __WF_ALIVE__`, stored, 3_000)
-        if (probe.includes('__WF_ALIVE__')) {
-          const listing = await this.exec('orca terminal list --json', stored, 8_000)
-          const envelope = parseJson<{ ok?: boolean; result?: { terminals?: Array<{ handle?: string; title?: string }> } }>(listing)
-          const entry = (envelope.result?.terminals ?? []).find((t) => t.handle === stored)
-          if (entry && entry.title === 'workflow-view bridge') {
-            this.terminal = stored
-            await this.widen(stored)
-            return stored
-          }
-        }
-      } catch {
-        // The stored terminal is gone or not ours; fall through and create a fresh one.
+    const context = await this.orca.host.call('workspace.readContext', undefined)
+    if (!context) {
+      throw new BridgeError('нет фокусного воркспейса — открой workspace проекта в Orca', 'no_terminal')
+    }
+    // A dead pty still answers terminal.read with stale output, so probe with a real command;
+    // cap the attempts so a pile-up of corpses cannot eat the whole request budget.
+    const candidates = context.terminals.filter((t) => t.title === 'workflow-view bridge')
+    for (const candidate of candidates.slice(0, 3)) {
+      const probe = await this.exec('echo __WF_ALIVE__', candidate.id, 2_500).catch(() => null)
+      if (probe !== null) {
+        this.terminal = candidate.id
+        await this.widen(candidate.id)
+        await this.closeStrayBridges(context.terminals, candidate.id)
+        return candidate.id
       }
     }
-    const list = await this.orca.host.call('workspace.list', undefined)
-    const home = list.workspaces.find((w) => w.kind === 'worktree') ?? list.workspaces[0]
-    if (!home) throw new BridgeError('нет ни одного workspace для мостового терминала', 'no_terminal')
+    const workspaceId = await this.resolveFocusedWorkspace(context)
     const created = await this.orca.host.call('terminal.create', {
-      workspaceId: home.id,
+      workspaceId,
       title: 'workflow-view bridge'
     })
     this.terminal = created.terminalId
-    await this.orca.storage.set('bridge.terminalId', created.terminalId)
     await this.widen(created.terminalId)
+    await this.closeStrayBridges(context.terminals, created.terminalId)
     return created.terminalId
+  }
+
+  /** readContext names the focused workspace but not its id; find it in the full list. */
+  private async resolveFocusedWorkspace(context: { branch: string; displayName: string }): Promise<string> {
+    const list = await this.orca.host.call('workspace.list', undefined)
+    const byName = list.workspaces.find((w) => w.name === context.displayName)
+    const ws = byName ?? (context.branch ? list.workspaces.find((w) => w.branch === context.branch) : undefined)
+    if (!ws) {
+      throw new BridgeError(`воркспейс «${context.displayName}» не найден в списке воркспейсов Orca`, 'no_terminal')
+    }
+    return ws.id
+  }
+
+  /** Dead bridge ptys would pile up with every undetected death; a live bridge closes its
+   *  same-titled siblings. Only ever terminals titled exactly ours — never a person's. */
+  private async closeStrayBridges(terminals: Array<{ id: string; title?: string }>, keep: string): Promise<void> {
+    if (!this.terminal) return
+    for (const stray of terminals) {
+      if (stray.title !== 'workflow-view bridge' || stray.id === keep) continue
+      await this.exec(`orca terminal close --terminal ${stray.id} || true`, this.terminal, 5_000).catch(() => undefined)
+    }
+  }
+
+  /** The live bridge handle, or null while none has been ensured. */
+  current(): string | null {
+    return this.terminal
   }
 
   /** Runs one shell command; resolves with everything it printed between the markers.
@@ -117,10 +138,11 @@ export class Bridge {
     }
   }
 
-  /** Forgets the stored terminal handle; the next command creates a fresh bridge. */
+  /** Forgets the bridge; the next command adopts or creates one in the then-focused workspace. */
   async reset(): Promise<void> {
     this.terminal = null
-    await this.orca.storage.delete('bridge.terminalId')
+    this.widenedFor = null
+    await this.orca.storage.delete('bridge.terminalId').catch(() => undefined)
   }
 
   /** A command that prints one JSON document; parsed and returned. */

@@ -51,6 +51,9 @@
     "events": [
       {
         "on": "agent.status.changed"
+      },
+      {
+        "on": "workspace.changed"
       }
     ],
     "settings": [

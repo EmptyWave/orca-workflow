@@ -5,6 +5,11 @@ import { defineCheck, hostError } from 'orca/testing'
 
 /** The bridge dies immediately: the panel shows its cached snapshot or the error callout. */
 const results: Record<string, unknown> = {
+  'workspace.readContext': {
+    branch: 'master',
+    displayName: 'biz.erp',
+    terminals: []
+  },
   'workspace.list': {
     workspaces: [{ id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/x/biz.erp', branch: 'master', project: 'p', hostId: 'local' }],
     truncated: false
@@ -26,9 +31,9 @@ export default defineCheck({
         at: 1731400000000,
         run: { runId: 'run_1', objective: 'YCLYT-104 biz.erp: переименование Booking/Pinpin -> Momento' },
         tasks: [
-          { id: 'task_a', title: 'plan План (openspec)', status: 'succeeded', deps: [], dispatchId: 'ctx_1', agent: 'claude', model: null },
-          { id: 'task_b', title: 'plan-review Ревью плана', status: 'succeeded', deps: ['task_a'], dispatchId: 'ctx_2', agent: 'claude', model: null },
-          { id: 'task_c', title: 'dev Разработка', status: 'blocked', deps: ['task_b'], dispatchId: null, agent: null, model: null },
+          { id: 'task_a', title: 'plan План (openspec)', status: 'succeeded', deps: [], dispatchId: 'ctx_1', agent: 'claude', model: 'sonnet-4.6' },
+          { id: 'task_b', title: 'plan-review Ревью плана', status: 'succeeded', deps: ['task_a'], dispatchId: 'ctx_2', agent: 'claude', model: 'sonnet-4.6' },
+          { id: 'task_c', title: 'dev Разработка', status: 'blocked', deps: ['task_b'], dispatchId: null, agent: null, model: 'sonnet-4.6' },
           { id: 'task_d', title: 'commit Коммит', status: 'pending', deps: ['task_e', 'task_f'], dispatchId: null, agent: null, model: null }
         ],
         gates: [
