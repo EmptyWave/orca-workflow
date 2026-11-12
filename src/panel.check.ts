@@ -26,10 +26,10 @@ export default defineCheck({
         at: 1731400000000,
         run: { runId: 'run_1', objective: 'YCLYT-104 biz.erp: переименование Booking/Pinpin -> Momento' },
         tasks: [
-          { id: 'task_a', title: 'plan План (openspec)', status: 'succeeded', deps: [], dispatchId: 'ctx_1', agent: 'claude' },
-          { id: 'task_b', title: 'plan-review Ревью плана', status: 'succeeded', deps: ['task_a'], dispatchId: 'ctx_2', agent: 'claude' },
-          { id: 'task_c', title: 'dev Разработка', status: 'blocked', deps: ['task_b'], dispatchId: null, agent: null },
-          { id: 'task_d', title: 'commit Коммит', status: 'pending', deps: ['task_e', 'task_f'], dispatchId: null, agent: null }
+          { id: 'task_a', title: 'plan План (openspec)', status: 'succeeded', deps: [], dispatchId: 'ctx_1', agent: 'claude', model: null },
+          { id: 'task_b', title: 'plan-review Ревью плана', status: 'succeeded', deps: ['task_a'], dispatchId: 'ctx_2', agent: 'claude', model: null },
+          { id: 'task_c', title: 'dev Разработка', status: 'blocked', deps: ['task_b'], dispatchId: null, agent: null, model: null },
+          { id: 'task_d', title: 'commit Коммит', status: 'pending', deps: ['task_e', 'task_f'], dispatchId: null, agent: null, model: null }
         ],
         gates: [
           {

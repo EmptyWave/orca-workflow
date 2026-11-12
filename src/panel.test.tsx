@@ -7,8 +7,8 @@ const SNAPSHOT: WfSnapshot = {
   at: 1731400000000,
   run: { runId: 'run_1', objective: 'YCLYT-104: переименование' },
   tasks: [
-    { id: 'task_a', title: 'plan План', status: 'succeeded', deps: [], dispatchId: 'ctx_1', agent: 'claude' },
-    { id: 'task_c', title: 'dev Разработка', status: 'ready', deps: ['task_a'], dispatchId: null, agent: null }
+    { id: 'task_a', title: 'plan План', status: 'succeeded', deps: [], dispatchId: 'ctx_1', agent: 'claude', model: null },
+    { id: 'task_c', title: 'dev Разработка', status: 'ready', deps: ['task_a'], dispatchId: null, agent: null, model: null }
   ],
   gates: [
     {

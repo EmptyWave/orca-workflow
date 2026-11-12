@@ -132,9 +132,22 @@ export default function activate(orca: OrcaWorkerApi): void {
         status: dispatch ? 'dispatched' : readyIds.has(id) ? 'ready' : normalizeStatus(rawStatus),
         deps: stringList(field(row, 'deps')),
         dispatchId: dispatch,
-        agent: null
+        agent: null,
+        model: null
       }
     })
+    // Template config from instantiate: agent and model per task, when we raised the run.
+    const autoStored = await orca.storage.get(`auto.${runId}`)
+    if (autoStored && typeof autoStored === 'object') {
+      const autoTasks = (autoStored as { tasks?: Record<string, { agent?: string; model?: string | null }> }).tasks ?? {}
+      for (const task of tasks) {
+        const cfg = autoTasks[task.id]
+        if (cfg) {
+          task.agent = cfg.agent ?? task.agent
+          task.model = cfg.model ?? null
+        }
+      }
+    }
     const byTitleAgent = new Map(
       asArray<Record<string, unknown>>(workerRows.workers ?? workerRows.dispatches).map((row) => [
         String(field(row, 'taskId') ?? ''),

@@ -10,6 +10,8 @@ export type WfTask = {
   deps: string[]
   dispatchId: string | null
   agent: string | null
+  /** Model the step is configured to run on (from the template/instantiate), when known. */
+  model: string | null
 }
 
 export type WfGate = {

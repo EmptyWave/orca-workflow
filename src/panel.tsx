@@ -317,7 +317,7 @@ function effectiveStatuses(tasks: WfTask[], gates: WfGate[]): Record<string, Eff
   return Object.fromEntries(memo)
 }
 
-/** Orca-style status visuals: a coloured badge per state, a live spinner while working. */
+/** Orca-style status visuals: a live spinner while working, a coloured badge otherwise. */
 function statusBadge(status: string): OrcaNode {
   if (status === 'dispatched') return <Spinner label="работает" labelHidden />
   if (status === 'succeeded') return <Badge tone="success">✓</Badge>
@@ -325,6 +325,16 @@ function statusBadge(status: string): OrcaNode {
   if (status === 'blocked') return <Badge tone="warning">⏳</Badge>
   if (status === 'failed') return <Badge tone="danger">✗</Badge>
   return <Badge tone="neutral">○</Badge>
+}
+
+/** Native glyph for the row icon slot. */
+function statusGlyph(status: string): 'check' | 'play' | 'flag' | 'error' | 'pause' | 'more' {
+  if (status === 'succeeded') return 'check'
+  if (status === 'ready') return 'play'
+  if (status === 'blocked') return 'flag'
+  if (status === 'failed') return 'error'
+  if (status === 'queued') return 'pause'
+  return 'more'
 }
 
 export function setup(ctx: PanelContext): void {
@@ -396,6 +406,7 @@ function RunsTab() {
                 return (
                   <ListItem
                     key={t.id}
+                    icon={statusGlyph(eff.status)}
                     description={[
                       STATUS_TEXT[eff.status] ?? eff.status,
                       gateHint,
@@ -406,8 +417,19 @@ function RunsTab() {
                       .join(' · ')}
                   >
                     <Row gap="xs" align="center">
-                      {statusBadge(eff.status)}
+                      {eff.status === 'dispatched' ? null : statusBadge(eff.status)}
                       <Text weight="semibold">{t.title || t.id}</Text>
+                      {t.model ? (
+                        <Badge tone="neutral">
+                          {'🤖 '}
+                          {t.model}
+                        </Badge>
+                      ) : t.agent ? (
+                        <Badge tone="neutral">
+                          {'🤖 '}
+                          {t.agent}
+                        </Badge>
+                      ) : null}
                     </Row>
                   </ListItem>
                 )
