@@ -31,6 +31,11 @@ function toBase64(text: string): string {
   return btoa(binary)
 }
 
+function fromBase64(text: string): string {
+  const bytes = Uint8Array.from(atob(text.replace(/\s+/g, '')), (c) => c.charCodeAt(0))
+  return new TextDecoder().decode(bytes)
+}
+
 function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
@@ -249,24 +254,25 @@ export default function activate(orca: OrcaWorkerApi): void {
     return `${projectPath.replace(/\/+$/, '')}/.orca/workflows`
   }
 
-  /** Reads many files in one bridge command; answers path -> content. */
+  /** Reads many files in one bridge command; answers path -> content. Base64 keeps the
+   *  payload immune to the terminal's line wrapping. */
   async function readFiles(dir: string, files: string[]): Promise<Record<string, string>> {
     const out: Record<string, string> = {}
     if (files.length === 0) return out
-    const parts = files.map((f) => `echo __FILE__${f}; cat ${shellQuote(`${dir}/${f}`)}`)
+    const parts = files.map((f) => `echo __FILE__${f}; base64 < ${shellQuote(`${dir}/${f}`)}`)
     const output = await bridge.run(parts.join('; '))
     let current: string | null = null
     const chunks: string[] = []
     for (const line of output.split('\n')) {
       if (line.startsWith('__FILE__')) {
-        if (current) out[current] = chunks.join('\n')
+        if (current) out[current] = fromBase64(chunks.join(''))
         current = line.slice('__FILE__'.length).trim()
         chunks.length = 0
       } else if (current) {
-        chunks.push(line)
+        chunks.push(line.trim())
       }
     }
-    if (current) out[current] = chunks.join('\n')
+    if (current) out[current] = fromBase64(chunks.join(''))
     return out
   }
 

@@ -19,6 +19,13 @@ steps:
     gate: { question: 'Отчёт принят?', options: [approve, request-changes] }
 `
 
+const b64 = (s: string): string => {
+  const bytes = new TextEncoder().encode(s)
+  let binary = ''
+  for (const b of bytes) binary += String.fromCharCode(b)
+  return btoa(binary)
+}
+
 function makeHost() {
   let sends = 0
   let lastCommand = ''
@@ -95,14 +102,15 @@ function makeHost() {
       return '__WF_LS__demo.yaml'
     }
     if (command.includes('__FILE__')) {
-      // One bridge command cats several files: answer with a marker per `cat '<dir>/<rel>'`.
+      // One bridge command cats several files as base64 (wrapped at 76 chars like real base64).
       const chunks: string[] = []
-      for (const match of command.matchAll(/cat '([^']+)'/g)) {
+      for (const match of command.matchAll(/base64 < '([^']+)'/g)) {
         const rel = match[1].slice(dir.length + 1)
         chunks.push(`__FILE__${rel}`)
-        if (rel === 'demo.yaml') chunks.push(TEMPLATE_YAML)
-        else if (rel === 'specs/plan.md') chunks.push('PLAN SPEC {{objective}}')
-        else chunks.push('DEV SPEC {{objective}}')
+        const content =
+          rel === 'demo.yaml' ? TEMPLATE_YAML : rel === 'specs/plan.md' ? 'PLAN SPEC {{objective}}' : 'DEV SPEC {{objective}}'
+        const encoded = b64(content).replace(/(.{76})/g, '$1\n')
+        chunks.push(encoded)
       }
       return chunks.join('\n')
     }

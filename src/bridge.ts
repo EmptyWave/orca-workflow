@@ -55,6 +55,9 @@ export class Bridge {
     })
     this.terminal = created.terminalId
     await this.orca.storage.set('bridge.terminalId', created.terminalId)
+    // A default-width pty wraps long lines (JSON rows, YAML questions), corrupting captured
+    // output; make the bridge terminal as wide as a pty allows.
+    await this.exec('stty cols 4096 2>/dev/null || true', created.terminalId, 3_000).catch(() => undefined)
     return created.terminalId
   }
 

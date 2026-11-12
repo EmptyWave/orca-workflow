@@ -519,9 +519,12 @@ function TemplatesTab() {
         </List>
       )}
       {selected ? (
-        <Card title={selected.title} description={`${selected.id} · ${selected.file}`}>
+        <Card>
           <Stack gap="sm">
-            <Row justify="end">
+            <Row justify="between" align="center">
+              <Text weight="semibold" truncate>
+                {selected.title}
+              </Text>
               <IconButton
                 icon="edit"
                 label="Редактировать в граф-редакторе"
@@ -531,6 +534,9 @@ function TemplatesTab() {
                 onPress={() => void editTemplate()}
               />
             </Row>
+            <Text muted size="xs" truncate>
+              {selected.id} · {selected.file}
+            </Text>
             {selected.error ? <Callout tone="danger" title="Шаблон не читается">{selected.error}</Callout> : (
               <List label="Шаги">
                 {selected.steps.map((step) => (
