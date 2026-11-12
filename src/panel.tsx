@@ -280,9 +280,38 @@ const STATUS_TEXT: Record<string, string> = {
   ready: 'готов к запуску',
   dispatched: 'работает',
   blocked: 'ждёт гейт',
+  queued: 'в очереди',
   succeeded: 'готово',
   failed: 'провал',
   unknown: 'неизвестно'
+}
+
+/** Status as the person reads it: a step whose chain runs into a pending gate waits for that
+ *  gate, even when the engine says plain "pending" (no gate directly on it). */
+function effectiveStatuses(tasks: WfTask[], gates: WfGate[]): Record<string, string> {
+  const gateBlocked = new Set(gates.filter((g) => g.status === 'pending').map((g) => g.taskId))
+  const byId = new Map(tasks.map((t) => [t.id, t]))
+  const memo = new Map<string, string>()
+  const calc = (id: string): string => {
+    const hit = memo.get(id)
+    if (hit) return hit
+    memo.set(id, 'queued') // cycle guard
+    const t = byId.get(id)
+    let out = 'queued'
+    if (!t) out = 'unknown'
+    else if (t.status === 'succeeded' || t.status === 'failed' || t.status === 'dispatched') out = t.status
+    else if (gateBlocked.has(id)) out = 'blocked'
+    else {
+      const depEff = t.deps.map(calc)
+      if (depEff.some((s) => s === 'blocked')) out = 'blocked'
+      else if (t.status === 'ready') out = 'ready'
+      else out = 'queued'
+    }
+    memo.set(id, out)
+    return out
+  }
+  for (const t of tasks) calc(t.id)
+  return Object.fromEntries(memo)
 }
 
 /** Orca-style status visuals: a coloured badge per state, a live spinner while working. */
@@ -292,7 +321,7 @@ function statusBadge(status: string): OrcaNode {
   if (status === 'ready') return <Badge tone="accent">▶</Badge>
   if (status === 'blocked') return <Badge tone="warning">⏳</Badge>
   if (status === 'failed') return <Badge tone="danger">✗</Badge>
-  return <Badge tone="neutral">·</Badge>
+  return <Badge tone="neutral">○</Badge>
 }
 
 export function setup(ctx: PanelContext): void {
@@ -323,6 +352,7 @@ function RunsTab() {
       label: `${r.objective.trim().slice(0, 60) || r.runId}`
     })) ?? []
   const gates = (snap?.gates ?? []).filter((g) => g.status === 'pending')
+  const effective = effectiveStatuses(snap?.tasks ?? [], snap?.gates ?? [])
   const ready = (snap?.tasks ?? []).filter((t) => t.status === 'ready')
   const workers = snap?.workers ?? []
   return (
@@ -349,23 +379,26 @@ function RunsTab() {
           </Text>
           <Card title="Шаги">
             <List label="Шаги">
-              {(snap.tasks ?? []).map((t) => (
-                <ListItem
-                  key={t.id}
-                  description={[
-                    STATUS_TEXT[t.status] ?? t.status,
-                    t.deps.length > 0 ? `после: ${t.deps.map((d) => d.replace('task_', '')).join(', ')}` : null,
-                    t.dispatchId ? `воркер ${t.dispatchId.replace('ctx_', '')}` : null
-                  ]
-                    .filter(Boolean)
-                    .join(' · ')}
-                >
-                  <Row gap="xs" align="center">
-                    {statusBadge(t.status)}
-                    <Text weight="semibold">{t.title || t.id}</Text>
-                  </Row>
-                </ListItem>
-              ))}
+              {(snap.tasks ?? []).map((t) => {
+                const eff = effective[t.id] ?? t.status
+                return (
+                  <ListItem
+                    key={t.id}
+                    description={[
+                      STATUS_TEXT[eff] ?? eff,
+                      t.deps.length > 0 ? `после: ${t.deps.map((d) => d.replace('task_', '')).join(', ')}` : null,
+                      t.dispatchId ? `воркер ${t.dispatchId.replace('ctx_', '')}` : null
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                  >
+                    <Row gap="xs" align="center">
+                      {statusBadge(eff)}
+                      <Text weight="semibold">{t.title || t.id}</Text>
+                    </Row>
+                  </ListItem>
+                )
+              })}
             </List>
           </Card>
           {gates.length > 0 ? (
