@@ -17,6 +17,8 @@ export type WfGraph = {
 
 export const NODE_W = 190
 export const NODE_H = 68
+/** Horizontal distance from a parent block to its sub-step blocks. */
+export const SUB_GAP_X = 70
 
 export function emptyGraph(): WfGraph {
   return { id: '', title: '', steps: [], layout: {}, parseError: null, raw: '' }
@@ -192,6 +194,19 @@ export function autoLayout(graph: WfGraph): Record<string, { x: number; y: numbe
   for (const [d, layerIds] of [...layers.entries()].sort((a, b) => a[0] - b[0])) {
     layerIds.forEach((id, i) => {
       layout[id] = { x: 40 + i * (NODE_W + 50), y: 40 + d * (NODE_H + 90) }
+    })
+  }
+  // Sub-steps are real blocks to the RIGHT of their parent: the chain keeps its vertical
+  // order, nested checks hang off sideways with a right-pointing arrow.
+  for (const step of graph.steps) {
+    const base = layout[step.id]
+    if (!base) continue
+    const kids = step.sub
+    kids.forEach((child, i) => {
+      layout[child.id] = {
+        x: base.x + NODE_W + SUB_GAP_X,
+        y: base.y + (i - (kids.length - 1) / 2) * (NODE_H + 20)
+      }
     })
   }
   return layout

@@ -2,7 +2,7 @@
 // an inspector (including the gate section), toolbar and YAML preview. Vanilla, no libraries.
 import type { EditorSession } from 'orca/frame'
 import type { WfStep } from '../protocol'
-import { autoLayout, emit, NODE_H, NODE_W, validate, type WfGraph } from './core'
+import { autoLayout, emit, NODE_H, NODE_W, SUB_GAP_X, validate, type WfGraph } from './core'
 
 const STYLE = `
 .wfv{display:flex;flex-direction:column;height:100vh;color:var(--orca-foreground);background:var(--orca-background);font:13px -apple-system,system-ui,sans-serif}
@@ -20,6 +20,8 @@ const STYLE = `
 .wfv-node.barrier rect{stroke-dasharray:5 4;fill:var(--orca-muted)}
 .wfv-node.selected rect{stroke:var(--orca-accent);stroke-width:2}
 .wfv-node text{fill:var(--orca-foreground);user-select:none;pointer-events:none}
+.wfv-node.subblock rect{stroke-dasharray:4 3;fill:var(--orca-card)}
+.wfv-edge.sub-edge{stroke-dasharray:4 3}
 .wfv-node .sub{fill:var(--orca-muted-foreground);font-size:11px}
 .wfv-port{fill:var(--orca-muted);stroke:var(--orca-border);cursor:crosshair}
 .wfv-port:hover{fill:var(--orca-accent)}
@@ -57,7 +59,11 @@ const STYLE = `
 .wfv-head .cap{font-size:11px;color:var(--orca-muted-foreground)}
 `
 
-type Selection = { kind: 'node'; id: string } | { kind: 'edge'; from: string; to: string } | null
+type Selection =
+  | { kind: 'node'; id: string }
+  | { kind: 'sub'; parentId: string; id: string }
+  | { kind: 'edge'; from: string; to: string }
+  | null
 
 export function createEditor(doc: EditorSession<WfGraph>): void {
   const style = document.createElement('style')
@@ -331,10 +337,21 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
 
   // ---- helpers -------------------------------------------------------------------------
   function ensureLayout(): void {
-    const missing = graph.steps.filter((s) => !graph.layout[s.id])
-    if (missing.length === 0) return
     const auto = autoLayout(graph)
-    for (const id of Object.keys(auto)) if (!graph.layout[id]) graph.layout[id] = auto[id]
+    for (const st of graph.steps) {
+      if (!graph.layout[st.id]) graph.layout[st.id] = auto[st.id] ?? { x: 40, y: 40 }
+      // A sub block lands relative to its parent's REAL position (which may come from the
+      // layout comment), not relative to the auto-layout's guess.
+      const base = graph.layout[st.id]
+      const autoBase = auto[st.id]
+      st.sub.forEach((c, i) => {
+        if (graph.layout[c.id]) return
+        const autoChild = auto[c.id]
+        const dx = autoChild && autoBase ? autoChild.x - autoBase.x : NODE_W + SUB_GAP_X
+        const dy = autoChild && autoBase ? autoChild.y - autoBase.y : (i - (st.sub.length - 1) / 2) * (NODE_H + 20)
+        graph.layout[c.id] = { x: base.x + dx, y: base.y + dy }
+      })
+    }
   }
 
   function stepById(id: string): WfStep | undefined {
@@ -394,6 +411,11 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         if (s.onReject && s.onReject.goto === id) s.onReject = null
       }
       delete graph.layout[id]
+    } else if (selection.kind === 'sub') {
+      const sel = selection
+      const parent = stepById(sel.parentId)
+      if (parent) parent.sub = parent.sub.filter((c) => c.id !== sel.id)
+      delete graph.layout[sel.id]
     } else {
       const step = stepById(selection.to)
       if (step) step.deps = step.deps.filter((d) => d !== (selection as { from: string }).from)
@@ -513,6 +535,60 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         beginNodeDrag(e, step.id)
       })
       viewport.append(g)
+
+      // Sub-steps: real blocks to the right, joined by a right-pointing arrow.
+      const parentP = graph.layout[step.id] ?? { x: 0, y: 0 }
+      for (const child of step.sub) {
+        const cp = graph.layout[child.id] ?? { x: 0, y: 0 }
+        const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'path')
+        const ax = parentP.x + NODE_W
+        const ay = parentP.y + NODE_H / 2
+        const bx = cp.x
+        const by = cp.y + NODE_H / 2
+        const mid = (ax + bx) / 2
+        arrow.setAttribute('d', `M ${ax} ${ay} C ${mid} ${ay}, ${mid} ${by}, ${bx} ${by}`)
+        arrow.setAttribute('class', 'wfv-edge sub-edge')
+        arrow.setAttribute('marker-end', 'url(#wfv-arrow)')
+        viewport.append(arrow)
+
+        const sg = document.createElementNS('http://www.w3.org/2000/svg', 'g')
+        sg.setAttribute(
+          'class',
+          'wfv-node subblock' + (selection?.kind === 'sub' && selection.id === child.id ? ' selected' : '')
+        )
+        sg.setAttribute('transform', `translate(${cp.x} ${cp.y})`)
+        const srect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+        srect.setAttribute('width', String(NODE_W - 30))
+        srect.setAttribute('height', String(NODE_H - 14))
+        srect.setAttribute('rx', '8')
+        sg.append(srect)
+        const t1 = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+        t1.setAttribute('x', '10')
+        t1.setAttribute('y', '18')
+        t1.setAttribute('style', 'font-size:11.5px;font-weight:600')
+        t1.textContent = `${child.id}${child.title ? ' · ' + child.title : ''}`
+        const t2 = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+        t2.setAttribute('class', 'sub')
+        t2.setAttribute('x', '10')
+        t2.setAttribute('y', '34')
+        t2.textContent = child.specialist ?? child.agent ?? '?'
+        if (child.optional) {
+          const t3 = document.createElementNS('http://www.w3.org/2000/svg', 'text')
+          t3.setAttribute('class', 'sub')
+          t3.setAttribute('x', '10')
+          t3.setAttribute('y', '46')
+          t3.textContent = 'опциональный'
+          sg.append(t3)
+        }
+        sg.append(t1, t2)
+        sg.addEventListener('pointerdown', (e) => {
+          e.stopPropagation()
+          selection = { kind: 'sub', parentId: step.id, id: child.id }
+          render()
+          beginNodeDrag(e, child.id)
+        })
+        viewport.append(sg)
+      }
     }
     if (tmpEdge) {
       const path = document.createElementNS('http://www.w3.org/2000/svg', 'path')
@@ -645,7 +721,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
 
   function renderInspector(): void {
     inspector.innerHTML = ''
-    if (graph.parseError || !selection || selection.kind !== 'node') {
+    if (graph.parseError || !selection) {
       const hint = document.createElement('div')
       hint.style.cssText = 'font-size:12px;color:var(--orca-muted-foreground);line-height:1.5'
       hint.textContent = graph.parseError
@@ -654,6 +730,60 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       inspector.append(hint)
       return
     }
+    if (selection.kind === 'sub') {
+      const sel = selection
+      const parent = stepById(sel.parentId)
+      const child = parent?.sub.find((c) => c.id === sel.id)
+      if (!parent || !child) return
+      const head = document.createElement('div')
+      head.style.cssText = 'font-size:11px;color:var(--orca-muted-foreground);margin-bottom:6px'
+      head.textContent = `Подшаг блока «${parent.id}» — идёт параллельно с соседями, справа от родителя`
+      inspector.append(head)
+      inspector.append(field('id', child.id, (v) => {
+        const clean = v.trim().replace(/[^a-z0-9-]/g, '-') || child.id
+        if (clean === child.id) return
+        const pos = graph.layout[child.id]
+        delete graph.layout[child.id]
+        if (pos) graph.layout[clean] = pos
+        child.id = clean
+        selection = { kind: 'sub', parentId: parent.id, id: clean }
+        push()
+      }))
+      inspector.append(field('Заголовок', child.title ?? '', (v) => { child.title = v === '' ? null : v; push() }))
+      inspector.append(comboField('Специалист', child.specialist ?? '', () => specialists.map((sp) => sp.slug), (v) => {
+        child.specialist = v.trim() === '' ? null : v.trim()
+        if (child.specialist) child.agent = null
+        push()
+      }))
+      inspector.append(comboField('Агент (если без специалиста)', child.agent ?? '', () => ['claude', 'codex', 'zcode', 'opencode'], (v) => {
+        child.agent = v.trim() === '' ? null : v.trim()
+        if (child.agent) child.specialist = null
+        push()
+      }))
+      inspector.append(comboField('Модель (опц.)', child.model ?? '', () => [...new Set(specialists.map((sp) => sp.model).filter((m): m is string => !!m))], (v) => { child.model = v.trim() === '' ? null : v.trim(); push() }))
+      const optLabel = document.createElement('label')
+      optLabel.textContent = 'Опциональный (стартует только по RUN: из отчёта родителя)'
+      const optRow = document.createElement('div')
+      optRow.className = 'row'
+      const optCheck = document.createElement('input')
+      optCheck.type = 'checkbox'
+      optCheck.checked = child.optional
+      optCheck.addEventListener('change', () => { child.optional = optCheck.checked; push() })
+      optRow.append(optCheck, optLabel)
+      inspector.append(optRow)
+      const del = document.createElement('button')
+      del.className = 'del'
+      del.textContent = 'Удалить подшаг'
+      del.addEventListener('click', () => {
+        parent.sub = parent.sub.filter((c) => c.id !== child.id)
+        delete graph.layout[child.id]
+        selection = { kind: 'node', id: parent.id }
+        push()
+      })
+      inspector.append(del)
+      return
+    }
+    if (selection.kind !== 'node') return
     const step = stepById(selection.id)
     if (!step) return
     inspector.append(field('id', step.id, (v) => {
@@ -741,6 +871,19 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       if (step.onReject && Number.isInteger(n) && n >= 1) step.onReject.maxRounds = n
       push()
     }))
+    const addSub = document.createElement('button')
+    addSub.textContent = '+ Подшаг (параллельный блок справа)'
+    addSub.style.cssText = 'margin-top:12px;font:12px inherit;padding:4px 10px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer'
+    addSub.addEventListener('click', () => {
+      const n = step.sub.length + 1
+      let id = `sub-${n}`
+      while (graph.steps.some((st) => st.sub.some((c) => c.id === id))) id = `sub-${Number(id.slice(4)) + 1}`
+      step.sub.push({ id, title: null, specialist: null, agent: null, model: null, effort: null, spec: null, specFile: null, deps: [], optional: false })
+      push()
+      selection = { kind: 'sub', parentId: step.id, id }
+      render()
+    })
+    inspector.append(addSub)
     const del = document.createElement('button')
     del.className = 'del'
     del.textContent = 'Удалить шаг'
