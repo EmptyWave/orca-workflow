@@ -33,6 +33,15 @@ const STYLE = `
 .wfv-inspector textarea{min-height:70px;resize:vertical}
 .wfv-inspector .row{display:flex;gap:6px;align-items:center}
 .wfv-inspector .del{margin-top:14px;border-color:var(--orca-destructive);color:var(--orca-destructive);background:none;padding:4px 10px;border-radius:var(--orca-radius);cursor:pointer;font:12px inherit}
+.wfv-spmgr{position:fixed;top:42px;right:0;bottom:0;width:330px;background:var(--orca-card);border-left:1px solid var(--orca-border);box-shadow:-6px 0 18px rgba(0,0,0,.25);z-index:40;padding:12px;overflow:auto;box-sizing:border-box}
+.wfv-spmgr h3{margin:0 0 8px;font-size:13px}
+.wfv-spmgr .sp-row{display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--orca-border);font-size:12px}
+.wfv-spmgr .sp-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.wfv-spmgr button{font:11.5px inherit;padding:2px 8px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer}
+.wfv-spmgr textarea{width:100%;min-height:120px;box-sizing:border-box;padding:4px 6px;border:1px solid var(--orca-input);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);font:11.5px ui-monospace,monospace;resize:vertical}
+.wfv-spmgr label{display:block;margin:8px 0 2px;font-size:11px;color:var(--orca-muted-foreground)}
+.wfv-spmgr input{width:100%;box-sizing:border-box;padding:4px 6px;border:1px solid var(--orca-input);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);font:12px ui-monospace,monospace}
+.wfv-spmgr .err{margin-top:8px;color:var(--orca-destructive);font-size:11.5px;white-space:pre-wrap}
 .wfv-yaml{position:absolute;inset:0;margin:0;padding:12px;overflow:auto;background:var(--orca-background);font:12px ui-monospace,monospace;white-space:pre;border:0}
 .wfv-error{padding:8px 12px;background:var(--orca-destructive);color:var(--orca-destructive-foreground);font-size:12px}
 .wfv-hint{padding:4px 12px;font-size:11px;color:var(--orca-muted-foreground)}
@@ -78,11 +87,39 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   const view = { x: 20, y: 20, k: 1 }
 
   // ---- toolbar -------------------------------------------------------------------------
+  // ---- project specialists: dropdown data + the manager panel -------------------------
+  type Sp = { slug: string; agent: string; model: string | null; effort: string | null; spec: string | null; error: string | null }
+  let specialists: Sp[] = []
+  let projectPath: string | null = null
+  const request = <T>(name: string, input: unknown, timeoutMs = 30000): Promise<T> =>
+    orca.plugin.request(name, input as never, { timeoutMs }) as Promise<T>
+  async function loadSpecialists(): Promise<void> {
+    try {
+      const current = await request<{ project: { path: string } | null }>('project.current', undefined)
+      projectPath = current?.project?.path ?? null
+    } catch {
+      projectPath = null
+    }
+    if (projectPath) {
+      try {
+        const answer = await request<{ specialists: Sp[] }>('specialists.list', { projectPath }, 60000)
+        specialists = answer.specialists ?? []
+      } catch {
+        specialists = []
+      }
+    } else {
+      specialists = []
+    }
+    renderInspector()
+  }
+  void loadSpecialists()
+
   const buttons: Array<[string, () => void]> = [
     ['+ Шаг', () => addStep(true)],
     ['+ Барьер', () => addStep(false)],
     ['Автораскладка', () => { graph.layout = autoLayout(graph); push() }],
-    ['YAML', () => toggleYaml()]
+    ['YAML', () => toggleYaml()],
+    ['Специалисты', () => toggleSpecialists()]
   ]
   for (const [label, onClick] of buttons) {
     const b = document.createElement('button')
@@ -135,6 +172,144 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     ;(root.querySelector('.wfv-body') as HTMLElement).append(yamlPre)
   }
 
+  // ---- specialists manager --------------------------------------------------------------
+  let spPanel: HTMLElement | null = null
+  function toggleSpecialists(): void {
+    if (spPanel) {
+      spPanel.remove()
+      spPanel = null
+      return
+    }
+    spPanel = document.createElement('div')
+    spPanel.className = 'wfv-spmgr'
+    ;(root.parentElement ?? root).append(spPanel)
+    void renderSpManager()
+  }
+  async function renderSpManager(editing: Sp | 'new' | null = null): Promise<void> {
+    const panel = spPanel
+    if (!panel) return
+    if (!projectPath) await loadSpecialists()
+    panel.innerHTML = ''
+    const h = document.createElement('h3')
+    h.textContent = `Специалисты — ${projectPath ? projectPath.split('/').pop() : 'проект не определён'}`
+    panel.append(h)
+    const close = document.createElement('button')
+    close.textContent = '×'
+    close.style.cssText = 'float:right'
+    close.addEventListener('click', () => { if (spPanel) { spPanel.remove(); spPanel = null } })
+    panel.append(close)
+    if (!projectPath) {
+      const note = document.createElement('div')
+      note.className = 'err'
+      note.textContent = 'Проект не определён: открой workspace репозитория в Orca и попробуй снова.'
+      panel.append(note)
+      return
+    }
+    for (const sp of specialists) {
+      const row = document.createElement('div')
+      row.className = 'sp-row'
+      const info = document.createElement('span')
+      info.className = 'grow'
+      info.textContent = `${sp.slug} — ${sp.agent}${sp.model ? ' · ' + sp.model : ''}`
+      info.title = sp.spec ?? ''
+      const edit = document.createElement('button')
+      edit.textContent = 'изменить'
+      edit.addEventListener('click', () => void renderSpManager(sp))
+      const rm = document.createElement('button')
+      rm.textContent = 'удалить'
+      let armed = false
+      rm.addEventListener('click', async () => {
+        if (!armed) {
+          armed = true
+          rm.textContent = 'точно?'
+          setTimeout(() => { armed = false; rm.textContent = 'удалить' }, 2500)
+          return
+        }
+        panel.setAttribute('data-busy', '1')
+        try {
+          await request('specialists.delete', { projectPath, slug: sp.slug }, 60000)
+          await loadSpecialists()
+          await renderSpManager()
+        } catch (error) {
+          await renderSpManager()
+          const err = document.createElement('div')
+          err.className = 'err'
+          err.textContent = String((error as Error)?.message ?? error)
+          spPanel?.append(err)
+        }
+      })
+      row.append(info, edit, rm)
+      panel.append(row)
+    }
+    if (editing === null) {
+      const add = document.createElement('button')
+      add.textContent = '+ Новый специалист'
+      add.style.marginTop = '8px'
+      add.addEventListener('click', () => void renderSpManager('new'))
+      panel.append(add)
+      return
+    }
+    // the create/edit form
+    const form = document.createElement('div')
+    const input = (label: string, value: string): HTMLInputElement => {
+      const l = document.createElement('label')
+      l.textContent = label
+      const el = document.createElement('input')
+      el.value = value
+      form.append(l, el)
+      return el
+    }
+    const slugEl = input('slug (имя файла)', editing === 'new' ? '' : editing.slug)
+    slugEl.disabled = editing !== 'new' // the slug names the file; renaming would orphan references
+    const agentEl = input('агент (claude, codex, zcode…)', editing === 'new' ? 'claude' : editing.agent)
+    const modelEl = input('модель (опц.)', editing === 'new' || !editing ? '' : editing.model ?? '')
+    modelEl.setAttribute('list', 'dl-model')
+    const effortEl = input('effort (опц.)', editing === 'new' || !editing ? '' : editing.effort ?? '')
+    effortEl.setAttribute('list', 'dl-effort')
+    const specL = document.createElement('label')
+    specL.textContent = 'spec — промпт специалиста'
+    form.append(specL)
+    const specEl = document.createElement('textarea')
+    specEl.value = editing === 'new' || !editing ? '' : editing.spec ?? ''
+    form.append(specEl)
+    const errBox = document.createElement('div')
+    errBox.className = 'err'
+    const save = document.createElement('button')
+    save.textContent = 'Сохранить'
+    save.style.marginRight = '6px'
+    save.addEventListener('click', async () => {
+      errBox.textContent = ''
+      save.setAttribute('disabled', '1')
+      try {
+        await request(
+          'specialists.save',
+          {
+            projectPath,
+            slug: slugEl.value,
+            agent: agentEl.value,
+            model: modelEl.value.trim() === '' ? null : modelEl.value.trim(),
+            effort: effortEl.value.trim() === '' ? null : effortEl.value.trim(),
+            spec: specEl.value
+          },
+          60000
+        )
+        await loadSpecialists()
+        await renderSpManager()
+      } catch (error) {
+        save.removeAttribute('disabled')
+        errBox.textContent = String((error as Error)?.message ?? error)
+      }
+    })
+    const cancel = document.createElement('button')
+    cancel.textContent = 'Отмена'
+    cancel.addEventListener('click', () => void renderSpManager())
+    const rowBtns = document.createElement('div')
+    rowBtns.style.marginTop = '10px'
+    rowBtns.append(save, cancel)
+    form.append(rowBtns, errBox)
+    panel.append(form)
+  }
+
   // ---- helpers -------------------------------------------------------------------------
   function ensureLayout(): void {
     const missing = graph.steps.filter((s) => !graph.layout[s.id])
@@ -152,7 +327,13 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     graph = { ...graph, steps: [...graph.steps] }
     if (yamlPre) yamlPre.textContent = emit(graph)
     syncHead()
-    render()
+    if (softEdit) {
+      // Typing in a field: redraw the canvas and the document, keep the inspector's DOM
+      // (and the input's focus) intact.
+      renderCanvas()
+    } else {
+      render()
+    }
     doc.change(graph)
   }
 
@@ -210,6 +391,12 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   }
 
   function render(): void {
+    renderCanvas()
+    renderInspector()
+  }
+
+  /** Everything except the inspector, so field typing can redraw without losing focus. */
+  function renderCanvas(): void {
     viewport.innerHTML = ''
     viewport.setAttribute('transform', `translate(${view.x} ${view.y}) scale(${view.k})`)
     for (const step of graph.steps) {
@@ -314,7 +501,6 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       path.setAttribute('d', `M ${tmpEdge.x1} ${tmpEdge.y1} L ${tmpEdge.x2} ${tmpEdge.y2}`)
       viewport.append(path)
     }
-    renderInspector()
     renderStatus()
   }
 
@@ -334,14 +520,25 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   }
 
   // ---- inspector -----------------------------------------------------------------------
-  function field(label: string, value: string, onInput: (v: string) => void): HTMLElement {
+  /** True while a field's own input handler runs: push() keeps the inspector (and focus). */
+  let softEdit = false
+
+  function field(label: string, value: string, onInput: (v: string) => void, list?: string): HTMLElement {
     const wrap = document.createElement('div')
     const l = document.createElement('label')
     l.textContent = label
     const input = document.createElement('input')
     input.type = 'text'
     input.value = value
-    input.addEventListener('input', () => onInput(input.value))
+    if (list) input.setAttribute('list', list)
+    input.addEventListener('input', () => {
+      softEdit = true
+      try {
+        onInput(input.value)
+      } finally {
+        softEdit = false
+      }
+    })
     wrap.append(l, input)
     return wrap
   }
@@ -375,7 +572,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       step.specialist = v.trim() === '' ? null : v.trim()
       if (step.specialist) step.agent = null // либо specialist, либо agent
       push()
-    }))
+    }, 'dl-spec'))
     inspector.append(field('Агент (пусто = барьер, если нет специалиста)', step.agent ?? '', (v) => {
       step.agent = v.trim() === '' ? null : v.trim()
       if (step.agent) step.specialist = null
@@ -396,8 +593,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       subHint.textContent = 'Подшаги задаются в YAML (sub:) — редактор сохраняет их как есть.'
       inspector.append(subHint)
     }
-    inspector.append(field('Модель (опц.)', step.model ?? '', (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }))
-    inspector.append(field('Effort (только с моделью)', step.effort ?? '', (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }))
+    inspector.append(field('Модель (опц.)', step.model ?? '', (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }, 'dl-model'))
+    inspector.append(field('Effort (только с моделью)', step.effort ?? '', (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }, 'dl-effort'))
     inspector.append(field('specFile (путь в каталоге шаблонов)', step.specFile ?? '', (v) => { step.specFile = v.trim() === '' ? null : v.trim(); step.spec = null; push() }))
     const specLabel = document.createElement('label')
     specLabel.textContent = 'spec (инлайн, если нет specFile)'
@@ -412,7 +609,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     }))
 
     const gateLabel = document.createElement('label')
-    gateLabel.textContent = 'Гейт перед шагом (шаг не начнётся без ответа)'
+    gateLabel.textContent = 'Необходимо подтверждение (шаг не начнётся без ответа)'
     inspector.append(gateLabel)
     const gateRow = document.createElement('div')
     gateRow.className = 'row'
@@ -437,7 +634,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     inspector.append(field('on_reject: goto', step.onReject?.goto ?? '', (v) => {
       step.onReject = v.trim() === '' ? null : { goto: v.trim(), maxRounds: step.onReject?.maxRounds ?? 2 }
       push()
-    }))
+    }, 'dl-goto'))
     inspector.append(field('on_reject: max_rounds', step.onReject ? String(step.onReject.maxRounds) : '', (v) => {
       const n = Number(v)
       if (step.onReject && Number.isInteger(n) && n >= 1) step.onReject.maxRounds = n
@@ -448,6 +645,27 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     del.textContent = 'Удалить шаг'
     del.addEventListener('click', removeSelected)
     inspector.append(del)
+
+    // Suggestions for the free-text fields: project specialists, models in use, efforts, step ids.
+    const datalist = (id: string, values: string[]): HTMLElement => {
+      const dl = document.createElement('datalist')
+      dl.id = id
+      for (const value of values) {
+        const opt = document.createElement('option')
+        opt.value = value
+        dl.append(opt)
+      }
+      return dl
+    }
+    inspector.append(datalist('dl-spec', specialists.map((sp) => sp.slug)))
+    inspector.append(
+      datalist(
+        'dl-model',
+        [...new Set([...specialists.map((sp) => sp.model), ...graph.steps.map((st) => st.model)].filter((m): m is string => !!m))]
+      )
+    )
+    inspector.append(datalist('dl-effort', ['low', 'medium', 'high']))
+    inspector.append(datalist('dl-goto', graph.steps.filter((st) => st.id !== step.id).map((st) => st.id)))
   }
 
   // ---- pointer interactions --------------------------------------------------------------

@@ -168,6 +168,15 @@ declare module 'orca' {
       input: { libraryDir: string; refreshMs: number; defaultAgent: string }
       output: { libraryDir: string; refreshMs: number; defaultAgent: string }
     }
+    /** Specialists of a project (.orca/specialists) — the editor's dropdowns and manager. */
+    'specialists.list': { input: { projectPath: string }; output: { specialists: WfSpecialist[] } }
+    /** Create or update one specialist file; slug names the file. */
+    'specialists.save': {
+      input: { projectPath: string; slug: string; agent: string; model: string | null; effort: string | null; spec: string }
+      output: { ok: true }
+    }
+    /** Delete a specialist file; refuses while any project template still references it. */
+    'specialists.delete': { input: { projectPath: string; slug: string }; output: { ok: true } }
     /** Bind a Run to a project (for runs raised before instantiate recorded it). */
     'run.meta.set': { input: { runId: string; projectPath: string }; output: { ok: true } }
     /** Write one panel-UI storage key (html.*), for scripts and shots. */

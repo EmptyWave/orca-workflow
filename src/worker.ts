@@ -668,10 +668,10 @@ export default function activate(orca: OrcaWorkerApi): void {
   // ---- specialists (aip-style) -----------------------------------------------------------------
 
   /** Loads `<repo>/.orca/specialists/*.yaml` and the library's `specialists/` in one batch. */
-  async function loadSpecialists(projectPath: string | null): Promise<WfSpecialist[]> {
+  async function loadSpecialists(projectPath: string | null, onlyProject = false): Promise<WfSpecialist[]> {
     const dirs: Array<string> = []
     if (projectPath) dirs.push(`${projectPath.replace(/\/+$/, '')}/.orca/specialists`)
-    dirs.push((await libraryDir()).replace(/\/workflows$/, '/specialists'))
+    if (!onlyProject) dirs.push((await libraryDir()).replace(/\/workflows$/, '/specialists'))
     const out: WfSpecialist[] = []
     for (const dir of dirs) {
       let listing = ''
@@ -1133,6 +1133,58 @@ export default function activate(orca: OrcaWorkerApi): void {
     everUsed = true
     await orca.storage.set(`runmeta.${runId}`, { projectPath, at: Date.now() })
     void refresh()
+    return { ok: true as const }
+  })
+
+  orca.panels.handle('specialists.list', async ({ projectPath }) => {
+    everUsed = true
+    return { specialists: await loadSpecialists(projectPath, true) }
+  })
+
+  orca.panels.handle('specialists.save', async ({ projectPath, slug, agent, model, effort, spec }) => {
+    everUsed = true
+    const clean = slug.trim().replace(/[^a-z0-9-]/g, '-')
+    if (clean === '') throw new BridgeError('slug специалиста не может быть пустым', 'cli_error')
+    const dir = `${projectPath.replace(/\/+$/, '')}/.orca/specialists`
+    const yaml = [
+      `agent: ${agent.trim() || 'claude'}`,
+      model && model.trim() !== '' ? `model: ${model.trim()}` : null,
+      effort && effort.trim() !== '' ? `effort: ${effort.trim()}` : null,
+      spec.trim() !== '' ? `spec: |\n${spec.replace(/\n$/, '').split('\n').map((l) => '  ' + l).join('\n')}` : null
+    ].filter((x): x is string => x !== null).join('\n') + '\n'
+    await bridge.run(
+      `mkdir -p ${shellPath(dir)} && echo ${shellQuote(toBase64(yaml))} | base64 -d > ${shellPath(`${dir}/${clean}.yaml`)}`
+    )
+    return { ok: true as const }
+  })
+
+  orca.panels.handle('specialists.delete', async ({ projectPath, slug }) => {
+    everUsed = true
+    // Refuse while any project template still references the specialist.
+    const wfDir = `${projectPath.replace(/\/+$/, '')}/.orca/workflows`
+    let listing = ''
+    try {
+      listing = await bridge.run(`ls -1 ${shellPath(wfDir)} 2>/dev/null || true`)
+    } catch {
+      listing = ''
+    }
+    for (const file of listing.split('\n').map((l) => l.trim()).filter(Boolean)) {
+      let raw = ''
+      try {
+        raw = fromBase64(await bridge.run(`base64 < ${shellPath(`${wfDir}/${file}`)}`))
+      } catch {
+        continue
+      }
+      try {
+        const template = parseTemplate(file.replace(/\.yaml$/, ''), parseYaml(raw))
+        const uses = [...template.steps, ...template.steps.flatMap((st) => st.sub ?? [])]
+          .some((st) => st.specialist === slug)
+        if (uses) throw new BridgeError(`специалиста «${slug}» использует шаблон ${file} — сначала убери его из шаблона`, 'cli_error')
+      } catch (error) {
+        if (error instanceof BridgeError) throw error
+      }
+    }
+    await bridge.run(`rm -f ${shellPath(`${projectPath.replace(/\/+$/, '')}/.orca/specialists/${slug}.yaml`)}`)
     return { ok: true as const }
   })
 
