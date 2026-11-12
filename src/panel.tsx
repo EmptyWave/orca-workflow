@@ -15,6 +15,7 @@ import {
   List,
   ListItem,
   on,
+  OrcaNode,
   plugin,
   read,
   read as rd,
@@ -24,7 +25,6 @@ import {
   Skeleton,
   Spinner,
   Stack,
-  Table,
   Tab,
   Tabs,
   Text,
@@ -275,22 +275,24 @@ async function copyTemplate(to: 'library' | 'project'): Promise<void> {
 
 // ---- helpers -----------------------------------------------------------------------------------
 
-const STATUS_MARK: Record<string, string> = {
-  pending: '· pending',
-  ready: '▶ ready',
-  dispatched: '● работает',
-  blocked: '⏳ гейт',
-  succeeded: '✓ готово',
-  failed: '✗ провал',
-  unknown: '? неизвестно'
+const STATUS_TEXT: Record<string, string> = {
+  pending: 'ожидает',
+  ready: 'готов к запуску',
+  dispatched: 'работает',
+  blocked: 'ждёт гейт',
+  succeeded: 'готово',
+  failed: 'провал',
+  unknown: 'неизвестно'
 }
 
-function statusTone(status: string): 'neutral' | 'accent' | 'warning' | 'success' | 'danger' {
-  if (status === 'blocked') return 'warning'
-  if (status === 'dispatched' || status === 'ready') return 'accent'
-  if (status === 'succeeded') return 'success'
-  if (status === 'failed') return 'danger'
-  return 'neutral'
+/** Orca-style status visuals: a coloured badge per state, a live spinner while working. */
+function statusBadge(status: string): OrcaNode {
+  if (status === 'dispatched') return <Spinner label="работает" labelHidden />
+  if (status === 'succeeded') return <Badge tone="success">✓</Badge>
+  if (status === 'ready') return <Badge tone="accent">▶</Badge>
+  if (status === 'blocked') return <Badge tone="warning">⏳</Badge>
+  if (status === 'failed') return <Badge tone="danger">✗</Badge>
+  return <Badge tone="neutral">·</Badge>
 }
 
 export function setup(ctx: PanelContext): void {
@@ -346,25 +348,23 @@ function RunsTab() {
             {snap.run.objective || snap.run.runId}
           </Text>
           <Card title="Шаги">
-            <Table
-              label="Шаги"
-              columns={[
-                { key: 'title', label: 'Шаг', width: 'md' },
-                { key: 'status', label: 'Статус' },
-                { key: 'deps', label: 'Зависимости', hideBelow: 'sm' },
-                { key: 'worker', label: 'Воркер', hideBelow: 'md' }
-              ]}
-              rows={(snap.tasks ?? []).map((t) => ({
-                key: t.id,
-                cells: {
-                  title: t.title || t.id,
-                  status: STATUS_MARK[t.status] ?? t.status,
-                  deps: t.deps.length === 0 ? '—' : t.deps.map((d) => d.replace('task_', '')).join(', '),
-                  worker: t.dispatchId ? t.dispatchId.replace('ctx_', '') : '—'
-                }
-              }))}
-              emptyText="задач нет"
-            />
+            <List label="Шаги">
+              {(snap.tasks ?? []).map((t) => (
+                <ListItem
+                  key={t.id}
+                  title={t.title || t.id}
+                  description={[
+                    STATUS_TEXT[t.status] ?? t.status,
+                    t.deps.length > 0 ? `после: ${t.deps.map((d) => d.replace('task_', '')).join(', ')}` : null,
+                    t.dispatchId ? `воркер ${t.dispatchId.replace('ctx_', '')}` : null
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}
+                >
+                  {statusBadge(t.status)}
+                </ListItem>
+              ))}
+            </List>
           </Card>
           {gates.length > 0 ? (
             <Card title={`Гейты (${gates.length})`}>

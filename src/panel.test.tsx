@@ -36,7 +36,7 @@ test('рисует шаги, гейты и воркеров из снапшот�
   const view = await mount(panel, { host, persisted: { plugin: { 'ui.tab2': 'runs' } } })
   await new Promise((resolve) => setTimeout(resolve, 50))
   const summary = view.summary().join('\n')
-  assert.ok(summary.includes('Table "Шаги": 2 row(s)'), `таблица шагов видна: ${summary}`)
+  assert.ok(summary.includes('List "Шаги": 2 item(s)'), `список шагов виден: ${summary}`)
   assert.ok(summary.includes('Tabs "Раздел": "Запуски" selected'), 'вкладка Запуски выбрана')
   assert.ok(view.find({ text: 'request-changes' }), 'кнопка гейта видна')
   assert.deepEqual(view.errors, [])
