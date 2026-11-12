@@ -42,6 +42,11 @@ const STYLE = `
 .wfv-spmgr label{display:block;margin:8px 0 2px;font-size:11px;color:var(--orca-muted-foreground)}
 .wfv-spmgr input{width:100%;box-sizing:border-box;padding:4px 6px;border:1px solid var(--orca-input);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);font:12px ui-monospace,monospace}
 .wfv-spmgr .err{margin-top:8px;color:var(--orca-destructive);font-size:11.5px;white-space:pre-wrap}
+.wfv-combo{position:relative}
+.wfv-combo-list{position:absolute;left:0;right:0;top:100%;z-index:30;max-height:170px;overflow:auto;background:var(--orca-card);border:1px solid var(--orca-border);border-radius:var(--orca-radius);box-shadow:0 6px 16px rgba(0,0,0,.35);display:none;margin-top:2px}
+.wfv-combo.open .wfv-combo-list{display:block}
+.wfv-combo-list .opt{padding:4px 8px;font-size:12px;cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wfv-combo-list .opt:hover,.wfv-combo-list .opt.active{background:var(--orca-muted)}
 .wfv-yaml{position:absolute;inset:0;margin:0;padding:12px;overflow:auto;background:var(--orca-background);font:12px ui-monospace,monospace;white-space:pre;border:0}
 .wfv-error{padding:8px 12px;background:var(--orca-destructive);color:var(--orca-destructive-foreground);font-size:12px}
 .wfv-hint{padding:4px 12px;font-size:11px;color:var(--orca-muted-foreground)}
@@ -274,18 +279,12 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const slugEl = input('slug (имя файла)', editing === 'new' ? '' : editing.slug)
     slugEl.disabled = editing !== 'new' // the slug names the file; renaming would orphan references
     const agentEl = input('агент (claude, codex, zcode…)', editing === 'new' ? 'claude' : editing.agent)
-    const modelEl = input('модель (опц.)', editing === 'new' || !editing ? '' : editing.model ?? '')
-    modelEl.setAttribute('list', 'dl-model')
-    const effortEl = input('effort (опц.)', editing === 'new' || !editing ? '' : editing.effort ?? '')
-    const spEfforts = document.createElement('datalist')
-    spEfforts.id = 'dl-effort-sp'
-    for (const value of [...new Set([...EFFORTS.claude, ...EFFORTS.codex])]) {
-      const opt = document.createElement('option')
-      opt.value = value
-      spEfforts.append(opt)
-    }
-    effortEl.setAttribute('list', 'dl-effort-sp')
-    form.append(spEfforts)
+    const modelWrap = comboField('модель (опц.)', editing === 'new' || !editing ? '' : editing.model ?? '', () => [...new Set(specialists.map((sp) => sp.model).filter((m): m is string => !!m))], () => undefined)
+    const modelEl = modelWrap.querySelector('input') as HTMLInputElement
+    form.append(modelWrap)
+    const effortWrap = comboField('effort (опц.)', editing === 'new' || !editing ? '' : editing.effort ?? '', () => effortsFor(agentEl.value), () => undefined)
+    const effortEl = effortWrap.querySelector('input') as HTMLInputElement
+    form.append(effortWrap)
     const specL = document.createElement('label')
     specL.textContent = 'spec — промпт специалиста'
     form.append(specL)
@@ -543,14 +542,13 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   /** True while a field's own input handler runs: push() keeps the inspector (and focus). */
   let softEdit = false
 
-  function field(label: string, value: string, onInput: (v: string) => void, list?: string): HTMLElement {
+  function field(label: string, value: string, onInput: (v: string) => void): HTMLElement {
     const wrap = document.createElement('div')
     const l = document.createElement('label')
     l.textContent = label
     const input = document.createElement('input')
     input.type = 'text'
     input.value = value
-    if (list) input.setAttribute('list', list)
     input.addEventListener('input', () => {
       softEdit = true
       try {
@@ -560,6 +558,88 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       }
     })
     wrap.append(l, input)
+    return wrap
+  }
+
+  /** A text input whose suggestions drop straight under it (native datalists misplace
+   *  their popup in narrow frames). Keyboard: ↓/↑ moves, Enter picks, Esc closes. */
+  function comboField(label: string, value: string, options: () => string[], onInput: (v: string) => void): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'wfv-combo'
+    const l = document.createElement('label')
+    l.textContent = label
+    const input = document.createElement('input')
+    input.type = 'text'
+    input.value = value
+    const list = document.createElement('div')
+    list.className = 'wfv-combo-list'
+    let active = -1
+    const close = (): void => {
+      wrap.classList.remove('open')
+      list.innerHTML = ''
+      active = -1
+    }
+    const open = (): void => {
+      const typed = input.value.trim().toLowerCase()
+      const all = options().filter((o, i, arr) => arr.indexOf(o) === i)
+      const filtered = all.filter((o) => o.toLowerCase().includes(typed))
+      list.innerHTML = ''
+      all.forEach((opt) => {
+        if (!filtered.includes(opt)) return
+        const row = document.createElement('div')
+        row.className = 'opt'
+        row.textContent = opt
+        row.addEventListener('mousedown', (e) => {
+          e.preventDefault() // keep the input's focus; no blur flicker
+          input.value = opt
+          softEdit = true
+          try {
+            onInput(opt)
+          } finally {
+            softEdit = false
+          }
+          close()
+        })
+        list.append(row)
+      })
+      active = -1
+      wrap.classList.add('open')
+    }
+    input.addEventListener('focus', open)
+    input.addEventListener('click', open)
+    input.addEventListener('input', () => {
+      softEdit = true
+      try {
+        onInput(input.value)
+      } finally {
+        softEdit = false
+      }
+      open()
+    })
+    input.addEventListener('blur', () => setTimeout(close, 120))
+    input.addEventListener('keydown', (e) => {
+      const rows = Array.from(list.querySelectorAll<HTMLElement>('.opt'))
+      if (e.key === 'Escape') {
+        close()
+      } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        e.preventDefault()
+        if (rows.length === 0) return
+        active = e.key === 'ArrowDown' ? (active + 1) % rows.length : (active - 1 + rows.length) % rows.length
+        rows.forEach((r, i) => r.classList.toggle('active', i === active))
+        rows[active].scrollIntoView({ block: 'nearest' })
+      } else if (e.key === 'Enter' && active >= 0 && rows[active]) {
+        e.preventDefault()
+        input.value = rows[active].textContent ?? input.value
+        softEdit = true
+        try {
+          onInput(input.value)
+        } finally {
+          softEdit = false
+        }
+        close()
+      }
+    })
+    wrap.append(l, input, list)
     return wrap
   }
 
@@ -588,11 +668,11 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       push()
     }))
     inspector.append(field('Заголовок', step.title ?? '', (v) => { step.title = v === '' ? null : v; push() }))
-    inspector.append(field('Специалист (slug из .orca/specialists, вместо агента)', step.specialist ?? '', (v) => {
+    inspector.append(comboField('Специалист (slug из .orca/specialists, вместо агента)', step.specialist ?? '', () => specialists.map((sp) => sp.slug), (v) => {
       step.specialist = v.trim() === '' ? null : v.trim()
       if (step.specialist) step.agent = null // либо specialist, либо agent
       push()
-    }, 'dl-spec'))
+    }))
     inspector.append(field('Агент (пусто = барьер, если нет специалиста)', step.agent ?? '', (v) => {
       step.agent = v.trim() === '' ? null : v.trim()
       if (step.agent) step.specialist = null
@@ -613,8 +693,9 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       subHint.textContent = 'Подшаги задаются в YAML (sub:) — редактор сохраняет их как есть.'
       inspector.append(subHint)
     }
-    inspector.append(field('Модель (опц.)', step.model ?? '', (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }, 'dl-model'))
-    inspector.append(field('Effort (только с моделью)', step.effort ?? '', (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }, 'dl-effort'))
+    inspector.append(comboField('Модель (опц.)', step.model ?? '', () => [...new Set([...specialists.map((sp) => sp.model), ...graph.steps.map((st) => st.model)].filter((m): m is string => !!m))], (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }))
+    const stepSpecialistForEffort = specialists.find((sp) => sp.slug === step.specialist)
+    inspector.append(comboField('Effort (только с моделью)', step.effort ?? '', () => effortsFor(step.agent ?? stepSpecialistForEffort?.agent), (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }))
     inspector.append(field('specFile (путь в каталоге шаблонов)', step.specFile ?? '', (v) => { step.specFile = v.trim() === '' ? null : v.trim(); step.spec = null; push() }))
     const specLabel = document.createElement('label')
     specLabel.textContent = 'spec (инлайн, если нет specFile)'
@@ -651,10 +732,10 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         push()
       }))
     }
-    inspector.append(field('on_reject: goto', step.onReject?.goto ?? '', (v) => {
+    inspector.append(comboField('on_reject: goto', step.onReject?.goto ?? '', () => graph.steps.filter((st) => st.id !== step.id).map((st) => st.id), (v) => {
       step.onReject = v.trim() === '' ? null : { goto: v.trim(), maxRounds: step.onReject?.maxRounds ?? 2 }
       push()
-    }, 'dl-goto'))
+    }))
     inspector.append(field('on_reject: max_rounds', step.onReject ? String(step.onReject.maxRounds) : '', (v) => {
       const n = Number(v)
       if (step.onReject && Number.isInteger(n) && n >= 1) step.onReject.maxRounds = n
@@ -665,28 +746,6 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     del.textContent = 'Удалить шаг'
     del.addEventListener('click', removeSelected)
     inspector.append(del)
-
-    // Suggestions for the free-text fields: project specialists, models in use, efforts, step ids.
-    const datalist = (id: string, values: string[]): HTMLElement => {
-      const dl = document.createElement('datalist')
-      dl.id = id
-      for (const value of values) {
-        const opt = document.createElement('option')
-        opt.value = value
-        dl.append(opt)
-      }
-      return dl
-    }
-    inspector.append(datalist('dl-spec', specialists.map((sp) => sp.slug)))
-    inspector.append(
-      datalist(
-        'dl-model',
-        [...new Set([...specialists.map((sp) => sp.model), ...graph.steps.map((st) => st.model)].filter((m): m is string => !!m))]
-      )
-    )
-    const stepSpecialist = specialists.find((sp) => sp.slug === step.specialist)
-    inspector.append(datalist('dl-effort', effortsFor(step.agent ?? stepSpecialist?.agent)))
-    inspector.append(datalist('dl-goto', graph.steps.filter((st) => st.id !== step.id).map((st) => st.id)))
   }
 
   // ---- pointer interactions --------------------------------------------------------------
