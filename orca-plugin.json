@@ -1,0 +1,54 @@
+{
+  "manifestVersion": 2,
+  "id": "workflow-view",
+  "name": "Workflow View",
+  "version": "0.1.0",
+  "description": "Per-project workflow templates (plan → review → dev → review → tests → commit) with one-click portability, an orchestration Runs panel, and gate management.",
+  "engines": {
+    "orca": ">=1.4.248"
+  },
+  "execution": "trusted-worker",
+  "pluginApi": 1,
+  "main": "src/worker.ts",
+  "contributes": {
+    "panels": [
+      {
+        "id": "workflow",
+        "title": "Workflow",
+        "icon": "activity",
+        "entry": "src/panel.tsx",
+        "ui": "components"
+      }
+    ],
+    "statusBarItems": [
+      {
+        "id": "wf-status",
+        "text": "Workflow",
+        "icon": "activity",
+        "tooltip": "Workflow View"
+      }
+    ],
+    "events": [
+      {
+        "on": "agent.status.changed"
+      }
+    ],
+    "settings": [
+      {
+        "key": "libraryDir",
+        "title": "Library directory (portable workflow templates)",
+        "type": "string",
+        "default": "~/orca-plugins/workflow-view/workflows",
+        "placeholder": "~/orca-plugins/workflow-view/workflows"
+      }
+    ]
+  },
+  "capabilities": [
+    { "kind": "storage:own" },
+    { "kind": "settings:own" },
+    { "kind": "terminal:send" },
+    { "kind": "terminal:read" },
+    { "kind": "workspace:read" },
+    { "kind": "agent:read" }
+  ]
+}
