@@ -222,10 +222,12 @@
         : ICON.dot
 
       // ------------------------------------------------------------------ loads
+      let loadingSince = {}
       async function loadRuns() {
         try {
           const answer = await req('runs.list')
           S.runs = answer.runs
+          delete loadingSince['запуски']
           const ids = answer.runs.map((r) => r.runId)
           if (S.runId && !ids.includes(S.runId)) S.runId = null
           if (!S.runId && ids.length > 0) S.runId = ids[0]
@@ -251,6 +253,7 @@
             projectPath: S.tplSource === 'project' ? S.project?.path ?? null : null
           }, 60000)
           S.templates = answer.templates
+          delete loadingSince['шаблоны']
           if (answer.templates.length > 0 && !answer.templates.some((t) => t.id === S.tplId)) S.tplId = answer.templates[0].id
         } catch (e) { S.templates = []; setNotice('Шаблоны не читаются: ' + esc(e.message || e)) }
         render()
@@ -356,17 +359,24 @@
       // ------------------------------------------------------------------ render
       const el = () => document.getElementById('view')
       function render() {
-        // tabs
-        const tabs = [['runs', 'Запуски'], ['templates', 'Шаблоны'], ['settings', 'Настройки']]
-        document.getElementById('tabs').innerHTML = tabs.map(([id, label]) =>
-          `<button class="tab${S.tab === id ? ' active' : ''}" data-tab="${id}">${label}</button>`).join('')
-        // notice / busy
-        const nb = document.getElementById('notice')
-        nb.innerHTML = S.notice
-          ? `<div class="callout danger">${S.notice}<button class="btn ghost mini" data-act="dismiss" style="float:right">×</button></div>`
-          : S.busy ? `<div class="callout tiny">${esc(S.busy)}…</div>` : ''
-        el().innerHTML = S.tab === 'runs' ? viewRuns() : S.tab === 'templates' ? viewTemplates() : viewSettings()
-        wire()
+        try {
+          // tabs
+          const tabs = [['runs', 'Запуски'], ['templates', 'Шаблоны'], ['settings', 'Настройки']]
+          document.getElementById('tabs').innerHTML = tabs.map(([id, label]) =>
+            `<button class="tab${S.tab === id ? ' active' : ''}" data-tab="${id}">${label}</button>`).join('')
+          // notice / busy
+          const nb = document.getElementById('notice')
+          nb.innerHTML = S.notice
+            ? `<div class="callout danger">${S.notice}<button class="btn ghost mini" data-act="dismiss" style="float:right">×</button></div>`
+            : S.busy ? `<div class="callout tiny">${esc(S.busy)}…</div>` : ''
+          el().innerHTML = S.tab === 'runs' ? viewRuns() : S.tab === 'templates' ? viewTemplates() : viewSettings()
+          wire()
+        } catch (e) {
+          // A render crash must not freeze the frame forever: say so and offer a reload.
+          el().innerHTML = `<div class="callout danger">Панель споткнулась: ${esc(e && e.message ? e.message : String(e))}</div>` +
+            `<button class="btn" data-act="reload">Перезагрузить панель</button>`
+          wire()
+        }
       }
       function wire() {
         document.querySelectorAll('[data-tab]').forEach((b) =>
@@ -375,6 +385,7 @@
           const [act, arg] = b.dataset.act.split(':')
           const map = {
             dismiss: () => { S.notice = null; render() },
+            reload: () => location.reload(),
             refresh: () => { void loadRuns(); void loadState() },
             'refresh-tpl': () => { S.templates = null; render(); void loadTemplates() },
             'resolve-approve': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), 'approve'),
@@ -409,9 +420,17 @@
         if (ap) ap.onchange = () => void toggleAutoPilot(ap.checked)
       }
 
+      // ---- loading state that knows how long it has been loading
+      function stuck(what) {
+        const t0 = loadingSince[what] ?? (loadingSince[what] = Date.now())
+        const slow = Date.now() - t0 > 15000
+        return `<div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:90%"></div><div class="skeleton" style="width:50%"></div>` +
+          (slow ? `<div class="callout warning tiny">«${esc(what)}» грузятся дольше 15 секунд — вероятно, мост ждёт таймаут или воркер перезапускается. <button class="btn mini" data-act="reload">Перезагрузить панель</button></div>` : ``)
+      }
+
       // ---- runs view
       function viewRuns() {
-        if (!S.runs) return `<div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:90%"></div><div class="skeleton" style="width:50%"></div>`
+        if (!S.runs) return stuck('запуски')
         if (S.runs.length === 0) return `<div class="empty">Нет запусков.<br/>Подними Run из шаблона на вкладке «Шаблоны».</div>`
         const snap = S.snap
         const sel = `<div class="rowline"><select data-bind-select="runId" style="flex:1">` +
@@ -473,7 +492,7 @@
         const project = S.project
           ? `<div class="rowline spread" style="margin-bottom:8px"><span class="chip">Проект: ${esc(S.project.name)}</span></div>`
           : `<div class="callout warning">Проект не найден — открой workspace репозитория в Orca.</div>`
-        if (!S.templates) { void loadTemplates(); return project + `<div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:85%"></div>` }
+        if (!S.templates) { void loadTemplates(); return project + stuck('шаблоны') }
         if (S.templates.length === 0) {
           return project + `<div class="empty">Нет шаблонов. Скопируй из библиотеки: источник «Библиотека» → «В проект».</div>`
         }
