@@ -10,6 +10,7 @@ import {
   Field,
   Heading,
   IconButton,
+  Image,
   Input,
   KeyValue,
   List,
@@ -317,13 +318,30 @@ function effectiveStatuses(tasks: WfTask[], gates: WfGate[]): Record<string, Eff
   return Object.fromEntries(memo)
 }
 
-/** Heavy status mark, aip-style: green check circle for done, red cross for failure,
- *  live spinner while working. Waiting states keep the light row glyph instead. */
+/** Heavy status mark, aip-style: a green ring with a check for done, a red ring with a
+ *  cross for failure, a live spinner while working. Waiting states keep the light glyph. */
 function statusMark(status: string): OrcaNode {
   if (status === 'dispatched') return <Spinner label="работает" labelHidden />
-  if (status === 'succeeded') return <Badge tone="success">✓</Badge>
-  if (status === 'failed') return <Badge tone="danger">✗</Badge>
+  if (status === 'succeeded') return <Image src="assets/status/done.png" alt="" size="xs" />
+  if (status === 'failed') return <Image src="assets/status/fail.png" alt="" size="xs" />
   return null
+}
+
+/** The agent's own brand icon (Claude sunburst, Copilot, OpenAI blossom, …); any other
+ *  agent gets the generic robot mark, a bare barrier gets nothing. */
+function agentIconSrc(agent: string | null): string | null {
+  if (!agent) return null
+  const name = agent.toLowerCase()
+  if (name.startsWith('claude')) return 'assets/agents/claude.png'
+  if (name.startsWith('codex')) return 'assets/agents/codex.png'
+  if (name.startsWith('copilot')) return 'assets/agents/copilot.png'
+  if (name.startsWith('opencode')) return 'assets/agents/opencode.png'
+  return 'assets/agents/agent.png'
+}
+
+function agentIcon(agent: string | null): OrcaNode {
+  const src = agentIconSrc(agent)
+  return src ? <Image src={src} alt={agent ?? ''} size="xs" /> : null
 }
 
 /** Native glyph for the row icon slot (waiting states; done/failed show a badge instead). */
@@ -416,18 +434,8 @@ function RunsTab() {
                   >
                     <Row gap="xs" align="center">
                       {statusMark(eff.status)}
+                      {agentIcon(t.agent)}
                       <Text weight="semibold">{t.title || t.id}</Text>
-                      {t.model ? (
-                        <Badge tone="neutral">
-                          {'🤖 '}
-                          {t.model}
-                        </Badge>
-                      ) : t.agent ? (
-                        <Badge tone="neutral">
-                          {'🤖 '}
-                          {t.agent}
-                        </Badge>
-                      ) : null}
                     </Row>
                   </ListItem>
                 )
@@ -620,12 +628,8 @@ function TemplatesTab() {
                       .join(' · ')}
                   >
                     <Row gap="xs" align="center">
+                      {agentIcon(step.agent)}
                       <Text weight="semibold">{step.id}{step.title ? ` · ${step.title}` : ''}</Text>
-                      {step.model ? (
-                        <Badge tone="neutral">{'🤖 '}{step.model}</Badge>
-                      ) : step.agent ? (
-                        <Badge tone="neutral">{'🤖 '}{step.agent}</Badge>
-                      ) : null}
                     </Row>
                   </ListItem>,
                   ...(step.sub ?? []).map((child) => (
@@ -634,12 +638,8 @@ function TemplatesTab() {
                       description={child.optional ? 'опциональный: стартует по RUN из отчёта' : undefined}
                     >
                       <Row gap="xs" align="center">
+                        {agentIcon(child.agent)}
                         <Text muted>↳ {child.id}{child.title ? ` · ${child.title}` : ''}</Text>
-                        {child.model ? (
-                          <Badge tone="neutral">{'🤖 '}{child.model}</Badge>
-                        ) : child.agent ? (
-                          <Badge tone="neutral">{'🤖 '}{child.agent}</Badge>
-                        ) : null}
                       </Row>
                     </ListItem>
                   ))
