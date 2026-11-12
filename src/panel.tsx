@@ -341,7 +341,8 @@ function RunsTab() {
       {snap?.error ? <Callout tone="danger" title="Ошибка">{snap.error}</Callout> : null}
       {snap?.run ? (
         <>
-          <Text muted size="xs" truncate>
+          {/* No truncate: in a narrow column it collapses the text to one glyph per line. */}
+          <Text muted size="xs">
             {snap.run.objective || snap.run.runId}
           </Text>
           <Card title="Шаги">
@@ -470,20 +471,23 @@ function TemplatesTab() {
   const jobNow = rd(job)
   return (
     <Stack gap="md">
-      <Row gap="xs">
-        <Select
-          label="Источник"
-          value={rd(tplSource)}
-          options={[
-            { value: 'project', label: 'Проект (.orca/workflows)' },
-            { value: 'library', label: 'Библиотека' }
-          ]}
-          onChange={(value) => {
-            set(tplSource, value as 'library' | 'project')
-            set(templates, null)
-            void run('шаблоны', loadTemplates)
-          }}
-        />
+      <Stack gap="xs">
+        <Row justify="between" align="center">
+          <Select
+            label="Источник"
+            value={rd(tplSource)}
+            options={[
+              { value: 'project', label: 'Проект (.orca/workflows)' },
+              { value: 'library', label: 'Библиотека' }
+            ]}
+            onChange={(value) => {
+              set(tplSource, value as 'library' | 'project')
+              set(templates, null)
+              void run('шаблоны', loadTemplates)
+            }}
+          />
+          <IconButton icon="refresh" label="Обновить шаблоны" onPress={() => void run('шаблоны', loadTemplates)} />
+        </Row>
         {rd(tplSource) === 'project' ? (
           rd(currentProject) ? (
             <Badge tone="accent">Проект: {rd(currentProject)?.name}</Badge>
@@ -493,8 +497,7 @@ function TemplatesTab() {
             </Text>
           )
         ) : null}
-        <IconButton icon="refresh" label="Обновить шаблоны" onPress={() => void run('шаблоны', loadTemplates)} />
-      </Row>
+      </Stack>
       {templatesNow === null ? (
         <Skeleton shape="text" lines={3} />
       ) : templatesNow.length === 0 ? (
@@ -530,10 +533,8 @@ function TemplatesTab() {
       {selected ? (
         <Card>
           <Stack gap="sm">
-            <Text weight="semibold" truncate>
-              {selected.title}
-            </Text>
-            <Text muted size="xs" truncate>
+            <Text weight="semibold">{selected.title}</Text>
+            <Text muted size="xs">
               {selected.id} · {selected.file}
             </Text>
             {selected.error ? <Callout tone="danger" title="Шаблон не читается">{selected.error}</Callout> : (
