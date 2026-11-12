@@ -39,13 +39,13 @@ function makeHost() {
       return '{"ok":true,"result":{"tasks":[{"id":"task_b","taskTitle":"dev Разработка"}]}}'
     }
     if (command.includes('task-list') && !command.includes('--ready')) {
-      // Deliberately unordered: the snapshot must return pipeline order (plan before dev).
+      // The concise CLI view: unordered, deps packed as JSON strings — both must survive.
       return JSON.stringify({
         ok: true,
         result: {
           tasks: [
-            { id: 'task_b', taskTitle: 'dev Разработка', status: 'pending', deps: ['task_a'] },
-            { id: 'task_a', taskTitle: 'plan План', status: 'succeeded', deps: [] }
+            { id: 'task_b', title: 'dev Разработка', status: 'pending', deps: '["task_a"]' },
+            { id: 'task_a', title: 'plan План', status: 'succeeded' }
           ]
         }
       })

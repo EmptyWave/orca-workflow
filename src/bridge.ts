@@ -18,10 +18,19 @@ export class BridgeError extends Error {
 
 export class Bridge {
   private terminal: string | null = null
+  private widened = false
   private counter = 0
   private queue: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly orca: OrcaWorkerApi) {}
+
+  /** A default-width pty wraps long lines (JSON rows, YAML questions), corrupting captured
+   *  output; widen the terminal once — whether just adopted or freshly created. */
+  private async widen(terminalId: string): Promise<void> {
+    if (this.widened) return
+    this.widened = true
+    await this.exec('stty cols 4096 2>/dev/null || true', terminalId, 3_000).catch(() => undefined)
+  }
 
   /** The terminal handle, creating the bridge terminal on first use; reuses the stored one. */
   async ensure(): Promise<string> {
@@ -39,6 +48,7 @@ export class Bridge {
           const entry = (envelope.result?.terminals ?? []).find((t) => t.handle === stored)
           if (entry && entry.title === 'workflow-view bridge') {
             this.terminal = stored
+            await this.widen(stored)
             return stored
           }
         }
@@ -55,9 +65,7 @@ export class Bridge {
     })
     this.terminal = created.terminalId
     await this.orca.storage.set('bridge.terminalId', created.terminalId)
-    // A default-width pty wraps long lines (JSON rows, YAML questions), corrupting captured
-    // output; make the bridge terminal as wide as a pty allows.
-    await this.exec('stty cols 4096 2>/dev/null || true', created.terminalId, 3_000).catch(() => undefined)
+    await this.widen(created.terminalId)
     return created.terminalId
   }
 

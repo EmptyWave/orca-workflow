@@ -40,6 +40,20 @@ function asArray<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : []
 }
 
+/** The concise CLI view packs arrays (deps, options) as JSON strings; accept both shapes. */
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String)
+  if (typeof value === 'string' && value.trim().startsWith('[')) {
+    try {
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed) ? parsed.map(String) : []
+    } catch {
+      return []
+    }
+  }
+  return []
+}
+
 function field(record: Record<string, unknown>, ...names: string[]): unknown {
   for (const name of names) {
     if (record[name] !== undefined && record[name] !== null) return record[name]
@@ -108,7 +122,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         id,
         title: String(field(row, 'taskTitle', 'title') ?? ''),
         status: dispatch ? 'dispatched' : readyIds.has(id) ? 'ready' : normalizeStatus(rawStatus),
-        deps: asArray(field(row, 'deps')) .map(String),
+        deps: stringList(field(row, 'deps')),
         dispatchId: dispatch,
         agent: null
       }
@@ -127,7 +141,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         taskId,
         taskTitle: tasks.find((t) => t.id === taskId)?.title ?? taskId,
         question: String(field(row, 'question') ?? ''),
-        options: asArray(field(row, 'options')).map(String),
+        options: stringList(field(row, 'options')),
         status: String(field(row, 'status') ?? 'pending') === 'resolved' ? 'resolved' : 'pending'
       }
     })
@@ -536,7 +550,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     } catch (error) {
       const cached = await orca.storage.get('state.snapshot')
       if (cached && typeof cached === 'object') {
-        return { ...(cached as WfSnapshot), at: Date.now(), error: message(error) }
+        // Honest staleness: the bridge failed, so say so instead of passing cache off as live.
+        return { ...(cached as WfSnapshot), at: Date.now(), error: `мост недоступен (${message(error)}) — показан последний снимок` }
       }
       return { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: message(error) }
     }
