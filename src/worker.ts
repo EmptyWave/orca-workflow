@@ -1619,21 +1619,6 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('bridge.debug', async () => bridge.stats())
 
-  // TEMP(shot): flip chosen tasks to 'dispatched' in the cached snapshot for a screenshot.
-  orca.panels.handle('shot.stage', async ({ runId, titles }) => {
-    const cached = await orca.storage.get('state.snapshot').catch(() => null)
-    if (!cached || typeof cached !== 'object') return { ok: false, error: 'нет кэша' }
-    const snap = cached as WfSnapshot
-    if (snap.run?.runId !== runId) return { ok: false, error: 'кэш другого рана' }
-    const want = Array.isArray(titles) ? titles.map(String) : []
-    snap.tasks = snap.tasks.map((t) => (want.some((x) => t.title.startsWith(x)) && t.status !== 'succeeded'
-      ? { ...t, status: 'dispatched', dispatchId: t.dispatchId ?? 'ctx_staged' }
-      : t))
-    snap.at = Date.now()
-    await orca.storage.set('state.snapshot', snap)
-    orca.panels.post('state.changed', { at: snap.at, pendingGates: 0, readyTasks: 0 })
-    return { ok: true }
-  })
 
 }
 
