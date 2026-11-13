@@ -1,33 +1,36 @@
-// The CLI bridge: a dedicated background terminal in which the worker runs `orca` commands
-// and captures their output between unique markers. Direct orchestration plugin APIs do not
-// exist, and "a trusted-worker can act as the orca CLI does" over exactly these terminal calls.
+// The CLI bridge: Orca has no plugin API for orchestration, so the worker runs `orca`
+// commands and captures output between unique markers. Each command runs in its own
+// short-lived terminal created straight in the pinned project's workspace — creation is not
+// focus-scoped (unlike terminal input, which Orca limits to the active worktree), the
+// terminal exits when the command is done, and nothing persistent is left behind.
+import { homedir } from 'node:os'
 import type { OrcaWorkerApi } from 'orca/worker'
 
-const READ_INTERVAL_MS = 120
-// 12s keeps probe + one zombie-retry inside the 30s plugin.request budget.
 const DEFAULT_TIMEOUT_MS = 12_000
+const READ_INTERVAL_MS = 120
 const READ_LINES = 400
 // A host call can hang forever (e.g. workspace.readContext with no focusable workspace);
-// every call is raced against a deadline so the bridge queue can never get stuck on one.
+// every call is raced against a deadline so the bridge can never get stuck on one.
 const HOST_CALL_MS = 5_000
 
 export class BridgeError extends Error {
   constructor(
     message: string,
-    readonly code: 'bridge_timeout' | 'cli_error' | 'bad_json' | 'no_terminal'
+    readonly code: 'bridge_timeout' | 'cli_error' | 'bad_json' | 'no_terminal' | 'not_focused'
   ) {
     super(message)
   }
 }
 
 export class Bridge {
-  private terminal: string | null = null
-  private widenedFor: string | null = null
-  /** Markers must never repeat across worker restarts: a fresh worker that re-uses a terminal
-   *  would otherwise "capture" the previous worker's stale markers from its buffer and adopt
-   *  a dead terminal as live. A random seed makes collision practically impossible. */
+  /** The project the bridge runs commands in. Terminals belong to the project's own
+   *  workspace — never to whatever workspace happens to be focused. */
+  private pinPath: string | null = null
+  private wsCache: Record<string, string> = {}
+  /** Markers must never repeat across worker restarts, or a reused pty's stale buffer
+   *  could be mistaken for a fresh answer. */
   private counter = Math.floor(Math.random() * 900_000) + 100_000
-  private queue: Promise<unknown> = Promise.resolve()
+  private lastTerminal: string | null = null
   private inflight: { command: string; terminal: string; since: number } | null = null
   private sent = 0
   private finished = 0
@@ -36,136 +39,86 @@ export class Bridge {
 
   /** What the bridge is doing right now — the debugging window into a stuck queue. */
   stats(): { terminal: string | null; counter: number; sent: number; finished: number; inflight: typeof this.inflight } {
-    return { terminal: this.terminal, counter: this.counter, sent: this.sent, finished: this.finished, inflight: this.inflight }
+    return { terminal: this.lastTerminal, counter: this.counter, sent: this.sent, finished: this.finished, inflight: this.inflight }
   }
 
-  /** A host call that must answer: hangs surface as bridge timeouts, never as a stuck queue. */
+  /** A host call that must answer: hangs surface as bridge errors, never a stuck worker. */
   private async call<T>(method: string, params: unknown, timeoutMs = HOST_CALL_MS): Promise<T> {
     return Promise.race([
       this.orca.host.call<T>(method, params),
       sleep(timeoutMs).then(() => {
-        throw new BridgeError(`host-вызов ${method} не ответил за ${timeoutMs} мс`, 'bridge_timeout')
+        throw new BridgeError(`host-вызов ${method} не ответил за ${timeoutMs} мс`, 'no_terminal')
       })
     ])
   }
 
-  /** A default-width pty wraps long lines (JSON rows, YAML questions), corrupting captured
-   *  output; widen the terminal once — whether just adopted or freshly created. */
-  private async widen(terminalId: string): Promise<void> {
-    if (this.widenedFor === terminalId) return
-    this.widenedFor = terminalId
-    await this.exec('stty cols 4096 2>/dev/null || true', terminalId, 3_000).catch(() => undefined)
+  /** The bridge belongs to one project at a time: the worker re-pins as the panel's scope
+   *  moves (project detection, run selection, template source). */
+  pin(projectPath: string | null): void {
+    this.pinPath = projectPath
   }
 
-  /** The terminal handle. Orca scopes plugin terminal input to the FOCUSED workspace's
-   *  terminals, so the bridge must live there and follow focus: adopt a live bridge titled
-   *  ours among the focused workspace's terminals, else create one in that workspace. */
-  async ensure(): Promise<string> {
-    if (this.terminal) return this.terminal
-    const context = await this.call<{ terminals?: Array<{ id: string; title?: string }> }>('workspace.readContext', undefined)
-    if (!context) {
-      throw new BridgeError('нет фокусного воркспейса — открой workspace проекта в Orca', 'no_terminal')
-    }
-    // A dead pty still answers terminal.read with stale output, so probe with a real command;
-    // cap the attempts so a pile-up of corpses cannot eat the whole request budget.
-    const candidates = context.terminals.filter((t) => t.title === 'workflow-view bridge')
-    for (const candidate of candidates.slice(0, 3)) {
-      const probe = await this.exec('echo __WF_ALIVE__', candidate.id, 2_500).catch(() => null)
-      if (probe !== null) {
-        this.terminal = candidate.id
-        await this.widen(candidate.id)
-        return candidate.id
-      }
-    }
-    const workspaceId = await this.resolveFocusedWorkspace(context)
-    const created = await this.call<{ terminalId: string }>('terminal.create', {
-      workspaceId,
-      title: 'workflow-view bridge'
-    }, 10_000)
-    this.terminal = created.terminalId
-    await this.widen(created.terminalId)
-    await this.reapStrayBridges()
-    return created.terminalId
-  }
-
-  /** readContext names the focused workspace but not its id; find it in the full list. */
-  private async resolveFocusedWorkspace(context: { branch: string; displayName: string }): Promise<string> {
-    const list = await this.call<{ workspaces: Array<{ id: string; name: string; branch?: string }> }>('workspace.list', undefined)
-    const byName = list.workspaces.find((w) => w.name === context.displayName)
-    const ws = byName ?? (context.branch ? list.workspaces.find((w) => w.branch === context.branch) : undefined)
-    if (!ws) {
-      throw new BridgeError(`воркспейс «${context.displayName}» не найден в списке воркспейсов Orca`, 'no_terminal')
-    }
-    return ws.id
-  }
-
-  /** Adopt-or-create leaves older bridges behind — in other workspaces, other focus eras. A
-   *  live bridge reaps its same-titled siblings everywhere, so they cannot pile up. Only ever
-   *  terminals titled exactly ours — never a person's. */
-  private async reapStrayBridges(): Promise<void> {
-    if (!this.terminal) return
-    try {
-      const out = await this.exec('orca terminal list --json', this.terminal, 5_000)
-      const listing = parseJson<{ result?: { terminals?: Array<{ handle?: string; title?: string }> } }>(out)
-      for (const t of listing.result?.terminals ?? []) {
-        if (t.title !== 'workflow-view bridge' || !t.handle || t.handle === this.terminal) continue
-        await this.exec(`orca terminal close --terminal ${t.handle} || true`, this.terminal, 5_000).catch(() => undefined)
-      }
-    } catch {
-      // reaping is best-effort; a stray bridge is harmless compared to a dead one
-    }
-  }
-
-  /** The live bridge handle, or null while none has been ensured. */
+  /** The last one-shot terminal (informational, for the settings panel). */
   current(): string | null {
-    return this.terminal
+    return this.lastTerminal
   }
 
   /** Runs one shell command; resolves with everything it printed between the markers.
-   *  A timeout means the terminal went zombie: reset it and retry once on a fresh one. */
-  async run(command: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<string> {
+   *  A timeout costs one retry — a fresh terminal is created either way. `unpinned` runs
+   *  it in whatever workspace is focused: machine-global commands (the template library)
+   *  must not depend on the project being focused. */
+  async run(command: string, timeoutMs = DEFAULT_TIMEOUT_MS, opts?: { unpinned?: boolean }): Promise<string> {
     try {
-      return await this.enqueue(command, timeoutMs)
+      return await this.exec(command, timeoutMs, opts?.unpinned === true)
     } catch (error) {
       if (error instanceof BridgeError && error.code === 'bridge_timeout') {
-        await this.reset()
-        return await this.enqueue(command, timeoutMs)
+        return await this.exec(command, timeoutMs, opts?.unpinned === true)
       }
       throw error
     }
   }
 
-  private enqueue(command: string, timeoutMs: number): Promise<string> {
-    const runOnce = async (): Promise<string> => this.exec(command, await this.ensure(), timeoutMs)
-    const next = this.queue.then(runOnce, runOnce)
-    this.queue = next.catch(() => undefined)
-    return next
-  }
-
-  private async exec(command: string, terminalId: string, timeoutMs: number): Promise<string> {
+  private async exec(command: string, timeoutMs: number, unpinned = false): Promise<string> {
     const n = ++this.counter
     const begin = `__WF${n}B__`
     const end = `__WF${n}E`
-    this.inflight = { command: command.slice(0, 160), terminal: terminalId, since: Date.now() }
+    this.inflight = { command: command.slice(0, 160), terminal: '?', since: Date.now() }
     this.sent += 1
     try {
-      await this.call('terminal.sendText', {
-        terminalId,
-        text: `echo "${begin}"; ${command}; echo "${end}_$?__"`,
-        enter: true
-      })
-      const deadline = Date.now() + timeoutMs
-      // A send the terminal never echoed means Orca dropped the input (focus scoping) — no
-      // point waiting the full timeout. The begin echo appears within a second of a real
-      // delivery; a fresh pty gets more slack for its first shell start.
-      const deliveryDeadline = Date.now() + (this.widenedFor === terminalId ? 4_500 : 9_000)
+      const workspaceId = await this.resolveWorkspace(unpinned)
+      const created = await this.call<{ terminalId: string }>('terminal.create', {
+        workspaceId,
+        title: 'workflow-view bridge',
+        // `exit` ends the pty with the command — the terminal cleans itself up.
+        command: `stty cols 4096 2>/dev/null; echo "${begin}"; ${command}; echo "${end}_$?__"; exit`
+      }, 10_000)
+      this.lastTerminal = created.terminalId
+      this.inflight = { command: command.slice(0, 160), terminal: created.terminalId, since: Date.now() }
+      // Orca defers a background terminal's command until its workspace becomes active: an
+      // empty pty means the project is not focused right now — fail fast instead of burning
+      // the whole timeout, and say so in terms a human can act on.
+      const deliveryDeadline = Date.now() + 4_500
       let delivered = false
+      let emptyReads = 0
+      const deadline = Date.now() + timeoutMs
       for (;;) {
         await sleep(READ_INTERVAL_MS)
-        const read = await this.call<{ lines: string[] }>('terminal.read', { terminalId, maxLines: READ_LINES })
+        const read = await this.call<{ lines: string[] }>('terminal.read', { terminalId: created.terminalId, maxLines: READ_LINES })
         if (!delivered && read.lines.some((line) => line.trim() === begin)) delivered = true
         if (!delivered && Date.now() > deliveryDeadline) {
-          throw new BridgeError(`мост: ввод не дошёл до терминала (смена фокуса?): ${tail(command, 120)}`, 'bridge_timeout')
+          throw new BridgeError(`воркспейс проекта не в фокусе — вернись в него (или обнови позже): ${tail(command, 100)}`, 'not_focused')
+        }
+        // A terminal that delivered its begin marker and then reads back empty is dead
+        // (focus flipped, Orca reaped the background pty): reading it returns nothing
+        // forever, so fail now and let run() retry on a fresh one instead of burning
+        // the whole timeout.
+        if (delivered && read.lines.filter((line) => line.trim() !== '').length === 0) {
+          emptyReads += 1
+          if (emptyReads >= 2) {
+            throw new BridgeError(`терминал моста исчез посреди команды (смена фокуса?) — повтор: ${tail(command, 100)}`, 'bridge_timeout')
+          }
+        } else {
+          emptyReads = 0
         }
         const found = capture(read.lines, n)
         if (found) {
@@ -175,7 +128,8 @@ export class Bridge {
           return found.output
         }
         if (Date.now() > deadline) {
-          throw new BridgeError(`мост: таймаут ${timeoutMs} мс для команды: ${tail(command, 120)}`, 'bridge_timeout')
+          const seen = read.lines.filter((l) => l.trim() !== '').length
+          throw new BridgeError(`мост: таймаут ${timeoutMs} мс (строк в буфере: ${seen}; begin ${delivered ? 'виден' : 'НЕ виден'}): ${tail(command, 100)}`, 'bridge_timeout')
         }
       }
     } finally {
@@ -184,17 +138,59 @@ export class Bridge {
     }
   }
 
-  /** Forgets the bridge; the next command adopts or creates one in the then-focused workspace.
-   *  Purely in-memory on purpose: a storage call here could hang and, from inside the retry
-   *  path of run(), deadlock the whole command queue. */
+  private wsListAt = 0
+  private wsList: { workspaces: Array<{ id: string; kind: string; name: string; path: string; branch?: string | null; project?: string | null }> } | null = null
+
+  private async workspaces(): Promise<NonNullable<typeof this.wsList>> {
+    if (this.wsList && Date.now() - this.wsListAt < 30_000) return this.wsList
+    this.wsList = await this.call('workspace.list', undefined)
+    this.wsListAt = Date.now()
+    return this.wsList
+  }
+
+  /** Where one-shots live: the pinned project's workspace when pinned (its main checkout,
+   *  else any worktree of it), else the focused workspace. A pinned project whose REPO is
+   *  not the focused one refuses up front — Orca defers a background terminal's command
+   *  until its workspace becomes active, so creating one would only leave junk behind.
+   *  Repo-level comparison: a worktree of the same project counts as in-focus. */
+  private async resolveWorkspace(unpinned: boolean): Promise<string> {
+    const list = await this.workspaces()
+    if (this.pinPath && !unpinned) {
+      const ws = list.workspaces.find((w) => w.path === this.pinPath)
+        ?? list.workspaces.find((w) => w.path.startsWith(`${this.pinPath}/`))
+      if (!ws) {
+        throw new BridgeError(`воркспейс проекта ${this.pinPath} не открыт в Orca — открой его, чтобы мост работал`, 'no_terminal')
+      }
+      const focused = await this.call<{ branch: string; displayName: string } | null>('workspace.readContext', undefined, 3_000).catch(() => null)
+      if (focused) {
+        const active = list.workspaces.find((w) => w.name === focused.displayName)
+          ?? (focused.branch ? list.workspaces.find((w) => w.branch === focused.branch) : undefined)
+        const otherRepo = active && active.project && ws.project && active.project !== ws.project
+        if (otherRepo) {
+          throw new BridgeError(`проект не в фокусе (сейчас активен «${focused.displayName}») — вернись в его воркспейс или обнови позже`, 'not_focused')
+        }
+      }
+      this.wsCache[this.pinPath] = ws.id
+      return ws.id
+    }
+    const context = await this.call<{ branch: string; displayName: string } | null>('workspace.readContext', undefined).catch(() => null)
+    const ws = context
+      ? list.workspaces.find((w) => w.name === context.displayName) ?? (context.branch ? list.workspaces.find((w) => w.branch === context.branch) : undefined)
+      : undefined
+    if (!ws) {
+      throw new BridgeError('нет фокусного воркспейса — открой workspace проекта в Orca', 'no_terminal')
+    }
+    return ws.id
+  }
+
+  /** Forgets the workspace resolution (a manual reset through the settings panel). */
   async reset(): Promise<void> {
-    this.terminal = null
-    this.widenedFor = null
+    this.wsCache = {}
   }
 
   /** A command that prints one JSON document; parsed and returned. */
-  async json<T>(command: string, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<T> {
-    const output = await this.run(command, timeoutMs)
+  async json<T>(command: string, timeoutMs = DEFAULT_TIMEOUT_MS, opts?: { unpinned?: boolean }): Promise<T> {
+    const output = await this.run(command, timeoutMs, opts)
     return parseJson<T>(output)
   }
 }
@@ -253,9 +249,8 @@ export function shellPath(path: string): string {
   return `'${path.replace(/'/g, "'\\''")}'`
 }
 
-/** Expands a leading ~ against the bridge shell's $HOME (used for settings like libraryDir). */
-export async function expandHome(bridge: Bridge, path: string): Promise<string> {
+/** Expands a leading ~ against the local home directory — no bridge round-trip needed. */
+export function expandHome(path: string): string {
   if (!path.startsWith('~/')) return path
-  const home = (await bridge.run('echo $HOME')).trim()
-  return `${home}/${path.slice(2)}`
+  return `${homedir()}/${path.slice(2)}`
 }

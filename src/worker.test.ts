@@ -29,9 +29,9 @@ const b64 = (s: string): string => {
 }
 
 function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = {}) {
-  let sends = 0
   let created = 0
   let lastCommand = ''
+  const termCommands = new Map<string, string>()
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
     const dir = LS_DIR
@@ -167,24 +167,31 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = 
         terminals: [opts.focus ? { id: opts.focus, title: 'Terminal' } : { id: 't1', title: 'workflow-view bridge' }]
       },
       'workspace.list': {
-        workspaces: [{ id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/x/biz.erp', branch: 'master', project: 'p', hostId: 'local' }],
+        workspaces: [
+          { id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp', branch: 'master', project: 'repo:1', hostId: 'local' },
+          { id: 'w2', kind: 'worktree', name: 'other', path: '/x/other', branch: 'feature/x', project: 'repo:2', hostId: 'local' },
+          { id: 'w3', kind: 'worktree', name: 'momento', path: '/Users/tester/orca/workspaces/biz.erp/momento', branch: 'feat/momento', project: 'repo:1', hostId: 'local' }
+        ],
         truncated: false
       },
       'editor.open': { opened: true },
-      'terminal.create': { terminalId: 't1' },
       'agent.launch': { terminalId: 't-coord' },
-      'terminal.sendText': (params: { text: string }) => {
-        sends += 1
-        lastCommand = params.text
-        return { accepted: true }
+      // The one-shot bridge: every command arrives as terminal.create with the full shell
+      // line; reads answer per terminal, so parallel commands never mix their markers.
+      'terminal.create': (params: { command?: string }) => {
+        const id = `t_${++created}`
+        if (params.command) termCommands.set(id, params.command)
+        lastCommand = params.command ?? ''
+        return { terminalId: id }
       },
-      'terminal.read': () => {
-        // Echo the markers the sent command actually carries — the bridge's counter is
-        // randomly seeded, so the mock must parse it instead of counting sends.
-        const marker = lastCommand.match(/echo "__WF(\d+)B__"/)
-        const n = marker ? marker[1] : String(sends)
+      'terminal.read': (params: { terminalId: string }) => {
+        const cmd = termCommands.get(params.terminalId) ?? lastCommand
+        // Echo the markers the command actually carries — the bridge's counter is randomly
+        // seeded, so the mock must parse it instead of counting creates.
+        const marker = cmd.match(/echo "__WF(\d+)B__"/)
+        const n = marker ? marker[1] : '0'
         return {
-          lines: [`__WF${n}B__`, canned(lastCommand), `__WF${n}E_0__`],
+          lines: [`__WF${n}B__`, canned(cmd), `__WF${n}E_0__`],
           truncated: false
         }
       },
@@ -264,7 +271,7 @@ test('template.instantiate создаёт Run, задачи и гейты бар
     assert.equal(testerTasks.length, 2, 'test-api и test-ui в конфиге')
     for (const cfg of testerTasks) assert.deepEqual(cfg.fallback, ['zcode', 'kimi'], `fallback ${cfg.stepId}`)
     assert.equal(job.runId, 'run_2')
-    const commands = host.callsOf('terminal.sendText').map((c) => (c as { text: string }).text)
+    const commands = host.callsOf('terminal.create').map((c) => (c as { command?: string }).command ?? '')
     // plan, research(optional), review, test-api, test-ui, commit — все материализуются.
     assert.equal(commands.filter((c) => c.includes('task-create')).length, 6, 'все юниты')
     assert.ok(commands.some((c) => c.includes('gate-create')), 'гейт commit создан')
@@ -289,10 +296,10 @@ test('settings.save нормализует и пишет настройки; bri
     })
     const read = await worker.request('settings.get')
     assert.equal(read.refreshMs, 2000)
+    // Мост одноразовый: сброс просто чистит кэш воркспейсов, лишнего состояния нет.
     await worker.request('bridge.reset')
-    assert.equal((host.data().storage['bridge.terminalId'] ?? null), null)
     const info = await worker.request('bridge.info')
-    assert.equal(info.terminalId, 't1')
+    assert.equal(info.terminalId, null)
   }))
 
 test('templates.updated разбирает YAML редактора без моста', () =>
@@ -337,7 +344,7 @@ test('task.retry сбрасывает шаг и его хвост, автопи�
     const answer = await worker.request('task.retry', { runId: 'run_1', taskId: 'task_a' })
     assert.equal(answer.ok, true)
     assert.deepEqual([...answer.reset].sort(), ['task_a', 'task_b'], 'шаг и зависимый хвост')
-    const commands = host.callsOf('terminal.sendText').map((c) => (c as { text: string }).text)
+    const commands = host.callsOf('terminal.create').map((c) => (c as { command?: string }).command ?? '')
     const updates = commands.filter((c) => c.includes('task-update'))
     assert.equal(updates.length, 2, 'по одному сбросу на задачу')
     assert.ok(updates.every((c) => c.includes('--status pending')), 'статус pending')
@@ -350,32 +357,34 @@ test('run.meta.set привязывает ран к проекту, runs.list е
     assert.equal(runs.runs[0].projectPath, '/x/biz.erp')
   }))
 
-test('мост следует за фокусным воркспейсом', () =>
+test('мост закреплён в воркспейсе проекта и не следует за фокусом', () =>
   withWorker(async (worker, host) => {
-    const before = await worker.request('bridge.info')
-    assert.equal(before.terminalId, 't1', 'мост усыновлён из фокусного воркспейса')
-    // Фокус ушёл в воркспейс без моста: событие скидывает мост, следующий запрос создаёт
-    // терминал уже в новом фокусном воркспейсе.
-    host.respond('workspace.readContext', {
-      branch: 'feature/x',
-      displayName: 'other',
-      terminals: []
-    })
-    host.respond('workspace.list', {
-      workspaces: [
-        { id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/x/biz.erp', branch: 'master', project: 'p', hostId: 'local' },
-        { id: 'w2', kind: 'worktree', name: 'other', path: '/x/other', branch: 'feature/x', project: 'p', hostId: 'local' }
-      ],
-      truncated: false
-    })
-    host.respond('terminal.create', { terminalId: 't2' })
-    await worker.emit('workspace.changed', {
-      context: { branch: 'feature/x', displayName: 'other', terminals: [] }
-    })
-    const after = await worker.request('bridge.info')
-    assert.equal(after.terminalId, 't2', 'после смены фокуса мост пересоздан')
-    const created = host.callsOf('terminal.create').at(-1) as { workspaceId: string }
-    assert.equal(created.workspaceId, 'w2', 'терминал создан в новом фокусном воркспейсе')
+    // Пин приходит вместе с проектом: детект резолвит biz.erp.
+    await worker.request('project.current')
+    // Дальше каждая команда идёт одноразовым терминалом в воркспейсе проекта.
+    await worker.request('runs.list')
+    let created = host.callsOf('terminal.create') as Array<{ workspaceId: string }>
+    assert.ok(created.length > 0)
+    assert.ok(created.every((c) => c.workspaceId === 'w1'), 'терминалы создаются в воркспейсе проекта, не в фокусном')
+    // Фокус ушёл в другой воркспейс — команды отклоняются сразу, БЕЗ создания терминала:
+    // Orca откладывает команду фонового терминала до активации воркспейса, так что
+    // создавать его впустую — только мусорить.
+    host.respond('workspace.readContext', { branch: 'feature/x', displayName: 'other', terminals: [] })
+    await worker.emit('workspace.changed', { context: { branch: 'feature/x', displayName: 'other', terminals: [] } })
+    let before = created.length
+    const offFocus = await worker.request('runs.list')
+    assert.match(offFocus.error, /проект не в фокусе/, 'команда в чужом репо отклонена с внятной ошибкой')
+    created = host.callsOf('terminal.create') as Array<{ workspaceId: string }>
+    assert.equal(created.length, before, 'новых терминалов не создано')
+    // Фокус в worktree того же репо — это всё ещё фокус проекта: команда проходит.
+    host.respond('workspace.readContext', { branch: 'feat/momento', displayName: 'momento', terminals: [] })
+    await worker.emit('workspace.changed', { context: { branch: 'feat/momento', displayName: 'momento', terminals: [] } })
+    before = created.length
+    const inWorktree = await worker.request('runs.list')
+    assert.equal(inWorktree.error, null, 'worktree того же репо считается фокусом проекта')
+    created = host.callsOf('terminal.create') as Array<{ workspaceId: string }>
+    assert.equal(created.length, before + 1, 'команда прошла одноразовым терминалом')
+    assert.equal(created[created.length - 1].workspaceId, 'w1', 'терминал всё равно в воркспейсе проекта')
   }))
 
 test('projects.list отдаёт git-репозитории с путями', () =>
@@ -402,7 +411,7 @@ test('project.current вне проекта держит скоуп на про�
 
 test('template.edit открывает файл шаблона в Orca', () =>
   withWorker(async (worker, host) => {
-    await worker.request('template.edit', { projectPath: '/x/biz.erp', templateId: 'demo' })
+    await worker.request('template.edit', { projectPath: '/Users/tester/PhpstormProjects/biz.erp', templateId: 'demo' })
     const opens = host.callsOf('editor.open') as Array<{ workspaceId: string; path: string }>
     assert.equal(opens.length, 1)
     assert.equal(opens[0].workspaceId, 'w1')
@@ -419,7 +428,7 @@ test('gate.resolve и task.start доходят до CLI с флагами', () 
       effort: 'high',
       worktree: 'name:ycl-104-momento'
     })
-    const commands = host.callsOf('terminal.sendText').map((c) => (c as { text: string }).text)
+    const commands = host.callsOf('terminal.create').map((c) => (c as { command?: string }).command ?? '')
     const resolve = commands.find((c) => c.includes('gate-resolve'))
     assert.ok(resolve?.includes("'approve'"), 'резолюция передана')
     const start = commands.find((c) => c.includes('worker-start'))

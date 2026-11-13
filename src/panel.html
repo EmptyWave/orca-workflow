@@ -251,7 +251,7 @@
           const ids = visibleRuns().visible.map((r) => r.runId)
           if (S.runId && !ids.includes(S.runId)) S.runId = null
           if (!S.runId && ids.length > 0) S.runId = ids[0]
-        } catch (e) { S.runs = []; setNotice('Запуски не читаются: ' + esc(e.message || e)) }
+        } catch (e) { if (!S.runs || S.runs.length === 0) S.runs = []; setNotice('Запуски не читаются: ' + esc(e.message || e)) }
         render()
       }
       async function loadState(force) {
@@ -303,7 +303,7 @@
         S.notice = null
         delete loadingSince['шаблоны']
         if (answer.templates.length > 0 && !answer.templates.some((t) => t.id === S.tplId)) S.tplId = answer.templates[0].id
-        } catch (e) { S.templates = []; setNotice('Шаблоны не читаются: ' + esc(e.message || e)) }
+        } catch (e) { if (!S.templates || S.templates.length === 0) S.templates = []; setNotice('Шаблоны не читаются: ' + esc(e.message || e)) }
         finally { tplInFlight = false }
         render()
       }
