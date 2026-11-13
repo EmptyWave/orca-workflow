@@ -26,7 +26,12 @@ async function spawn(command: string, timeoutMs: number): Promise<string> {
   return new Promise((resolve, reject) => {
     execFile('bash', ['-c', command], { timeout: timeoutMs, maxBuffer: SPAWN_BUFFER }, (error, stdout, stderr) => {
       if (error) {
-        reject(new BridgeError(`${String(error.message).slice(0, 260)}${stderr ? ' | ' + tail(stderr, 200) : ''}`, 'cli_error'))
+        // The human-readable message is truncated, but the FULL stderr rides on the error:
+        // retry matchers (no_active_sender_terminal & co) must survive long commands whose
+        // text pushes the CLI's error code out of any fixed-size slice.
+        const wrapped = new BridgeError(`${String(error.message).slice(0, 260)}${stderr ? ' | ' + tail(stderr, 200) : ''}`, 'cli_error')
+        ;(wrapped as BridgeError & { stderr?: string }).stderr = stderr
+        reject(wrapped)
       } else {
         resolve(stdout)
       }
@@ -80,11 +85,13 @@ export class Bridge {
       try {
         return await impl(command, timeoutMs)
       } catch (error) {
-        const text = error instanceof Error ? error.message : String(error)
-        if (/no_active_sender_terminal/.test(text)) {
+        const text = [error instanceof Error ? error.message : String(error), (error as { stderr?: string }).stderr ?? '']
+          .join(' ')
+          .toLowerCase()
+        if (text.includes('no_active_sender_terminal')) {
           return await impl(`${command} --from ${await this.fromTerminal()}`, timeoutMs)
         }
-        if (/stable_pane_required/.test(text)) {
+        if (text.includes('stable_pane_required')) {
           this.fromHandle = null
           return await impl(`${command} --from ${await this.fromTerminal()}`, timeoutMs)
         }
