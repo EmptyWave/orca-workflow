@@ -42,7 +42,17 @@ export class Bridge {
   private sent = 0
   private finished = 0
 
-  constructor(_orca: OrcaWorkerApi) {}
+  constructor(private readonly orca: OrcaWorkerApi) {}
+
+  /** A host call that must answer: hangs surface as bridge errors, never a stuck worker. */
+  private async host<T>(method: string, params: unknown, timeoutMs = 5_000): Promise<T> {
+    return Promise.race([
+      this.orca.host.call<T>(method, params),
+      sleep(timeoutMs).then(() => {
+        throw new BridgeError(`host-вызов ${method} не ответил за ${timeoutMs} мс`, 'no_terminal')
+      })
+    ])
+  }
 
   stats(): { terminal: string | null; counter: number; sent: number; finished: number; inflight: typeof this.inflight } {
     return { terminal: this.fromHandle, counter: 0, sent: this.sent, finished: this.finished, inflight: this.inflight }
@@ -86,10 +96,28 @@ export class Bridge {
     }
   }
 
-  /** A long-sleeping terminal in the project's workspace whose handle serves as the
-   *  mutation sender identity; created through the CLI, so no focus is involved. */
+  /** A long-sleeping terminal whose handle serves as the mutation sender identity.
+   *  Created through the HOST api so it stays a background terminal — no visible tab pops
+   *  open in the user's workspace (a CLI `orca terminal create` would show one); the CLI
+   *  path remains the fallback when the host cannot resolve the project's workspace. */
   private async fromTerminal(): Promise<string> {
     if (this.fromHandle) return this.fromHandle
+    try {
+      const ws = await this.helperWorkspace()
+      if (ws) {
+        const created = await this.host<{ terminalId: string }>('terminal.create', {
+          workspaceId: ws,
+          title: 'workflow-view-runner',
+          command: 'sleep 86400'
+        }, 10_000)
+        if (created.terminalId) {
+          this.fromHandle = created.terminalId
+          return created.terminalId
+        }
+      }
+    } catch {
+      // fall through to the CLI path
+    }
     const impl = spawnHooks.exec ?? spawn
     const worktree = this.pinPath ? ` --worktree path:${this.pinPath}` : ''
     const out = await impl(
@@ -103,6 +131,15 @@ export class Bridge {
     }
     this.fromHandle = handle
     return handle
+  }
+
+  /** The pinned project's workspace id from the host's workspace list, if resolvable. */
+  private async helperWorkspace(): Promise<string | null> {
+    if (!this.pinPath) return null
+    const list = await this.host<{ workspaces: Array<{ id: string; path: string }> }>('workspace.list', undefined)
+    const ws = list.workspaces.find((w) => w.path === this.pinPath)
+      ?? list.workspaces.find((w) => w.path.startsWith(`${this.pinPath}/`))
+    return ws?.id ?? null
   }
 
   /** Closes the helper terminal and forgets it (deactivate, manual reset). */

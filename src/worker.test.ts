@@ -191,6 +191,8 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = 
       },
       'editor.open': { opened: true },
       'agent.launch': { terminalId: 't-coord' },
+      // Фоновый терминал-помощник для --from создаётся host-вызовом (невидимым).
+      'terminal.create': { terminalId: 't_helper' },
       'statusBar.update': { ok: true }
     }
   })
