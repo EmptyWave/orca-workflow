@@ -426,6 +426,11 @@
               catch (e) { S.reports[arg] = 'ошибка: ' + (e.message || e) }
               render()
             },
+            'resume-pilot': async () => {
+              setBusy('будим автопилот')
+              try { await req('pilot.resume', { runId: S.runId }, 30000); await loadState() }
+              catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+            },
             'retry-step': async () => {
               setBusy('ретрай с шага')
               try {
@@ -502,6 +507,18 @@
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
         const runTitle = snap.run ? `<div class="tiny muted" style="margin:6px 0 8px">${esc(snap.run.objective)}</div>` : ''
+        const counts = (snap.tasks || []).reduce((acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc }, {})
+        const done = counts.succeeded || 0, total = (snap.tasks || []).length
+        let pilotBox = ''
+        if (snap.pilot) {
+          if (snap.pilot.stopped) {
+            pilotBox = `<div class="callout warning">Автопилот остановлен: ${esc(snap.pilot.stopped)} <button class="btn mini" data-act="resume-pilot">разбудить</button></div>`
+          } else if (snap.pilot.on) {
+            pilotBox = `<div class="tiny muted" style="margin:2px 0 8px">Автопилот ведёт конвейер · шагов ${done}/${total}${(counts.dispatched || 0) > 0 ? ' · работает' : ''}</div>`
+          } else {
+            pilotBox = `<div class="tiny muted" style="margin:2px 0 8px">Автопилот выключен в настройках · шагов ${done}/${total}</div>`
+          }
+        }
 
         const gates = (snap.gates || []).filter((g) => g.status === 'pending')
         const gateByTask = new Map(gates.map((g) => [g.taskId, g]))
@@ -532,7 +549,8 @@
             const kids = kidsOf.get(t.parentTaskId) || []
             for (const k of kids) emitted.add(k.id)
             const agg = aggregate(kids)
-            stepRows.push(`<div class="blockhead">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — параллельные подшаги</div>`)
+            const doneKids = kids.filter((k) => (eff.get(k.id) || { status: k.status }).status === 'succeeded').length
+            stepRows.push(`<div class="blockhead">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
             for (const k of kids) stepRows.push(stepRow(k, true))
             continue
           }
@@ -613,7 +631,7 @@
         }
 
         const jobCard = S.job && S.job.status !== 'done' ? `<div class="callout ${S.job.status === 'failed' ? 'danger' : ''}">${esc(S.job.error || 'поднятие рана: ' + (S.job.status || '…'))}</div>` : ''
-        return sel + runTitle + errorCallout + jobCard +
+        return sel + runTitle + pilotBox + errorCallout + jobCard +
           ((snap.tasks || []).length > 0 ? `<div class="card"><h2>Шаги</h2><div class="steps">${steps}</div></div>` : `<div class="empty">В этом ране нет шагов.</div>`)
       }
 

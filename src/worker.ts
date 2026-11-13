@@ -130,7 +130,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const at = Date.now()
     const runs = await listRuns()
     if (!runId) {
-      return { at, run: null, tasks: [], gates: [], workers: [], error: null }
+      return { at, run: null, tasks: [], gates: [], workers: [], error: null, pilot: null }
     }
     const run = runs.find((r) => r.runId === runId) ?? (runId ? { runId, objective: '', projectPath: null } : null)
     const [taskRows, readyRows, gateRows, workerRows] = await Promise.all([
@@ -216,7 +216,12 @@ export default function activate(orca: OrcaWorkerApi): void {
         state: String(field(row, 'state', 'status') ?? '?')
       })
     )
-    return { at, run, tasks: orderTasks(tasks), gates, workers, error: null }
+    const pilotState = await loadAuto(runId)
+    const autoPilotOn = (await orca.settings.get('autoPilot')) !== false
+    const pilot = pilotState
+      ? { on: autoPilotOn && !pilotState.stopped, stopped: pilotState.stopped ?? null, actions: pilotState.actions }
+      : null
+    return { at, run, tasks: orderTasks(tasks), gates, workers, error: null, pilot }
   }
 
   function normalizeStatus(raw: string): WfTask['status'] {
@@ -255,13 +260,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (refreshing || !everUsed) return
     refreshing = true
     try {
-      const storedRun = await orca.storage.get('state.selectedRunId')
+      const storedRun = (await orca.storage.get('html.runId')) ?? (await orca.storage.get('state.selectedRunId'))
       const runId = typeof storedRun === 'string' && storedRun !== '' ? storedRun : null
       let snap: WfSnapshot
       try {
         snap = await snapshot(runId)
       } catch (error) {
-        snap = { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: message(error) }
+        snap = { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: message(error), pilot: null }
       }
       const serialized = JSON.stringify(snap)
       if (serialized !== lastSnapshot) {
@@ -313,11 +318,22 @@ export default function activate(orca: OrcaWorkerApi): void {
     return stored && typeof stored === 'object' ? (stored as AutoState) : null
   }
 
+  let piloting = false
   async function autopilot(runId: string, snap: WfSnapshot): Promise<void> {
     const autopilotOn = await orca.settings.get('autoPilot')
-    if (autopilotOn === false) return
+    if (autopilotOn === false || piloting) return
     const state = await loadAuto(runId)
     if (!state || state.stopped) return
+    piloting = true
+    try {
+      await driveAutopilot(runId, snap, state)
+    } finally {
+      piloting = false
+    }
+  }
+
+  async function driveAutopilot(runId: string, snap: WfSnapshot, state: NonNullable<Awaited<ReturnType<typeof loadAuto>>>): Promise<void> {
+    {
     const byId = new Map(snap.tasks.map((t) => [t.id, t]))
     let acted = false
     const act = async (what: string, fn: () => Promise<unknown>): Promise<void> => {
@@ -326,9 +342,31 @@ export default function activate(orca: OrcaWorkerApi): void {
       state.actions += 1
       orca.log(`autopilot[${runId}]: ${what}`)
       try {
-        await fn()
+        try {
+          await fn()
+        } catch (error) {
+          // The bridge terminal was recreated since the run began: rebind it as the run's
+          // coordinator and retry the mutation once.
+          if (!message(error).includes('consumer_fenced')) throw error
+          orca.log(`autopilot[${runId}]: перепривязка моста к рану (run-use)`)
+          await bridge.run(`orca orchestration run-use --id ${shellQuote(runId)} ${await fromFlag()} --json`)
+          await fn()
+        }
       } catch (error) {
-        state.stopped = `ошибка: ${message(error)}`
+        const text = message(error)
+        if (/task_not_startable/.test(text)) {
+          // Another driver (a panel view, a parallel tick) already started it: success.
+          await saveAuto(runId, state)
+          return
+        }
+        if (/selector_not_found/.test(text)) {
+          // The named worktree is missing (its creation was the attempt that failed earlier):
+          // transient — recreate the worktree on the next tick instead of stopping the run.
+          state.firstStarted = false
+          await saveAuto(runId, state)
+          return
+        }
+        state.stopped = `ошибка: ${text}`
         await saveAuto(runId, state)
         return
       }
@@ -349,7 +387,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         const baseFlag = state.baseBranch ? ` --base-branch ${shellQuote(state.baseBranch)}` : ''
         await act(`старт ${cfg.stepId} (new worktree ${state.worktreeName})`, async () =>
           bridge.run(
-            `orca orchestration worker-start --task ${shellQuote(task.id)} --from ${from} --worktree new-top-level${repoFlag}${baseFlag} --name ${shellQuote(
+            `orca orchestration worker-start --task ${shellQuote(task.id)} ${from} --worktree new-top-level${repoFlag}${baseFlag} --name ${shellQuote(
               state.worktreeName
             )} --agent ${shellQuote(cfg.agent)}${cfg.model ? ` --model ${shellQuote(cfg.model)}` : ''}${
               cfg.model && cfg.effort ? ` --effort ${shellQuote(cfg.effort)}` : ''
@@ -361,7 +399,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
       await act(`старт ${cfg.stepId} (в ${worktree})`, async () =>
         bridge.run(
-          `orca orchestration worker-start --task ${shellQuote(task.id)} --from ${from} --worktree ${shellQuote(
+          `orca orchestration worker-start --task ${shellQuote(task.id)} ${from} --worktree ${shellQuote(
             `name:${state.worktreeName}`
           )} --agent ${shellQuote(cfg.agent)}${cfg.model ? ` --model ${shellQuote(cfg.model)}` : ''}${
             cfg.model && cfg.effort ? ` --effort ${shellQuote(cfg.effort)}` : ''
@@ -401,7 +439,7 @@ export default function activate(orca: OrcaWorkerApi): void {
             )
           }
           return bridge.run(
-            `orca orchestration worker-start --task ${shellQuote(review.devTaskId)} --from ${from2} --worktree ${shellQuote(
+            `orca orchestration worker-start --task ${shellQuote(review.devTaskId)} ${from2} --worktree ${shellQuote(
               `name:${state.worktreeName}`
             )} --agent ${shellQuote(devCfg?.agent ?? 'claude')} --json`,
             90_000
@@ -432,7 +470,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         const from3 = await fromFlag()
         await act(`перепроверка после правок`, async () =>
           bridge.run(
-            `orca orchestration worker-start --task ${shellQuote(reviewTaskId)} --from ${from3} --worktree ${shellQuote(
+            `orca orchestration worker-start --task ${shellQuote(reviewTaskId)} ${from3} --worktree ${shellQuote(
               `name:${state.worktreeName}`
             )} --agent ${shellQuote(cfg?.agent ?? 'claude')} --json`,
             90_000
@@ -460,7 +498,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       const from4 = await fromFlag()
       await act(`подшаг упал — перезапуск ${review.devStepId} (${round}/${review.maxRounds})`, async () =>
         bridge.run(
-          `orca orchestration worker-start --task ${shellQuote(review.devTaskId)} --from ${from4} --worktree ${shellQuote(
+          `orca orchestration worker-start --task ${shellQuote(review.devTaskId)} ${from4} --worktree ${shellQuote(
             `name:${state.worktreeName}`
           )} --agent ${shellQuote(devCfg?.agent ?? 'claude')} --json`,
           90_000
@@ -485,7 +523,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       const from6 = await fromFlag()
       await act(`шаг ${cfg.stepId} упал на ${tried[tried.length - 2]} — фейловер на ${next}`, async () =>
         bridge.run(
-          `orca orchestration worker-start --task ${shellQuote(task.id)} --from ${from6} --worktree ${shellQuote(
+          `orca orchestration worker-start --task ${shellQuote(task.id)} ${from6} --worktree ${shellQuote(
             `name:${state.worktreeName}`
           )} --agent ${shellQuote(next)}${cfg.model ? ` --model ${shellQuote(cfg.model)}` : ''}${
             cfg.model && cfg.effort ? ` --effort ${shellQuote(cfg.effort)}` : ''
@@ -511,7 +549,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       const from5 = await fromFlag()
       await act(`опциональный подшаг ${link.stepId} по запросу из отчёта`, async () =>
         bridge.run(
-          `orca orchestration worker-start --task ${shellQuote(optionalTaskId)} --from ${from5} --worktree ${shellQuote(
+          `orca orchestration worker-start --task ${shellQuote(optionalTaskId)} ${from5} --worktree ${shellQuote(
             `name:${state.worktreeName}`
           )} --agent ${shellQuote(cfg?.agent ?? 'claude')} --json`,
           90_000
@@ -519,6 +557,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       )
     }
     void runId
+    }
   }
 
   /** Bounded worker report text (transcript source). */
@@ -1035,6 +1074,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     void refresh()
     try {
       const snap = await snapshot(runId ?? null)
+      if (runId) void autopilot(runId, snap)
       lastSnapshot = JSON.stringify(snap)
       await orca.storage.set('state.snapshot', snap)
       return snap
@@ -1044,7 +1084,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         // Honest staleness: the bridge failed, so say so instead of passing cache off as live.
         return { ...(cached as WfSnapshot), at: Date.now(), error: `мост недоступен (${message(error)}) — показан последний снимок` }
       }
-      return { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: message(error) }
+      return { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: message(error), pilot: null }
     }
   })
 
@@ -1237,6 +1277,16 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     }
     await bridge.run(`rm -f ${shellPath(`${projectPath.replace(/\/+$/, '')}/.orca/specialists/${slug}.yaml`)}`)
+    return { ok: true as const }
+  })
+
+  orca.panels.handle('pilot.resume', async ({ runId }) => {
+    everUsed = true
+    const state = await loadAuto(runId)
+    if (!state) throw new BridgeError(`ран ${runId} не ведётся автопилотом`, 'cli_error')
+    state.stopped = null
+    await saveAuto(runId, state)
+    void refresh()
     return { ok: true as const }
   })
 
