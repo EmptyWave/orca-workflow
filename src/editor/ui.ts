@@ -297,7 +297,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const effortEl = effortWrap.querySelector('input') as HTMLInputElement
     form.append(effortWrap)
     const specL = document.createElement('label')
-    specL.textContent = 'spec — промпт воркера'
+    specL.textContent = 'prompt — промпт воркера'
     form.append(specL)
     const specEl = document.createElement('textarea')
     specEl.value = editing === 'new' || !editing ? '' : editing.spec ?? ''
@@ -883,7 +883,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     }))
     inspector.append(field('specFile (путь в каталоге шаблонов)', step.specFile ?? '', (v) => { step.specFile = v.trim() === '' ? null : v.trim(); step.spec = null; push() }))
     const specLabel = document.createElement('label')
-    specLabel.textContent = 'spec (инлайн, если нет specFile)'
+    specLabel.textContent = 'промпт (инлайн; шаг без карточки воркера)'
     inspector.append(specLabel)
     const specArea = document.createElement('textarea')
     specArea.value = step.spec ?? ''

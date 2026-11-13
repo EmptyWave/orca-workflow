@@ -909,7 +909,7 @@ export default function activate(orca: OrcaWorkerApi): void {
               model: typeof raw.model === 'string' ? raw.model : null,
               effort: typeof raw.effort === 'string' ? raw.effort : null,
               fallback: Array.isArray(raw.fallback) ? raw.fallback.map(String) : typeof raw.fallback === 'string' && raw.fallback !== '' ? [String(raw.fallback)] : [],
-              spec: typeof raw.spec === 'string' ? raw.spec : null,
+              spec: typeof raw.prompt === 'string' ? raw.prompt : typeof raw.spec === 'string' ? raw.spec : null,
               error: null
             })
           } catch (error) {
@@ -1483,7 +1483,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       `agent: ${agent.trim() || 'claude'}`,
       model && model.trim() !== '' ? `model: ${model.trim()}` : null,
       effort && effort.trim() !== '' ? `effort: ${effort.trim()}` : null,
-      spec.trim() !== '' ? `spec: |\n${spec.replace(/\n$/, '').split('\n').map((l) => '  ' + l).join('\n')}` : null
+      spec.trim() !== '' ? `prompt: |\n${spec.replace(/\n$/, '').split('\n').map((l) => '  ' + l).join('\n')}` : null
     ].filter((x): x is string => x !== null).join('\n') + '\n'
     await bridge.run(
       `mkdir -p ${shellPath(dir)} && echo ${shellQuote(toBase64(yaml))} | base64 -d > ${shellPath(`${dir}/${clean}.yaml`)}`
