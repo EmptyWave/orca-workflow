@@ -254,11 +254,18 @@
         } catch (e) { S.runs = []; setNotice('Запуски не читаются: ' + esc(e.message || e)) }
         render()
       }
-      async function loadState() {
+      async function loadState(force) {
         try {
-          S.snap = await req('state.get', { runId: S.runId }, 60000)
+          // The worker refreshes the snapshot on its own cadence and keeps it in storage:
+          // reading it costs nothing. Only an explicit refresh pays for a live bridge call.
+          const cached = force ? null : await orca.storage.get('state.snapshot').catch(() => null)
+          if (cached && typeof cached === 'object' && cached.tasks) {
+            S.snap = cached
+          } else {
+            S.snap = await req('state.get', { runId: S.runId }, 60000)
+          }
         } catch (e) {
-          S.snap = { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: e.message || String(e) }
+          S.snap = { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: e.message || String(e), pilot: null }
         }
         render()
       }
@@ -439,7 +446,7 @@
                 await loadState()
               } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
             },
-            refresh: () => { void loadRuns(); void loadState() },
+            refresh: () => { void loadRuns(); void loadState(true) },
             'refresh-tpl': () => { S.templates = null; render(); void loadTemplates() },
             'resolve-approve': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), 'approve'),
             'resolve-custom': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), b.dataset.option),
@@ -775,7 +782,7 @@
             let ms = 10000
             try { ms = Math.min(120000, Math.max(2000, (await orca.settings.get()).refreshMs ?? 10000)) } catch {}
             await new Promise((r) => setTimeout(r, ms))
-            if (S.tab === 'runs' && !S.busy) await loadState()
+            if (S.tab === 'runs' && !S.busy) await loadState(false)
           }
         }
         void loop()

@@ -268,7 +268,9 @@ export default function activate(orca: OrcaWorkerApi): void {
       } catch (error) {
         snap = { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: message(error), pilot: null }
       }
-      const serialized = JSON.stringify(snap)
+      // `at` changes every snapshot; compare the payload so quiet runs stay quiet
+      // (otherwise panel and worker ping-pong state.changed forever).
+      const serialized = JSON.stringify({ ...snap, at: 0 })
       if (serialized !== lastSnapshot) {
         lastSnapshot = serialized
         await orca.storage.set('state.snapshot', snap)
@@ -614,6 +616,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   // must be re-ensured in the new workspace before any command can run again.
   const workspaceSub = orca.events.on('workspace.changed', () => {
     void bridge.reset()
+    projectCache = null // focus moved: re-detect the project on the next ask
     wakeSoon()
   })
   const loop = async (): Promise<void> => {
@@ -1071,11 +1074,10 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('state.get', async ({ runId }) => {
     everUsed = true
-    void refresh()
     try {
       const snap = await snapshot(runId ?? null)
       if (runId) void autopilot(runId, snap)
-      lastSnapshot = JSON.stringify(snap)
+      lastSnapshot = JSON.stringify({ ...snap, at: 0 })
       await orca.storage.set('state.snapshot', snap)
       return snap
     } catch (error) {
@@ -1111,13 +1113,21 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { dispatchId: result.dispatchId, state: result.state }
   })
 
+  let projectCache: { at: number; project: { repoId: string; name: string; path: string } | null } | null = null
   orca.panels.handle('project.current', async () => {
     everUsed = true
+    if (projectCache && Date.now() - projectCache.at < 60_000) return { project: projectCache.project }
+    const detected = await detectProject().catch(() => null)
+    projectCache = { at: Date.now(), project: detected }
+    return { project: detected }
+  })
+
+  async function detectProject(): Promise<{ repoId: string; name: string; path: string } | null> {
     // The focused workspace's terminal carries a worktreeId of "repoId::repoPath", which names
     // the project directly. One bridge command prints both mappings at once.
     const context = await orca.host.call('workspace.readContext', undefined)
     const terminalId = context?.terminals?.[0]?.id
-    if (!terminalId) return { project: null }
+    if (!terminalId) return null
     const combined = await bridge.run(
       `echo __WFC__; orca terminal list --json; echo __WFR__; orca repo list --json; echo __WFE__`
     )
@@ -1129,26 +1139,26 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
     const terminalJson = between('__WFC__', '__WFR__')
     const repoJson = between('__WFR__', '__WFE__')
-    if (!terminalJson) return { project: null }
+    if (!terminalJson) return null
     let worktreeId = ''
     try {
       const listing = JSON.parse(extractJson(terminalJson)) as { result?: { terminals?: Array<{ handle?: string; worktreeId?: string }> } }
       const entry = (listing.result?.terminals ?? []).find((t) => t.handle === terminalId)
       worktreeId = entry?.worktreeId ?? ''
     } catch {
-      return { project: null }
+      return null
     }
     const repoId = worktreeId.split('::')[0]
-    if (!repoId) return { project: null }
+    if (!repoId) return null
     try {
       const repos = JSON.parse(extractJson(repoJson)) as { result?: { repos?: Array<{ id?: string; displayName?: string; path?: string }> } }
       const repo = (repos.result?.repos ?? []).find((r) => r.id === repoId)
-      if (!repo) return { project: null }
-      return { project: { repoId, name: repo.displayName ?? '', path: repo.path ?? '' } }
+      if (!repo) return null
+      return { repoId, name: repo.displayName ?? '', path: repo.path ?? '' }
     } catch {
-      return { project: null }
+      return null
     }
-  })
+  }
 
   orca.panels.handle('template.list', async ({ source, projectPath }) => ({
     templates: await listTemplates(source, projectPath ?? null)
