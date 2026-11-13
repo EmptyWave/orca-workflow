@@ -49,7 +49,14 @@ export type WfSnapshot = {
   workers: WfWorker[]
   error: string | null
   /** Auto-pilot state for this run; null when the run was not raised by it. */
-  pilot: { on: boolean; stopped: string | null; actions: number } | null
+  pilot: {
+    on: boolean
+    stopped: string | null
+    actions: number
+    /** 'coordinator' — a live agent session leads the run; 'autopilot' — the plugin's code. */
+    driver: 'coordinator' | 'autopilot'
+    coordinatorTerminal: string | null
+  } | null
 }
 
 export type WfJob = {

@@ -219,7 +219,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     const pilotState = await loadAuto(runId)
     const autoPilotOn = (await orca.settings.get('autoPilot')) !== false
     const pilot = pilotState
-      ? { on: autoPilotOn && !pilotState.stopped, stopped: pilotState.stopped ?? null, actions: pilotState.actions }
+      ? {
+          on: pilotState.driver === 'coordinator' ? true : autoPilotOn && !pilotState.stopped,
+          stopped: pilotState.stopped ?? null,
+          actions: pilotState.actions,
+          driver: pilotState.driver ?? 'autopilot',
+          coordinatorTerminal: pilotState.coordinatorTerminal ?? null
+        }
       : null
     return { at, run, tasks: orderTasks(tasks), gates, workers, error: null, pilot }
   }
@@ -303,6 +309,10 @@ export default function activate(orca: OrcaWorkerApi): void {
     triedAgents: Record<string, string[]>
     /** Sub-step tasks -> their owning block task, for nested display. */
     children: Record<string, string>
+    /** 'coordinator' — a live agent session drives this run; the code autopilot stays off. */
+    driver: 'coordinator' | 'autopilot' | null
+    /** The coordinator agent's terminal, when driver is 'coordinator'. */
+    coordinatorTerminal: string | null
     reviews: Record<string, { devTaskId: string; devStepId: string; maxRounds: number; source: 'verdict' | 'failure' }>
     optionals: Record<string, { parentTaskId: string; stepId: string }>
     verdicts: Record<string, 'approve' | 'request-changes'>
@@ -326,6 +336,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (autopilotOn === false || piloting) return
     const state = await loadAuto(runId)
     if (!state || state.stopped) return
+    if (state.driver === 'coordinator') return // a live agent session leads this run
     piloting = true
     try {
       await driveAutopilot(runId, snap, state)
@@ -574,6 +585,45 @@ export default function activate(orca: OrcaWorkerApi): void {
     } catch {
       return ''
     }
+  }
+
+  /** The coordinator agent's brief: the objective, the whole flow and the ground rules. */
+  function coordinatorBrief(
+    runId: string,
+    template: WfTemplate,
+    objective: string,
+    worktreeName: string,
+    projectPath: string | null
+  ): string {
+    const flow = template.steps
+      .map((step, i) => {
+        const who = step.specialist ? `специалист ${step.specialist}` : step.agent ? `агент ${step.agent}` : 'барьер'
+        const extra = [
+          step.model ? `модель ${step.model}` : null,
+          (step.fallback ?? []).length > 0 ? `fallback: ${step.fallback.join(' → ')}` : null,
+          step.gate ? `ГЕЙТ перед шагом: ${step.gate.question} — стоп для человека` : null,
+          step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
+        ].filter(Boolean)
+        const subs = (step.sub ?? []).map((c) => `      • ${c.id} — ${c.specialist ?? c.agent}${c.optional ? ' (опциональный: стартует, если родитель написал RUN: ' + c.id + ')' : ''}`)
+        return `${i + 1}. ${step.id} (${who}${extra.length > 0 ? '; ' + extra.join('; ') : ''})` + (subs.length > 0 ? '\n' + subs.join('\n') : '')
+      })
+      .join('\n')
+    return [
+      `Ты координатор рана ${runId}. Задача от человека: «${objective}».`,
+      `Репозиторий: ${projectPath ?? 'см. воркспейс'}. Ворктри воркеров: name:${worktreeName}.`,
+      '',
+      'Флоу (веди строго по порядку):',
+      flow,
+      '',
+      'Действия:',
+      `1. Немедленно: orca orchestration run-use --id ${runId} --json`,
+      `2. orca orchestration task-list --run ${runId} --json — стартуй готовые шаги (worker-start --task <id> --worktree name:${worktreeName} --agent <agent> --json).`,
+      '3. Отчёты завершившихся — worker-read; строка VERDICT: approve | request-changes в отчёте ревью управляет циклами доработки.',
+      '4. Вопросы воркеров — orchestration check; отвечай reply, решай сам всё, что решаемо.',
+      '5. Не можешь решить — напиши человеку в этот чат (суть, варианты, рекомендация) и заверши ход.',
+      '6. Гейты из флоу — стоп для человека: жди его ответа здесь.',
+      '7. Итог: когда последний шаг завершён, собери сводку по флою и закончи.'
+    ].join('\n')
   }
 
   /** `VERDICT: approve|request-changes` in the report tail; default approve on failure to say. */
@@ -948,8 +998,7 @@ export default function activate(orca: OrcaWorkerApi): void {
             )
           }
         }
-        job.step = 'done'
-        job.status = 'done'
+        job.step = 'materialized'
         await saveJob(job)
         // Auto-pilot bookkeeping: per-task step configs, review retry pairs, optional subs.
         const autoTasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null; fallback: string[] }> = {}
@@ -1025,8 +1074,37 @@ export default function activate(orca: OrcaWorkerApi): void {
           rounds: {},
           triedAgents: {},
           actions: 0,
-          stopped: null
+          stopped: null,
+          driver: 'coordinator',
+          coordinatorTerminal: null
         })
+        // The run is led by a live coordinator agent: launch its session in the project
+        // workspace and hand it the flow brief. It binds itself with run-use.
+        try {
+          const list = await orca.host.call('workspace.list', undefined)
+          const home = list.workspaces.find((w) => w.path === input.projectPath) ?? list.workspaces[0]
+          const coordinator = specialists.find((sp) => sp.slug === 'coordinator')
+          const brief = coordinatorBrief(run.runId, template, input.objective, input.worktreeName, input.projectPath)
+          const launched = await orca.host.call('agent.launch', {
+            workspaceId: home.id,
+            agent: coordinator?.agent ?? input.agent,
+            prompt: brief
+          })
+          const stored = await loadAuto(run.runId)
+          if (stored) {
+            stored.coordinatorTerminal = launched.terminalId
+            await saveAuto(run.runId, stored)
+          }
+          job.step = 'coordinator'
+          await saveJob(job, run.runId)
+        } catch (error) {
+          // The run exists and tasks are materialized; a failed launch leaves it to the panel.
+          job.error = `координатор не поднялся: ${message(error)} — ране нужен водитель, подними вручную`
+          await saveJob(job, run.runId)
+        }
+        job.step = 'done'
+        job.status = 'done'
+        await saveJob(job, run.runId)
         await refresh()
       } catch (error) {
         job.status = 'failed'

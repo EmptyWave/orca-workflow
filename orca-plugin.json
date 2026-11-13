@@ -108,6 +108,9 @@
     },
     {
       "kind": "agent:read"
+    },
+    {
+      "kind": "agent:launch"
     }
   ]
 }

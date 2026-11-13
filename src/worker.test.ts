@@ -163,6 +163,7 @@ function makeHost() {
       },
       'editor.open': { opened: true },
       'terminal.create': { terminalId: 't1' },
+      'agent.launch': { terminalId: 't-coord' },
       'terminal.sendText': (params: { text: string }) => {
         sends += 1
         lastCommand = params.text
@@ -287,6 +288,28 @@ test('templates.updated разбирает YAML редактора без мос
     assert.deepEqual(answer.template.steps[1].fallback, ['zcode'])
     const broken = await worker.request('templates.updated', { projectPath: '/x/biz.erp', yaml: 'steps: []\n' })
     assert.ok(broken.template.error, 'ошибка парсинга честно видна')
+  }))
+
+test('новый ран поднимает координатора-агента, автопилот не вмешивается', () =>
+  withWorker(async (worker, host) => {
+    const { jobId } = await worker.request('template.instantiate', {
+      source: 'library', projectPath: null, templateId: 'demo',
+      objective: 'цель Y', baseBranch: null, worktreeName: 'demo-wt', agent: 'claude'
+    })
+    let job = null
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 50))
+      job = (await worker.request('job.get', { jobId })).job
+      if (job && job.status !== 'running') break
+    }
+    assert.equal(job.status, 'done', job.error ?? '')
+    const launches = host.callsOf('agent.launch') as Array<{ workspaceId: string; agent: string; prompt: string }>
+    assert.equal(launches.length, 1, 'сессия координатора запущена')
+    assert.ok(launches[0].prompt.includes('run-use'), 'бриф велит привязаться к рану')
+    assert.ok(launches[0].prompt.includes('Флоу'), 'в брифе есть флоу')
+    const auto = (host.data().storage['auto.run_2'] ?? {}) as { driver?: string; coordinatorTerminal?: string }
+    assert.equal(auto.driver, 'coordinator')
+    assert.ok(auto.coordinatorTerminal, 'терминал координатора записан')
   }))
 
 test('task.retry сбрасывает шаг и его хвост, автопилот просыпается', () =>

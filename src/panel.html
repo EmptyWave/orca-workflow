@@ -518,7 +518,9 @@
         const done = counts.succeeded || 0, total = (snap.tasks || []).length
         let pilotBox = ''
         if (snap.pilot) {
-          if (snap.pilot.stopped) {
+          if (snap.pilot.driver === 'coordinator') {
+            pilotBox = `<div class="tiny muted" style="margin:2px 0 8px">Ран ведёт координатор-агент${snap.pilot.stopped ? ' — стоп: ' + esc(snap.pilot.stopped) : ''} · шагов ${done}/${total}. Сессия координатора — чат в workspace проекта: задачи, вопросы и эскалации туда.</div>`
+          } else if (snap.pilot.stopped) {
             pilotBox = `<div class="callout warning">Автопилот остановлен: ${esc(snap.pilot.stopped)} <button class="btn mini" data-act="resume-pilot">разбудить</button></div>`
           } else if (snap.pilot.on) {
             pilotBox = `<div class="tiny muted" style="margin:2px 0 8px">Автопилот ведёт конвейер · шагов ${done}/${total}${(counts.dispatched || 0) > 0 ? ' · работает' : ''}</div>`
