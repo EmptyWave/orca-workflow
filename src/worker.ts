@@ -809,7 +809,8 @@ export default function activate(orca: OrcaWorkerApi): void {
           sourcePath: dir,
           file,
           steps: parsed.steps,
-          error: null
+          error: null,
+          missingWorkers: []
         })
         for (const step of parsed.steps) if (parsed.specFiles[step.id]) specFiles[parsed.specFiles[step.id] as string] = null
       } catch (error) {
@@ -820,9 +821,23 @@ export default function activate(orca: OrcaWorkerApi): void {
           sourcePath: dir,
           file,
           steps: [],
-          error: message(error)
+          error: message(error),
+          missingWorkers: []
         })
       }
+    }
+    // Resolve worker cards into steps (agents, models, failover chains) for the preview,
+    // and surface steps whose worker has no card.
+    const specialists = await loadSpecialists(source === 'project' ? projectPath : null)
+    for (const template of templates) {
+      if (template.error) continue
+      const resolved = resolveSteps(template, specialists, {})
+      template.steps = resolved
+      const known = new Set(specialists.map((sp) => sp.slug))
+      const missing = [...resolved, ...resolved.flatMap((st) => st.sub ?? [])]
+        .filter((st) => st.specialist && !known.has(st.specialist) && !st.agent)
+        .map((st) => st.specialist as string)
+      template.missingWorkers = [...new Set(missing)]
     }
     // Resolve specFile contents in one more round-trip when any template uses them.
     const specDirs = Object.keys(specFiles)
@@ -860,7 +875,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       let listing = ''
       try {
         listing = await bridge.run(
-          `for f in ${shellPath(dir)}/*.yaml; do [ -f "$f" ] || continue; echo "__WF_LS__\${f##*/}"; base64 < "$f"; echo __WF_LE__; done`
+          `cd ${shellPath(dir)} 2>/dev/null && find . -type f -name '*.yaml' | sort | while read -r f; do echo "__WF_LS__$f"; base64 < "$f"; echo __WF_LE__; done`
         )
       } catch {
         continue
@@ -870,9 +885,13 @@ export default function activate(orca: OrcaWorkerApi): void {
       const seenSlugs = new Set<string>()
       const flush = (): void => {
         if (current) {
-          const slug = current.replace(/\.yaml$/, '')
-          if (seenSlugs.has(slug)) return // workers/ wins over the legacy specialists/
+          // Nested layout: `plan/code-researcher.yaml` answers both to `code-researcher`
+          // (flat name, shallowest wins on collisions) and `plan/code-researcher`.
+          const rel = current.replace(/^\.\//, '').replace(/\.yaml$/, '')
+          const slug = rel.includes('/') ? rel.slice(rel.lastIndexOf('/') + 1) : rel
+          if (seenSlugs.has(slug)) return // a shallower file with the same name wins
           seenSlugs.add(slug)
+          seenSlugs.add(rel)
           try {
             const raw = parseYaml(fromBase64(chunks.join(''))) as { [k: string]: unknown }
             out.push({
@@ -1020,6 +1039,12 @@ export default function activate(orca: OrcaWorkerApi): void {
         for (const step of template.steps) {
           if (step.specFile) specPaths.add(step.specFile)
           for (const child of step.sub ?? []) if (child.specFile) specPaths.add(child.specFile)
+        }
+        if (template.missingWorkers.length > 0) {
+          throw new BridgeError(
+            `нет карточек воркеров: ${template.missingWorkers.join(', ')} — создай их в .orca/workers или через кнопку «Воркеры» в редакторе`,
+            'cli_error'
+          )
         }
         const dir = await workflowsDir(input.source, input.projectPath)
         const specs = specPaths.size > 0 ? await readFiles(dir, [...specPaths]) : {}
@@ -1377,7 +1402,8 @@ export default function activate(orca: OrcaWorkerApi): void {
         sourcePath,
         file: `${parsed.id}.workflow.yaml`,
         steps: parsed.steps,
-        error: null
+        error: null,
+        missingWorkers: []
       }
     } catch (error) {
       template = {
@@ -1387,7 +1413,8 @@ export default function activate(orca: OrcaWorkerApi): void {
         sourcePath,
         file: 'editor.workflow.yaml',
         steps: [],
-        error: message(error)
+        error: message(error),
+        missingWorkers: []
       }
     }
     orca.panels.post('templates.changed', { projectPath, template })

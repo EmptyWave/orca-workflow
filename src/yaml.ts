@@ -60,6 +60,10 @@ function parseBlock(lines: Line[], start: number, indent: number): { value: Yaml
   if (lines[start].text === '-' || lines[start].text.startsWith('- ')) {
     return parseList(lines, start, indent)
   }
+  // A hand-written list without dashes: items are bare flow maps/lists on their own lines.
+  if (lines[start].text.startsWith('{') || lines[start].text.startsWith('[')) {
+    return parseList(lines, start, indent)
+  }
   return parseMap(lines, start, indent)
 }
 
@@ -70,6 +74,12 @@ function parseList(lines: Line[], start: number, indent: number): { value: YfVal
     i = nextMeaningful(lines, i)
     if (i >= lines.length || lines[i].indent !== indent) break
     const text = lines[i].text
+    // A bare flow map on its own line is an item too — a hand-written list without dashes.
+    if ((text.startsWith('{') || text.startsWith('[')) && !text.startsWith('- ')) {
+      items.push(parseFlowScalar(text, lines[i].no))
+      i++
+      continue
+    }
     if (text !== '-' && !text.startsWith('- ')) break
     const rest = text === '-' ? '' : text.slice(2)
     if (rest === '') {
@@ -195,17 +205,20 @@ function parseFlowScalar(text: string, no: number): YamlValue {
   const trimmed = text.trim()
   const first = trimmed[0]
   if (first !== '[' && first !== '{' && first !== '"' && first !== "'") {
-    if (trimmed === 'null' || trimmed === '~') return null
-    if (trimmed === 'true') return true
-    if (trimmed === 'false') return false
-    if (/^-?\d+$/.test(trimmed)) return Number(trimmed)
-    return trimmed
+    const clean = trimmed.replace(/,$/, '') // one stray trailing comma: hand-editing slip
+    if (clean === 'null' || clean === '~') return null
+    if (clean === 'true') return true
+    if (clean === 'false') return false
+    if (/^-?\d+$/.test(clean)) return Number(clean)
+    return clean
   }
   const cursor = { pos: 0 }
   const value = parseFlow(text, cursor, no)
   skipSpaces(text, cursor)
-  if (cursor.pos < text.length) {
-    throw new Error(`yaml: строка ${no}: лишнее после значения: "${text.slice(cursor.pos)}"`)
+  let rest = text.slice(cursor.pos)
+  if (rest === ',') rest = '' // a lone trailing comma after a flow value: hand-editing slip
+  if (rest !== '') {
+    throw new Error(`yaml: строка ${no}: лишнее после значения: "${rest}"`)
   }
   return value
 }

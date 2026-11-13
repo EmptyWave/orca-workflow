@@ -671,6 +671,7 @@
 
         let preview
         if (tpl.error) preview = `<div class="callout danger">Шаблон не читается: ${esc(tpl.error)}</div>`
+        else if ((tpl.missingWorkers ?? []).length > 0) preview = `<div class="callout warning">Нет карточек воркеров: ${esc(tpl.missingWorkers.join(', '))} — ран не поднять, пока не создашь их.</div>`
         else {
           const rows = tpl.steps.flatMap((step) => {
             const meta = [
@@ -705,7 +706,7 @@
             </div>
             <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
             <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
-              <button class="btn primary" data-act="instantiate">Поднять Run</button>
+              <button class="btn primary" data-act="instantiate"${(tpl.missingWorkers ?? []).length > 0 ? ' disabled title="Сначала создай недостающих воркеров"' : ''}>Поднять Run</button>
               ${S.tplSource === 'library' ? `<button class="btn" data-act="copy-project">↳ в проект</button>` : `<button class="btn" data-act="copy-library">↳ в библиотеку</button>`}
             </div></div>`
       }

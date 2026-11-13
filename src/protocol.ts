@@ -123,6 +123,8 @@ export type WfTemplate = {
   file: string
   steps: WfStep[]
   error: string | null
+  /** Step workers with no card in .orca/workers — the template needs them before a run. */
+  missingWorkers: string[]
 }
 
 declare module 'orca' {

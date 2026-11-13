@@ -356,5 +356,5 @@ export function topoUnits(units: WfUnit[]): WfUnit[] {
 
 export function templateForError(file: string, id: string, title: string, message: string): WfTemplate {
   void file
-  return { id, title, source: 'library', sourcePath: null, file: file, steps: [], error: message }
+  return { id, title, source: 'library', sourcePath: null, file: file, steps: [], error: message, missingWorkers: [] }
 }
