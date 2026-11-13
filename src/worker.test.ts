@@ -118,7 +118,7 @@ function makeHost() {
     }
     if (command.includes('__WF_LS__') && command.includes('base64')) {
       // The whole-directory listing: marker + base64 + end marker per yaml file.
-      const files: Record<string, string> = command.includes('/specialists')
+      const files: Record<string, string> = command.includes('/specialists') || command.includes('/workers')
         ? {
             planner: 'agent: claude\nspec: PLAN SPEC {{objective}}\n',
             researcher: 'agent: claude\nspec: RESEARCH SPEC\n',
@@ -236,7 +236,8 @@ test('template.instantiate создаёт Run, задачи и гейты бар
       if (job && job.status !== 'running') break
     }
     assert.ok(job, 'job должен записаться')
-    assert.equal(job.status, 'done', job.error ?? '')
+    assert.ok(job, 'job записан')
+    assert.equal(job!.status, 'done', job!.error ?? '')
     // The failover chain from the specialist lands in the run config.
     const auto = (host.data().storage['auto.run_2'] ?? {}) as {
       tasks?: Record<string, { fallback?: string[]; agent?: string; stepId?: string }>
@@ -302,7 +303,8 @@ test('новый ран поднимает координатора-агента
       job = (await worker.request('job.get', { jobId })).job
       if (job && job.status !== 'running') break
     }
-    assert.equal(job.status, 'done', job.error ?? '')
+    assert.ok(job, 'job записан')
+    assert.equal(job!.status, 'done', job!.error ?? '')
     const launches = host.callsOf('agent.launch') as Array<{ workspaceId: string; agent: string; prompt: string }>
     assert.equal(launches.length, 1, 'сессия координатора запущена')
     assert.ok(launches[0].prompt.includes('run-use'), 'бриф велит привязаться к рану')

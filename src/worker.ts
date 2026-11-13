@@ -801,9 +801,13 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   /** Loads `<repo>/.orca/specialists/*.yaml` and the library's `specialists/` in one batch. */
   async function loadSpecialists(projectPath: string | null, onlyProject = false): Promise<WfSpecialist[]> {
+    const root = projectPath ? projectPath.replace(/\/+$/, '') : null
     const dirs: Array<string> = []
-    if (projectPath) dirs.push(`${projectPath.replace(/\/+$/, '')}/.orca/specialists`)
-    if (!onlyProject) dirs.push((await libraryDir()).replace(/\/workflows$/, '/specialists'))
+    if (root) dirs.push(`${root}/.orca/workers`, `${root}/.orca/specialists`)
+    if (!onlyProject) {
+      const lib = (await libraryDir()).replace(/\/workflows$/, '')
+      dirs.push(`${lib}/workers`, `${lib}/specialists`)
+    }
     const out: WfSpecialist[] = []
     for (const dir of dirs) {
       let listing = ''
@@ -816,9 +820,12 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
       let current: string | null = null
       const chunks: string[] = []
+      const seenSlugs = new Set<string>()
       const flush = (): void => {
         if (current) {
           const slug = current.replace(/\.yaml$/, '')
+          if (seenSlugs.has(slug)) return // workers/ wins over the legacy specialists/
+          seenSlugs.add(slug)
           try {
             const raw = parseYaml(fromBase64(chunks.join(''))) as { [k: string]: unknown }
             out.push({
@@ -1347,16 +1354,16 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { ok: true as const }
   })
 
-  orca.panels.handle('specialists.list', async ({ projectPath }) => {
+  orca.panels.handle('workers.list', async ({ projectPath }) => {
     everUsed = true
-    return { specialists: await loadSpecialists(projectPath, true) }
+    return { workers: await loadSpecialists(projectPath, true) }
   })
 
-  orca.panels.handle('specialists.save', async ({ projectPath, slug, agent, model, effort, spec }) => {
+  orca.panels.handle('workers.save', async ({ projectPath, slug, agent, model, effort, spec }) => {
     everUsed = true
     const clean = slug.trim().replace(/[^a-z0-9-]/g, '-')
-    if (clean === '') throw new BridgeError('slug специалиста не может быть пустым', 'cli_error')
-    const dir = `${projectPath.replace(/\/+$/, '')}/.orca/specialists`
+    if (clean === '') throw new BridgeError('slug воркера не может быть пустым', 'cli_error')
+    const dir = `${projectPath.replace(/\/+$/, '')}/.orca/workers`
     const yaml = [
       `agent: ${agent.trim() || 'claude'}`,
       model && model.trim() !== '' ? `model: ${model.trim()}` : null,
@@ -1369,9 +1376,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { ok: true as const }
   })
 
-  orca.panels.handle('specialists.delete', async ({ projectPath, slug }) => {
+  orca.panels.handle('workers.delete', async ({ projectPath, slug }) => {
     everUsed = true
-    // Refuse while any project template still references the specialist.
+    // Refuse while any project template still references the worker.
     const wfDir = `${projectPath.replace(/\/+$/, '')}/.orca/workflows`
     let listing = ''
     try {
@@ -1390,12 +1397,13 @@ export default function activate(orca: OrcaWorkerApi): void {
         const template = parseTemplate(file.replace(/\.yaml$/, ''), parseYaml(raw))
         const uses = [...template.steps, ...template.steps.flatMap((st) => st.sub ?? [])]
           .some((st) => st.specialist === slug)
-        if (uses) throw new BridgeError(`специалиста «${slug}» использует шаблон ${file} — сначала убери его из шаблона`, 'cli_error')
+        if (uses) throw new BridgeError(`специалиста «${slug}» используется шаблоном ${file} — сначала убери его из шаблона`, 'cli_error')
       } catch (error) {
         if (error instanceof BridgeError) throw error
       }
     }
-    await bridge.run(`rm -f ${shellPath(`${projectPath.replace(/\/+$/, '')}/.orca/specialists/${slug}.yaml`)}`)
+    const rmRoot = projectPath.replace(/\/+$/, '')
+    await bridge.run(`rm -f ${shellPath(`${rmRoot}/.orca/workers/${slug}.yaml`)} ${shellPath(`${rmRoot}/.orca/specialists/${slug}.yaml`)}`)
     return { ok: true as const }
   })
 

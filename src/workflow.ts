@@ -68,7 +68,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
     seen.add(stepId)
 
     const agent = strOrNull(raw.agent, 'steps[].agent')
-    const specialist = strOrNull(raw.specialist, 'steps[].specialist')
+    const specialist = strOrNull(raw.worker ?? raw.specialist, 'steps[].worker') // specialist — старое имя
     const fallback = stringOrArray(raw.fallback, `шаг "${stepId}": fallback`)
     const spec = strOrNull(raw.spec, 'steps[].spec')
     const specFile = strOrNull(raw.specFile, 'steps[].specFile')
@@ -134,7 +134,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
         subSeen.add(childId)
         seen.add(childId)
         const childAgent = strOrNull(rawChild.agent, 'sub[].agent')
-        const childSpecialist = strOrNull(rawChild.specialist, 'sub[].specialist')
+        const childSpecialist = strOrNull(rawChild.worker ?? rawChild.specialist, 'sub[].worker')
         const childSpec = strOrNull(rawChild.spec, 'sub[].spec')
         const childSpecFile = strOrNull(rawChild.specFile, 'sub[].specFile')
         if (!childSpecialist && !childAgent) {

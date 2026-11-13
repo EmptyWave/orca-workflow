@@ -186,14 +186,14 @@ declare module 'orca' {
       output: { libraryDir: string; refreshMs: number; defaultAgent: string }
     }
     /** Specialists of a project (.orca/specialists) — the editor's dropdowns and manager. */
-    'specialists.list': { input: { projectPath: string }; output: { specialists: WfSpecialist[] } }
+    'workers.list': { input: { projectPath: string }; output: { workers: WfSpecialist[] } }
     /** Create or update one specialist file; slug names the file. */
-    'specialists.save': {
+    'workers.save': {
       input: { projectPath: string; slug: string; agent: string; model: string | null; effort: string | null; spec: string }
       output: { ok: true }
     }
     /** Delete a specialist file; refuses while any project template still references it. */
-    'specialists.delete': { input: { projectPath: string; slug: string }; output: { ok: true } }
+    'workers.delete': { input: { projectPath: string; slug: string }; output: { ok: true } }
     /** A worker's report for one step (bounded transcript tail). */
     'task.report': { input: { dispatchId: string }; output: { report: string } }
     /** Wake the auto-pilot of a stopped run (clears the stop reason). */

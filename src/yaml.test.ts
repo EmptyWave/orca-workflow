@@ -58,6 +58,18 @@ steps:
   assert.deepEqual(parseTemplate('t', value as never).steps[0].fallback, ['codex', 'kimi'])
 })
 
+test('воркеры: ключ worker каноничен, specialist — легаси-синоним', () => {
+  const value = parseYaml(`id: t
+title: T
+steps:
+  - { id: a, worker: planner }
+  - { id: b, specialist: coder }
+`) as never as { steps: Array<Record<string, unknown>> }
+  const parsed = parseTemplate('t', value as never)
+  assert.equal(parsed.steps[0].specialist, 'planner', 'worker читается')
+  assert.equal(parsed.steps[1].specialist, 'coder', 'старый specialist тоже читается')
+})
+
 test('парсер: блоки, потоки, кавычки, блочные скаляры', () => {
   const value = parseYaml(TEMPLATE) as { [k: string]: unknown }
   assert.equal(value.id, 'feature-dev')

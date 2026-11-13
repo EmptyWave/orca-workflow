@@ -90,7 +90,7 @@ export function emit(graph: WfGraph): string {
   for (const step of topoSortSteps(graph.steps)) {
     lines.push(`  - id: ${step.id}`)
     if (step.title) lines.push(`    title: ${yamlScalar(step.title)}`)
-    if (step.specialist) lines.push(`    specialist: ${step.specialist}`)
+    if (step.specialist) lines.push(`    worker: ${step.specialist}`)
     if (step.agent) lines.push(`    agent: ${step.agent}`)
     if (step.model) lines.push(`    model: ${step.model}`)
     if (step.model && step.effort) lines.push(`    effort: ${step.effort}`)
@@ -114,7 +114,7 @@ export function emit(graph: WfGraph): string {
       for (const child of step.sub) {
         const bits = [`id: ${child.id}`]
         if (child.title) bits.push(`title: ${yamlScalar(child.title)}`)
-        if (child.specialist) bits.push(`specialist: ${child.specialist}`)
+        if (child.specialist) bits.push(`worker: ${child.specialist}`)
         if (child.agent) bits.push(`agent: ${child.agent}`)
         if (child.model) bits.push(`model: ${child.model}`)
         if (child.fallback.length > 0) bits.push(`fallback: [${child.fallback.join(', ')}]`)

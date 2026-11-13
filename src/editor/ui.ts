@@ -115,7 +115,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     return ['low', 'medium', 'high']
   }
 
-  // ---- project specialists: dropdown data + the manager panel -------------------------
+  // ---- project workers: dropdown data + the manager panel -------------------------
   type Sp = { slug: string; agent: string; model: string | null; effort: string | null; spec: string | null; error: string | null }
   let specialists: Sp[] = []
   let projectPath: string | null = null
@@ -130,8 +130,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     }
     if (projectPath) {
       try {
-        const answer = await request<{ specialists: Sp[] }>('specialists.list', { projectPath }, 60000)
-        specialists = answer.specialists ?? []
+        const answer = await request<{ workers: Sp[] }>('workers.list', { projectPath }, 60000)
+        specialists = answer.workers ?? []
       } catch {
         specialists = []
       }
@@ -147,7 +147,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     ['+ Барьер', () => addStep(false)],
     ['Автораскладка', () => { graph.layout = autoLayout(graph); push() }],
     ['YAML', () => toggleYaml()],
-    ['Специалисты', () => toggleSpecialists()]
+    ['Воркеры', () => toggleSpecialists()]
   ]
   for (const [label, onClick] of buttons) {
     const b = document.createElement('button')
@@ -219,7 +219,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     if (!projectPath) await loadSpecialists()
     panel.innerHTML = ''
     const h = document.createElement('h3')
-    h.textContent = `Специалисты — ${projectPath ? projectPath.split('/').pop() : 'проект не определён'}`
+    h.textContent = `Воркеры — ${projectPath ? projectPath.split('/').pop() : 'проект не определён'}`
     panel.append(h)
     const close = document.createElement('button')
     close.textContent = '×'
@@ -255,7 +255,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         }
         panel.setAttribute('data-busy', '1')
         try {
-          await request('specialists.delete', { projectPath, slug: sp.slug }, 60000)
+          await request('workers.delete', { projectPath, slug: sp.slug }, 60000)
           await loadSpecialists()
           await renderSpManager()
         } catch (error) {
@@ -271,7 +271,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     }
     if (editing === null) {
       const add = document.createElement('button')
-      add.textContent = '+ Новый специалист'
+      add.textContent = '+ Новый воркер'
       add.style.marginTop = '8px'
       add.addEventListener('click', () => void renderSpManager('new'))
       panel.append(add)
@@ -297,7 +297,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const effortEl = effortWrap.querySelector('input') as HTMLInputElement
     form.append(effortWrap)
     const specL = document.createElement('label')
-    specL.textContent = 'spec — промпт специалиста'
+    specL.textContent = 'spec — промпт воркера'
     form.append(specL)
     const specEl = document.createElement('textarea')
     specEl.value = editing === 'new' || !editing ? '' : editing.spec ?? ''
@@ -312,7 +312,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       save.setAttribute('disabled', '1')
       try {
         await request(
-          'specialists.save',
+          'workers.save',
           {
             projectPath,
             slug: slugEl.value,
@@ -537,7 +537,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       sub.setAttribute('class', 'sub')
       sub.setAttribute('x', '10')
       sub.setAttribute('y', '38')
-      sub.textContent = step.specialist ? `${step.specialist} (специалист)` : step.agent ?? ''
+      sub.textContent = step.specialist ? `${step.specialist} (воркер)` : step.agent ?? ''
         ? `${step.agent}${step.model ? ' · ' + step.model : ''}${step.specFile ? ' · ' + step.specFile : ''}`
         : 'барьер / гейт'
       const sub2 = document.createElementNS('http://www.w3.org/2000/svg', 'text')
@@ -797,12 +797,12 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         push()
       }))
       inspector.append(field('Заголовок', child.title ?? '', (v) => { child.title = v === '' ? null : v; push() }))
-      inspector.append(comboField('Специалист', child.specialist ?? '', () => specialists.map((sp) => sp.slug), (v) => {
+      inspector.append(comboField('Воркер', child.specialist ?? '', () => specialists.map((sp) => sp.slug), (v) => {
         child.specialist = v.trim() === '' ? null : v.trim()
         if (child.specialist) child.agent = null
         push()
       }))
-      inspector.append(comboField('Агент (если без специалиста)', child.agent ?? '', () => ['claude', 'codex', 'zcode', 'opencode'], (v) => {
+      inspector.append(comboField('Агент (если без воркера)', child.agent ?? '', () => ['claude', 'codex', 'zcode', 'opencode'], (v) => {
         child.agent = v.trim() === '' ? null : v.trim()
         if (child.agent) child.specialist = null
         push()
@@ -849,12 +849,12 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       push()
     }))
     inspector.append(field('Заголовок', step.title ?? '', (v) => { step.title = v === '' ? null : v; push() }))
-    inspector.append(comboField('Специалист (slug из .orca/specialists, вместо агента)', step.specialist ?? '', () => specialists.map((sp) => sp.slug), (v) => {
+    inspector.append(comboField('Воркер (slug из .orca/workers, вместо агента)', step.specialist ?? '', () => specialists.map((sp) => sp.slug), (v) => {
       step.specialist = v.trim() === '' ? null : v.trim()
       if (step.specialist) step.agent = null // либо specialist, либо agent
       push()
     }))
-    inspector.append(field('Агент (пусто = барьер, если нет специалиста)', step.agent ?? '', (v) => {
+    inspector.append(field('Агент (пусто = барьер, если нет воркера)', step.agent ?? '', (v) => {
       step.agent = v.trim() === '' ? null : v.trim()
       if (step.agent) step.specialist = null
       push()

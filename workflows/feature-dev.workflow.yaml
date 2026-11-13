@@ -1,34 +1,34 @@
-# Переносимый воркфлоу (aip-style): специалисты в specialists/, шаги идут по порядку,
+# Переносимый воркфлоу (aip-style): воркеры в workers/, шаги идут по порядку,
 # on_reject на ревью возвращает работу назад, тесты — один блок из трёх проверок.
 id: feature-dev
 title: 'biz/erp'
 steps:
   - id: plan
     title: 'План (openspec)'
-    specialist: planner
+    worker: planner
     sub:
-      - { id: research, title: 'Ресерч (по запросу)', specialist: researcher, optional: true }
-  - { id: plan-review, title: 'Ревью плана', specialist: reviewer, on_reject: { goto: plan, max_rounds: 2 } }
+      - { id: research, title: 'Ресерч (по запросу)', worker: researcher, optional: true }
+  - { id: plan-review, title: 'Ревью плана', worker: reviewer, on_reject: { goto: plan, max_rounds: 2 } }
   - id: dev
     title: 'Разработка'
-    specialist: coder
+    worker: coder
     gate:
       question: 'План аппрувнут? Запускать разработку?'
       options: [approve, request-changes]
-  - { id: code-review, title: 'Ревью кода', specialist: reviewer, on_reject: { goto: dev, max_rounds: 2 } }
+  - { id: code-review, title: 'Ревью кода', worker: reviewer, on_reject: { goto: dev, max_rounds: 2 } }
   - id: tests
     title: 'Тесты'
     sub:
-      - { id: test-api, title: 'API/бэкенд', specialist: tester }
-      - { id: test-static, title: 'Статический анализ', specialist: tester }
-      - { id: test-ui, title: 'Фронт/UI', specialist: uitester }
+      - { id: test-api, title: 'API/бэкенд', worker: tester }
+      - { id: test-static, title: 'Статический анализ', worker: tester }
+      - { id: test-ui, title: 'Фронт/UI', worker: uitester }
     gate:
       question: 'Код аппрувнут? Запускать тесты?'
       options: [approve, request-changes]
     on_reject: { goto: dev, max_rounds: 2 }
   - id: commit
     title: 'Коммит'
-    specialist: committer
+    worker: committer
     deps: [tests]
     gate:
       question: 'Тесты зелёные? Коммитить (без push)?'
