@@ -136,9 +136,6 @@ export default function activate(orca: OrcaWorkerApi): void {
   async function snapshot(runId: string | null): Promise<WfSnapshot> {
     const at = Date.now()
     const runs = await listRuns()
-    // The bridge serves this run's project: pin it there so terminals never sprawl into
-    // whatever workspace happens to be focused.
-    bridge.pin(runs.find((r) => r.runId === runId)?.projectPath ?? null)
     if (!runId) {
       return { at, run: null, tasks: [], gates: [], workers: [], error: null, pilot: null }
     }
@@ -1618,6 +1615,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
 
   orca.panels.handle('bridge.debug', async () => bridge.stats())
+
 
 
 }

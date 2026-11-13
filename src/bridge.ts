@@ -63,10 +63,13 @@ export class Bridge {
     return { terminal: this.fromHandle, counter: 0, sent: this.sent, finished: this.finished, inflight: this.inflight }
   }
 
-  /** The helper terminal lives in the project's own workspace when one is known. */
+  /** Helpers are cached per project path: re-pinning back and forth reuses the live
+   *  terminal instead of rotating identities — a run's consumer binding stays valid. */
+  private fromByPath: Record<string, string> = {}
   pin(projectPath: string | null): void {
-    if (projectPath !== this.pinPath) this.fromHandle = null
+    if (projectPath === this.pinPath) return
     this.pinPath = projectPath
+    this.fromHandle = projectPath ? this.fromByPath[projectPath] ?? null : null
   }
 
   /** The last helper --from terminal (informational). */
@@ -137,6 +140,7 @@ export class Bridge {
       throw new BridgeError(`не удалось создать терминал-помощник для --from: ${tail(out, 200)}`, 'no_terminal')
     }
     this.fromHandle = handle
+    if (this.pinPath) this.fromByPath[this.pinPath] = handle
     return handle
   }
 
