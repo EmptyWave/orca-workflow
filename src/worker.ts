@@ -70,9 +70,11 @@ function field(record: Record<string, unknown>, ...names: string[]): unknown {
 }
 
 let stopTimer: (() => void) | null = null
+let activeBridge: Bridge | null = null
 
 export default function activate(orca: OrcaWorkerApi): void {
   const bridge = new Bridge(orca)
+  activeBridge = bridge
   let everUsed = false
   let refreshing = false
   let lastSnapshot = ''
@@ -274,14 +276,12 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (refreshing || !everUsed) return
     refreshing = true
     try {
-      if (Date.now() < focusCooldownUntil) return
       const storedRun = (await orca.storage.get('html.runId')) ?? (await orca.storage.get('state.selectedRunId'))
       const runId = typeof storedRun === 'string' && storedRun !== '' ? storedRun : null
       let snap: WfSnapshot
       try {
         snap = await snapshot(runId)
       } catch (error) {
-        if (error instanceof BridgeError && error.code === 'not_focused') focusCooldownUntil = Date.now() + 30_000
         snap = { at: Date.now(), run: null, tasks: [], gates: [], workers: [], error: message(error), pilot: null }
       }
       // `at` changes every snapshot; compare the payload so quiet runs stay quiet
@@ -704,10 +704,6 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   // The refresh loop reads the interval setting every cycle, so Settings changes apply at once.
   let stopped = false
-  // While the project's workspace is unfocused every bridge command would spawn a deferred
-  // terminal (Orca runs a background terminal's command only once its workspace is active),
-  // so the background loop backs off; explicit panel requests still go through.
-  let focusCooldownUntil = 0
   let wakeTimer: ReturnType<typeof setTimeout> | null = null
   const wakeSoon = (): void => {
     if (wakeTimer) clearTimeout(wakeTimer)
@@ -761,7 +757,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   async function readFiles(dir: string, files: string[]): Promise<Record<string, string>> {
     const out: Record<string, string> = {}
     if (files.length === 0) return out
-    const parts = files.map((f) => `echo __FILE__${f}; base64 < ${shellQuote(`${dir}/${f}`)}`)
+    const parts = files.map((f) => `echo __FILE__${f}; base64 < ${shellQuote(`${dir}/${f}`)} || true`)
     const output = await bridge.run(parts.join('; '))
     let current: string | null = null
     const chunks: string[] = []
@@ -783,11 +779,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     const dir = await workflowsDir(source, projectPath)
     // One bridge command does the whole listing: marker + base64 per yaml file, so a directory
     // of templates costs a single terminal round-trip instead of one per file.
-    const unpinned = source === 'library'
     const listing = await bridge.run(
-      `for f in ${shellPath(dir)}/*.yaml; do [ -f "$f" ] || continue; echo "__WF_LS__\${f##*/}"; base64 < "$f"; echo __WF_LE__; done`,
-      undefined,
-      { unpinned }
+      `for f in ${shellPath(dir)}/*.yaml; do [ -f "$f" ] || continue; echo "__WF_LS__\${f##*/}"; base64 < "$f"; echo __WF_LE__; done`
     )
     const files: Record<string, string> = {}
     let current: string | null = null
@@ -840,7 +833,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
     // Resolve worker cards into steps (agents, models, failover chains) for the preview,
     // and surface steps whose worker has no card.
-    const specialists = await loadSpecialists(source === 'project' ? projectPath : null, false, unpinned)
+    const specialists = await loadSpecialists(source === 'project' ? projectPath : null)
     for (const template of templates) {
       if (template.error) continue
       const resolved = resolveSteps(template, specialists, {})
@@ -874,7 +867,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   // ---- specialists (aip-style) -----------------------------------------------------------------
 
   /** Loads `<repo>/.orca/specialists/*.yaml` and the library's `specialists/` in one batch. */
-  async function loadSpecialists(projectPath: string | null, onlyProject = false, unpinned = false): Promise<WfSpecialist[]> {
+  async function loadSpecialists(projectPath: string | null, onlyProject = false): Promise<WfSpecialist[]> {
     const root = projectPath ? projectPath.replace(/\/+$/, '') : null
     const dirs: Array<string> = []
     if (root) dirs.push(`${root}/.orca/workers`, `${root}/.orca/specialists`)
@@ -887,11 +880,13 @@ export default function activate(orca: OrcaWorkerApi): void {
       let listing = ''
       try {
         listing = await bridge.run(
-          `cd ${shellPath(dir)} 2>/dev/null && find . -type f -name '*.yaml' | sort | while read -r f; do echo "__WF_LS__$f"; base64 < "$f"; echo __WF_LE__; done`,
-          undefined,
-          { unpinned }
+          `cd ${shellPath(dir)} 2>/dev/null && find . -type f -name '*.yaml' | sort | while read -r f; do echo "__WF_LS__$f"; base64 < "$f"; echo __WF_LE__; done; true`
         )
-      } catch {
+      } catch (error) {
+        // A missing directory answers empty (the `cd … 2>/dev/null &&` guard); anything
+        // else is an infrastructure failure — propagate it instead of pretending the
+        // project has no worker cards (which would fake missingWorkers on every step).
+        if (error instanceof BridgeError) throw error
         continue
       }
       let current: string | null = null
@@ -1620,4 +1615,6 @@ function message(error: unknown): string {
 export function deactivate(): void {
   stopTimer?.()
   stopTimer = null
+  void activeBridge?.reset()
+  activeBridge = null
 }

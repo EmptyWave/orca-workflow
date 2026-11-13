@@ -2,6 +2,7 @@
 // JSON per command, the way the real bridge captures between markers.
 import { assert, mockHost, mountWorker, test, type MockHost } from 'orca/testing'
 import * as main from './worker'
+import { spawnHooks } from './bridge'
 
 const TEMPLATE_YAML = `id: demo
 title: Демо
@@ -30,11 +31,21 @@ const b64 = (s: string): string => {
 
 function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = {}) {
   let created = 0
-  let lastCommand = ''
-  const termCommands = new Map<string, string>()
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
     const dir = LS_DIR
+    // Терминал-помощник для --from создаётся CLI-командой — тоже спавном.
+    if (command.includes('orca terminal create') && command.includes('workflow-view-runner')) {
+      return '{"ok":true,"result":{"terminal":{"handle":"t_helper"}}}'
+    }
+    // Мутации оркестрации требуют идентичность отправителя, как настоящий CLI.
+    const mutation = / (run-create|task-create|gate-create|gate-resolve|task-update|worker-start|run-use|send) /.test(command)
+    if (mutation && !command.includes('--from')) {
+      throw new Error('no_active_sender_terminal: Could not determine the calling terminal for this orchestration command. Pass --from with your own terminal handle.')
+    }
+    if (command.includes('orca terminal close')) {
+      return ''
+    }
     if (command.includes('__WF_PROJ__')) {
       // The workflow-dirs probe: only the biz.erp project has .orca/workflows|workers.
       return command.includes('/Users/tester/PhpstormProjects/biz.erp') ? '__WF_PROJ__' : ''
@@ -67,6 +78,9 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = 
     }
     if (command.includes('worker-list')) {
       return '{"ok":true,"result":{"workers":[{"dispatchId":"ctx_1","taskId":"task_a","state":"succeeded","agent":"claude"}]}}'
+    }
+    if (command.includes('gate-resolve') || command.includes('task-update')) {
+      return '{"ok":true,"result":{}}'
     }
     if (command.includes('run-create')) {
       return '{"ok":true,"result":{"runId":"run_2"}}'
@@ -158,6 +172,7 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = 
     }
     return ''
   }
+  currentCanned = canned
   return mockHost({
     storage: opts.storage ?? {},
     results: {
@@ -176,42 +191,36 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = 
       },
       'editor.open': { opened: true },
       'agent.launch': { terminalId: 't-coord' },
-      // The one-shot bridge: every command arrives as terminal.create with the full shell
-      // line; reads answer per terminal, so parallel commands never mix their markers.
-      'terminal.create': (params: { command?: string }) => {
-        const id = `t_${++created}`
-        if (params.command) termCommands.set(id, params.command)
-        lastCommand = params.command ?? ''
-        return { terminalId: id }
-      },
-      'terminal.read': (params: { terminalId: string }) => {
-        const cmd = termCommands.get(params.terminalId) ?? lastCommand
-        // Echo the markers the command actually carries — the bridge's counter is randomly
-        // seeded, so the mock must parse it instead of counting creates.
-        const marker = cmd.match(/echo "__WF(\d+)B__"/)
-        const n = marker ? marker[1] : '0'
-        return {
-          lines: [`__WF${n}B__`, canned(cmd), `__WF${n}E_0__`],
-          truncated: false
-        }
-      },
       'statusBar.update': { ok: true }
     }
   })
 }
 
 /** Every test deactivates its worker even when an assertion fails: the interval would keep
- *  the node:test child process alive forever otherwise. */
+ *  the node:test child process alive forever otherwise. The spawn seam is swapped for the
+ *  canned CLI answers and cleared after the helper-terminal close settles. */
+let spawnedCommands: string[] = []
+let currentCanned: ((command: string) => string) | null = null
+const spawned = (): string[] => spawnedCommands
+
 async function withWorker(
   fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: MockHost) => Promise<void>,
   opts: { focus?: string; storage?: Record<string, unknown> } = {}
 ): Promise<void> {
   const host = makeHost(opts)
+  const canned = currentCanned as (command: string) => string
+  spawnedCommands = []
+  spawnHooks.exec = async (command) => {
+    spawnedCommands.push(command)
+    return canned(command)
+  }
   const worker = await mountWorker(main, { host })
   try {
     await fn(worker, host)
   } finally {
     await worker.deactivate()
+    await new Promise((resolve) => setTimeout(resolve, 60))
+    spawnHooks.exec = null
   }
 }
 
@@ -271,10 +280,10 @@ test('template.instantiate создаёт Run, задачи и гейты бар
     assert.equal(testerTasks.length, 2, 'test-api и test-ui в конфиге')
     for (const cfg of testerTasks) assert.deepEqual(cfg.fallback, ['zcode', 'kimi'], `fallback ${cfg.stepId}`)
     assert.equal(job.runId, 'run_2')
-    const commands = host.callsOf('terminal.create').map((c) => (c as { command?: string }).command ?? '')
+    const commands = spawned()
     // plan, research(optional), review, test-api, test-ui, commit — все материализуются.
-    assert.equal(commands.filter((c) => c.includes('task-create')).length, 6, 'все юниты')
-    assert.ok(commands.some((c) => c.includes('gate-create')), 'гейт commit создан')
+    assert.equal(commands.filter((c) => c.includes('task-create') && c.includes('--from')).length, 6, 'все юниты (после retry с --from)')
+    assert.ok(commands.some((c) => c.includes('gate-create') && c.includes('--from')), 'гейт commit создан')
     const specWrite = commands.find((c) => c.includes('base64 -d'))
     assert.ok(specWrite, 'спека пишется через base64')
   }))
@@ -344,8 +353,7 @@ test('task.retry сбрасывает шаг и его хвост, автопи�
     const answer = await worker.request('task.retry', { runId: 'run_1', taskId: 'task_a' })
     assert.equal(answer.ok, true)
     assert.deepEqual([...answer.reset].sort(), ['task_a', 'task_b'], 'шаг и зависимый хвост')
-    const commands = host.callsOf('terminal.create').map((c) => (c as { command?: string }).command ?? '')
-    const updates = commands.filter((c) => c.includes('task-update'))
+    const updates = spawned().filter((c) => c.includes('task-update') && c.includes('--from'))
     assert.equal(updates.length, 2, 'по одному сбросу на задачу')
     assert.ok(updates.every((c) => c.includes('--status pending')), 'статус pending')
   }))
@@ -357,35 +365,18 @@ test('run.meta.set привязывает ран к проекту, runs.list е
     assert.equal(runs.runs[0].projectPath, '/x/biz.erp')
   }))
 
-test('мост закреплён в воркспейсе проекта и не следует за фокусом', () =>
-  withWorker(async (worker, host) => {
-    // Пин приходит вместе с проектом: детект резолвит biz.erp.
-    await worker.request('project.current')
-    // Дальше каждая команда идёт одноразовым терминалом в воркспейсе проекта.
-    await worker.request('runs.list')
-    let created = host.callsOf('terminal.create') as Array<{ workspaceId: string }>
-    assert.ok(created.length > 0)
-    assert.ok(created.every((c) => c.workspaceId === 'w1'), 'терминалы создаются в воркспейсе проекта, не в фокусном')
-    // Фокус ушёл в другой воркспейс — команды отклоняются сразу, БЕЗ создания терминала:
-    // Orca откладывает команду фонового терминала до активации воркспейса, так что
-    // создавать его впустую — только мусорить.
-    host.respond('workspace.readContext', { branch: 'feature/x', displayName: 'other', terminals: [] })
-    await worker.emit('workspace.changed', { context: { branch: 'feature/x', displayName: 'other', terminals: [] } })
-    let before = created.length
-    const offFocus = await worker.request('runs.list')
-    assert.match(offFocus.error, /проект не в фокусе/, 'команда в чужом репо отклонена с внятной ошибкой')
-    created = host.callsOf('terminal.create') as Array<{ workspaceId: string }>
-    assert.equal(created.length, before, 'новых терминалов не создано')
-    // Фокус в worktree того же репо — это всё ещё фокус проекта: команда проходит.
-    host.respond('workspace.readContext', { branch: 'feat/momento', displayName: 'momento', terminals: [] })
-    await worker.emit('workspace.changed', { context: { branch: 'feat/momento', displayName: 'momento', terminals: [] } })
-    before = created.length
-    const inWorktree = await worker.request('runs.list')
-    assert.equal(inWorktree.error, null, 'worktree того же репо считается фокусом проекта')
-    created = host.callsOf('terminal.create') as Array<{ workspaceId: string }>
-    assert.equal(created.length, before + 1, 'команда прошла одноразовым терминалом')
-    assert.equal(created[created.length - 1].workspaceId, 'w1', 'терминал всё равно в воркспейсе проекта')
+test('мост гоняет CLI спавном: чтения без терминалов, мутации сами достают --from', () =>
+  withWorker(async (worker) => {
+    const runs = await worker.request('runs.list')
+    assert.equal(runs.runs.length, 1)
+    assert.ok(spawned().every((c) => !c.includes('orca terminal create')), 'чтения не создают терминалов')
+
+    await worker.request('gate.resolve', { gateId: 'gate_1', resolution: 'approve' })
+    const resolves = spawned().filter((c) => c.includes('gate-resolve'))
+    assert.ok(resolves.length >= 2, 'была повторная попытка после no_active_sender_terminal')
+    assert.ok(resolves[resolves.length - 1].includes('--from t_helper'), 'мутация повторена с --from терминала-помощника')
   }))
+
 
 test('projects.list отдаёт git-репозитории с путями', () =>
   withWorker(async (worker) => {
@@ -428,7 +419,7 @@ test('gate.resolve и task.start доходят до CLI с флагами', () 
       effort: 'high',
       worktree: 'name:ycl-104-momento'
     })
-    const commands = host.callsOf('terminal.create').map((c) => (c as { command?: string }).command ?? '')
+    const commands = spawned()
     const resolve = commands.find((c) => c.includes('gate-resolve'))
     assert.ok(resolve?.includes("'approve'"), 'резолюция передана')
     const start = commands.find((c) => c.includes('worker-start'))
