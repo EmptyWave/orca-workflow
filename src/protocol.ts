@@ -193,6 +193,8 @@ declare module 'orca' {
     'pilot.resume': { input: { runId: string }; output: { ok: true } }
     /** Retry a Run from a step: resets it and everything downstream; autopilot continues. */
     'task.retry': { input: { runId: string; taskId: string }; output: { ok: true; reset: string[] } }
+    /** The graph editor pushes its current document: parsed locally, no bridge involved. */
+    'templates.updated': { input: { projectPath: string; yaml: string }; output: { template: WfTemplate } }
     /** Bind a Run to a project (for runs raised before instantiate recorded it). */
     'run.meta.set': { input: { runId: string; projectPath: string }; output: { ok: true } }
     /** Write one panel-UI storage key (html.*), for scripts and shots. */
@@ -210,5 +212,8 @@ declare module 'orca' {
     'state.changed': { at: number; pendingGates: number; readyTasks: number }
     /** Posted on instantiate job progress. */
     'job.progress': { job: WfJob }
+    /** Posted when the graph editor changed a project template: the panel swaps it in
+     *  without touching the bridge. */
+    'templates.changed': { projectPath: string; template: WfTemplate }
   }
 }

@@ -751,6 +751,17 @@
         try {
           orca.plugin.on('state.changed', () => { if (S.tab === 'runs') void loadState() })
           orca.plugin.on('job.progress', (p) => { if (p && p.job) { S.job = p.job; render() } })
+          // The editor changed a template: swap it in, no bridge, no re-reading.
+          orca.plugin.on('templates.changed', (p) => {
+            if (!p || !p.template || !S.project || p.projectPath !== S.project.path) return
+            if (!Array.isArray(S.templates)) return
+            const id = p.template.id
+            const at = S.templates.findIndex((t) => t.id === id)
+            if (at >= 0) S.templates = S.templates.map((t, i) => (i === at ? p.template : t))
+            else S.templates = [p.template, ...S.templates]
+            if (!S.tplId) S.tplId = id
+            render()
+          })
         } catch { /* events are an extra */ }
         // focus moved to another workspace: rescope the project, its runs and templates
         let wsTimer = null
@@ -760,10 +771,8 @@
             wsTimer = setTimeout(async () => {
               await loadProject()
               await loadRuns()
-              S.templates = null
               if (autoTab()) return
-              if (S.tab === 'templates') { render(); void loadTemplates() }
-              else if (S.tab === 'runs') await loadState()
+              if (S.tab === 'runs') await loadState()
               else render()
             }, 800)
           })

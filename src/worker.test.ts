@@ -275,6 +275,20 @@ test('settings.save нормализует и пишет настройки; bri
     assert.equal(info.terminalId, 't1')
   }))
 
+test('templates.updated разбирает YAML редактора без моста', () =>
+  withWorker(async (worker) => {
+    const answer = await worker.request('templates.updated', {
+      projectPath: '/x/biz.erp',
+      yaml: 'id: feature-dev\ntitle: Фича\nsteps:\n  - { id: plan, specialist: planner }\n  - { id: dev, specialist: coder, fallback: [zcode] }\n'
+    })
+    assert.equal(answer.template.id, 'feature-dev')
+    assert.equal(answer.template.error, null)
+    assert.equal(answer.template.steps.length, 2)
+    assert.deepEqual(answer.template.steps[1].fallback, ['zcode'])
+    const broken = await worker.request('templates.updated', { projectPath: '/x/biz.erp', yaml: 'steps: []\n' })
+    assert.ok(broken.template.error, 'ошибка парсинга честно видна')
+  }))
+
 test('task.retry сбрасывает шаг и его хвост, автопилот просыпается', () =>
   withWorker(async (worker, host) => {
     const answer = await worker.request('task.retry', { runId: 'run_1', taskId: 'task_a' })

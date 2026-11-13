@@ -1231,6 +1231,37 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { libraryDir, refreshMs, defaultAgent }
   })
 
+  orca.panels.handle('templates.updated', async ({ projectPath, yaml }) => {
+    everUsed = true
+    // Local parse, no bridge: the editor already holds the document, the panel swaps it in.
+    const sourcePath = `${projectPath.replace(/\/+$/, '')}/.orca/workflows`
+    let template: WfTemplate
+    try {
+      const parsed = parseTemplate('editor', parseYaml(yaml))
+      template = {
+        id: parsed.id,
+        title: parsed.title,
+        source: 'project',
+        sourcePath,
+        file: `${parsed.id}.workflow.yaml`,
+        steps: parsed.steps,
+        error: null
+      }
+    } catch (error) {
+      template = {
+        id: 'editor',
+        title: 'Черновик редактора',
+        source: 'project',
+        sourcePath,
+        file: 'editor.workflow.yaml',
+        steps: [],
+        error: message(error)
+      }
+    }
+    orca.panels.post('templates.changed', { projectPath, template })
+    return { template }
+  })
+
   orca.panels.handle('run.meta.set', async ({ runId, projectPath }) => {
     everUsed = true
     await orca.storage.set(`runmeta.${runId}`, { projectPath, at: Date.now() })

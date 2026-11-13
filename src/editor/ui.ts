@@ -376,6 +376,20 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       render()
     }
     doc.change(graph)
+    pushTemplateToPanel()
+  }
+
+  /** The panel's Templates tab mirrors the editor live: no re-reading files, the graph
+   *  itself is the source. Debounced, local — nothing touches the bridge. */
+  let tplPushTimer: ReturnType<typeof setTimeout> | null = null
+  function pushTemplateToPanel(): void {
+    if (!projectPath) return
+    if (tplPushTimer) clearTimeout(tplPushTimer)
+    tplPushTimer = setTimeout(() => {
+      orca.plugin
+        .request('templates.updated', { projectPath, yaml: emit(graph) } as never, { timeoutMs: 10000 })
+        .catch(() => undefined)
+    }, 800)
   }
 
   function addStep(withAgent: boolean): void {
