@@ -65,6 +65,7 @@
       input, select {
         font: inherit; color: var(--orca-foreground); background: var(--orca-input);
         border: 1px solid var(--orca-border); border-radius: 6px; padding: 4px 7px; width: 100%;
+        height: 28px; box-sizing: border-box;
       }
       input:focus, select:focus { outline: 1.5px solid var(--orca-accent); outline-offset: -1px; }
       label.f { display: block; margin: 7px 0 0; }
@@ -744,13 +745,13 @@
           <div class="rowline" style="margin-top:9px"><button class="btn primary" data-act="save-cfg">Сохранить</button></div></div>
         <div class="card"><h2>Автопилот</h2>
           <label class="rowline"><input type="checkbox" id="autopilot" style="width:auto"${S.autoPilot === false ? '' : ' checked'}/>
-          <span>вести пайплайн самому: стартовать готовые шаги, крутить циклы ревью — гейты всё равно ждут тебя</span></label></div>
+          <span>вести шаги самому (легаси; новые раны ведёт координатор-агент)</span></label></div>
         <div class="card"><h2>Мост</h2>
           <div class="kv">
-            <span>терминал</span><span>${S.bridge ? `<code>${esc(S.bridge)}</code> — жив, следует за фокусным воркспейсом` : 'не создан'}</span>
+            <span>помощник</span><span>${S.bridge ? `<code>${esc(S.bridge.slice(0, 22))}…</code>` : 'не создан'}</span>
           </div>
-          <div class="rowline" style="margin-top:8px"><button class="btn" data-act="reset-bridge">Пересоздать мост</button></div>
-          <div class="tiny muted" style="margin-top:6px">Orca пускает ввод только в терминалы фокусного воркспейса — мост живёт в нём и пересоздаётся при смене фокуса.</div></div>`
+          <div class="rowline" style="margin-top:8px"><button class="btn" data-act="reset-bridge">Пересоздать помощника</button></div>
+          <div class="tiny muted" style="margin-top:6px">Команды CLI воркер выполняет сам; мутации оркестрации подписываются терминалом-помощником.</div></div>`
       }
 
       // ------------------------------------------------------------------ boot
