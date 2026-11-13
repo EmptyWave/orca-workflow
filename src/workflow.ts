@@ -35,6 +35,14 @@ function str(v: YamlValue, what: string): string {
   return v
 }
 
+/** A `key: x` or `key: [x, y]` list of agent names (the failover chain). */
+function stringOrArray(value: unknown, where: string): string[] {
+  if (value === undefined || value === null) return []
+  if (typeof value === 'string') return value.trim() === '' ? [] : [value]
+  if (Array.isArray(value)) return value.map((v) => str(v, where + '[]'))
+  throw new Error(`${where} должен быть списком или одним значением`)
+}
+
 function strOrNull(v: YamlValue | undefined, what: string): string | null {
   if (v === undefined || v === null) return null
   return str(v, what)
@@ -61,6 +69,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
 
     const agent = strOrNull(raw.agent, 'steps[].agent')
     const specialist = strOrNull(raw.specialist, 'steps[].specialist')
+    const fallback = stringOrArray(raw.fallback, `шаг "${stepId}": fallback`)
     const spec = strOrNull(raw.spec, 'steps[].spec')
     const specFile = strOrNull(raw.specFile, 'steps[].specFile')
     const hasSub = Array.isArray(raw.sub) && raw.sub.length > 0
@@ -145,6 +154,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
           agent: childAgent,
           model: strOrNull(rawChild.model, 'sub[].model'),
           effort: strOrNull(rawChild.effort, 'sub[].effort'),
+          fallback: stringOrArray(rawChild.fallback, `подшаг "${childId}": fallback`),
           spec: childSpec,
           specFile: childSpecFile,
           deps: childDeps,
@@ -161,6 +171,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
       specialist,
       model: strOrNull(raw.model, 'steps[].model'),
       effort: strOrNull(raw.effort, 'steps[].effort'),
+      fallback,
       spec,
       specFile,
       deps,
@@ -209,6 +220,7 @@ export type WfUnit = {
   agent: string
   model: string | null
   effort: string | null
+  fallback: string[] // failover chain, primary first is implied by agent
   spec: string | null
   specFile: string | null
   deps: string[] // unit ids
@@ -258,6 +270,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
           agent: child.agent ?? '',
           model: child.model,
           effort: child.model ? child.effort : null,
+          fallback: child.fallback,
           spec: child.spec,
           specFile: child.specFile,
           deps: child.optional ? [] : child.deps.length > 0 ? [...child.deps] : [...external],
@@ -276,6 +289,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
           agent: step.agent ?? '',
           model: step.model,
           effort: step.model ? step.effort : null,
+          fallback: step.fallback,
           spec: step.spec,
           specFile: step.specFile,
           deps: (step.sub ?? []).filter((c) => !c.optional).map((c) => c.id),
@@ -300,6 +314,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
         agent: step.agent ?? '',
         model: step.model,
         effort: step.model ? step.effort : null,
+        fallback: step.fallback,
         spec: step.spec,
         specFile: step.specFile,
         deps: [...external],

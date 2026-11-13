@@ -12,6 +12,8 @@ export type WfTask = {
   agent: string | null
   /** Model the step is configured to run on (from the template/instantiate), when known. */
   model: string | null
+  /** Failover chain for the step: agents left to try when it fails. */
+  fallback: string[]
 }
 
 export type WfGate = {
@@ -64,6 +66,8 @@ export type WfStep = {
   agent: string | null
   model: string | null
   effort: string | null
+  /** Failover chain: agents to retry this step on, in order, when it fails. */
+  fallback: string[]
   spec: string | null
   /** Path relative to the workflows dir; the editor keeps it, the worker resolves it. */
   specFile: string | null
@@ -83,6 +87,7 @@ export type WfSubStepLike = {
   agent: string | null
   model: string | null
   effort: string | null
+  fallback: string[]
   spec: string | null
   specFile: string | null
   deps: string[]
@@ -94,6 +99,7 @@ export type WfSpecialist = {
   agent: string
   model: string | null
   effort: string | null
+  fallback: string[]
   spec: string | null
   error: string | null
 }
@@ -177,6 +183,10 @@ declare module 'orca' {
     }
     /** Delete a specialist file; refuses while any project template still references it. */
     'specialists.delete': { input: { projectPath: string; slug: string }; output: { ok: true } }
+    /** A worker's report for one step (bounded transcript tail). */
+    'task.report': { input: { dispatchId: string }; output: { report: string } }
+    /** Retry a Run from a step: resets it and everything downstream; autopilot continues. */
+    'task.retry': { input: { runId: string; taskId: string }; output: { ok: true; reset: string[] } }
     /** Bind a Run to a project (for runs raised before instantiate recorded it). */
     'run.meta.set': { input: { runId: string; projectPath: string }; output: { ok: true } }
     /** Write one panel-UI storage key (html.*), for scripts and shots. */

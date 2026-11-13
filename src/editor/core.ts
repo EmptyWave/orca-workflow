@@ -99,6 +99,7 @@ export function emit(graph: WfGraph): string {
       lines.push('    spec: |')
       for (const line of step.spec.replace(/\n$/, '').split('\n')) lines.push(`      ${line}`)
     }
+    if (step.fallback.length > 0) lines.push(`    fallback: [${step.fallback.join(', ')}]`)
     if (step.deps.length > 0) lines.push(`    deps: [${step.deps.join(', ')}]`)
     if (step.gate) {
       lines.push('    gate:')
@@ -116,6 +117,7 @@ export function emit(graph: WfGraph): string {
         if (child.specialist) bits.push(`specialist: ${child.specialist}`)
         if (child.agent) bits.push(`agent: ${child.agent}`)
         if (child.model) bits.push(`model: ${child.model}`)
+        if (child.fallback.length > 0) bits.push(`fallback: [${child.fallback.join(', ')}]`)
         if (child.optional) bits.push('optional: true')
         if (child.specFile) bits.push(`specFile: ${child.specFile}`)
         lines.push(`      - { ${bits.join(', ')} }`)
@@ -230,6 +232,7 @@ export function mergeGraphs(base: WfGraph, outside: WfGraph, mine: WfGraph): WfG
         id,
         title: pick('title'),
         specialist: pick('specialist'),
+        fallback: pick('fallback'),
         agent: pick('agent'),
         model: pick('model'),
         effort: pick('effort'),

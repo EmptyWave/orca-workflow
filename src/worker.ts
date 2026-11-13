@@ -153,18 +153,22 @@ export default function activate(orca: OrcaWorkerApi): void {
         deps: stringList(field(row, 'deps')),
         dispatchId: dispatch,
         agent: null,
-        model: null
+        model: null,
+        fallback: []
       }
     })
     // Template config from instantiate: agent and model per task, when we raised the run.
     const autoStored = await orca.storage.get(`auto.${runId}`)
     if (autoStored && typeof autoStored === 'object') {
-      const autoTasks = (autoStored as { tasks?: Record<string, { agent?: string; model?: string | null }> }).tasks ?? {}
+      const autoTasks = (autoStored as {
+        tasks?: Record<string, { agent?: string; model?: string | null; fallback?: string[] }>
+      }).tasks ?? {}
       for (const task of tasks) {
         const cfg = autoTasks[task.id]
         if (cfg) {
           task.agent = cfg.agent ?? task.agent
           task.model = cfg.model ?? null
+          task.fallback = cfg.fallback ?? []
         }
       }
     }
@@ -282,7 +286,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     repoPath: string | null
     baseBranch: string | null
     firstStarted: boolean
-    tasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null }>
+    tasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null; fallback: string[] }>
+    /** Agents already tried per task, the failover chain's position. */
+    triedAgents: Record<string, string[]>
     reviews: Record<string, { devTaskId: string; devStepId: string; maxRounds: number; source: 'verdict' | 'failure' }>
     optionals: Record<string, { parentTaskId: string; stepId: string }>
     verdicts: Record<string, 'approve' | 'request-changes'>
@@ -456,7 +462,34 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
     if (acted) return
 
-    // 5. RUN: <sub-step-id> requests in succeeded parent reports start optional sub-steps.
+    // 5. A failed task with an unused fallback agent: restart it on the next one.
+    for (const task of snap.tasks) {
+      if (acted) break
+      if (task.status !== 'failed') continue
+      const cfg = state.tasks[task.id]
+      if (!cfg) continue
+      state.triedAgents ??= {}
+      const tried = state.triedAgents[task.id] ?? [cfg.agent]
+      const chain = [cfg.agent, ...(cfg.fallback ?? [])]
+      const next = chain.find((a) => a && !tried.includes(a))
+      if (!next) continue // chain exhausted — the failure stays for the person to see
+      tried.push(next)
+      state.triedAgents[task.id] = tried
+      const from6 = await fromFlag()
+      await act(`шаг ${cfg.stepId} упал на ${tried[tried.length - 2]} — фейловер на ${next}`, async () =>
+        bridge.run(
+          `orca orchestration worker-start --task ${shellQuote(task.id)} --from ${from6} --worktree ${shellQuote(
+            `name:${state.worktreeName}`
+          )} --agent ${shellQuote(next)}${cfg.model ? ` --model ${shellQuote(cfg.model)}` : ''}${
+            cfg.model && cfg.effort ? ` --effort ${shellQuote(cfg.effort)}` : ''
+          } --json`,
+          90_000
+        )
+      )
+    }
+    if (acted) return
+
+    // 6. RUN: <sub-step-id> requests in succeeded parent reports start optional sub-steps.
     for (const [optionalTaskId, link] of Object.entries(state.optionals)) {
       if (acted) break
       if (byId.get(optionalTaskId)?.status && byId.get(optionalTaskId)?.status !== 'pending') continue
@@ -694,11 +727,12 @@ export default function activate(orca: OrcaWorkerApi): void {
               agent: String(raw.agent ?? 'claude'),
               model: typeof raw.model === 'string' ? raw.model : null,
               effort: typeof raw.effort === 'string' ? raw.effort : null,
+              fallback: Array.isArray(raw.fallback) ? raw.fallback.map(String) : typeof raw.fallback === 'string' && raw.fallback !== '' ? [String(raw.fallback)] : [],
               spec: typeof raw.spec === 'string' ? raw.spec : null,
               error: null
             })
           } catch (error) {
-            out.push({ slug, agent: 'claude', model: null, effort: null, spec: null, error: message(error) })
+            out.push({ slug, agent: 'claude', model: null, effort: null, fallback: [], spec: null, error: message(error) })
           }
         }
       }
@@ -728,26 +762,28 @@ export default function activate(orca: OrcaWorkerApi): void {
       agent: string | null,
       model: string | null,
       effort: string | null,
+      fallback: string[],
       spec: string | null,
       specFile: string | null
-    ): { agent: string | null; model: string | null; effort: string | null; spec: string | null } => {
+    ): { agent: string | null; model: string | null; effort: string | null; fallback: string[]; spec: string | null } => {
       const specOverride = specFile ? (specs[specFile] ?? spec) : spec
-      if (!specialist) return { agent, model, effort: model ? effort : null, spec: specOverride ?? spec }
+      if (!specialist) return { agent, model, effort: model ? effort : null, fallback, spec: specOverride ?? spec }
       const sp = bySlug.get(specialist)
-      if (!sp) return { agent, model, effort: model ? effort : null, spec: specOverride ?? spec }
+      if (!sp) return { agent, model, effort: model ? effort : null, fallback, spec: specOverride ?? spec }
       const finalModel = model ?? sp.model
       return {
         agent: agent ?? sp.agent,
         model: finalModel,
         effort: finalModel ? (effort ?? sp.effort) : null,
+        fallback: fallback.length > 0 ? fallback : sp.fallback,
         spec: specOverride ?? sp.spec
       }
     }
     return template.steps.map((step) => {
-      const own = resolveUnit(step.specialist, step.agent, step.model, step.effort, step.spec, step.specFile)
+      const own = resolveUnit(step.specialist, step.agent, step.model, step.effort, step.fallback ?? [], step.spec, step.specFile)
       const sub = (step.sub ?? []).map((child) => ({
         ...child,
-        ...resolveUnit(child.specialist, child.agent, child.model, child.effort, child.spec, child.specFile)
+        ...resolveUnit(child.specialist, child.agent, child.model, child.effort, child.fallback ?? [], child.spec, child.specFile)
       }))
       return { ...step, ...own, sub }
     })
@@ -867,7 +903,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         job.status = 'done'
         await saveJob(job)
         // Auto-pilot bookkeeping: per-task step configs, review retry pairs, optional subs.
-        const autoTasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null }> = {}
+        const autoTasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null; fallback: string[] }> = {}
         for (const unit of units) {
           const taskId = taskOf.get(unit.id)
           if (!taskId || !unit.agent) continue
@@ -875,7 +911,8 @@ export default function activate(orca: OrcaWorkerApi): void {
             stepId: unit.id,
             agent: unit.agent,
             model: unit.model,
-            effort: unit.model ? unit.effort : null
+            effort: unit.model ? unit.effort : null,
+            fallback: unit.fallback ?? []
           }
         }
         // aip semantics: on_reject on a review unit sends the work back to on_reject.goto.
@@ -930,6 +967,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           optionals: autoOptionals,
           verdicts: {},
           rounds: {},
+          triedAgents: {},
           actions: 0,
           stopped: null
         })
@@ -1186,6 +1224,47 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
     await bridge.run(`rm -f ${shellPath(`${projectPath.replace(/\/+$/, '')}/.orca/specialists/${slug}.yaml`)}`)
     return { ok: true as const }
+  })
+
+  orca.panels.handle('task.report', async ({ dispatchId }) => {
+    everUsed = true
+    return { report: await readWorkerReport(dispatchId) }
+  })
+
+  orca.panels.handle('task.retry', async ({ runId, taskId }) => {
+    everUsed = true
+    const snap = await snapshot(runId)
+    const byId = new Map(snap.tasks.map((t) => [t.id, t]))
+    if (!byId.has(taskId)) throw new BridgeError(`задача ${taskId} не в ране ${runId}`, 'cli_error')
+    // The step itself and everything downstream of it.
+    const downstream = new Set<string>([taskId])
+    let grew = true
+    while (grew) {
+      grew = false
+      for (const t of snap.tasks) {
+        if (downstream.has(t.id)) continue
+        if (t.deps.some((d) => downstream.has(d))) {
+          downstream.add(t.id)
+          grew = true
+        }
+      }
+    }
+    const from = await fromFlag()
+    for (const id of downstream) {
+      await bridge.run(`orca orchestration task-update --id ${shellQuote(id)} --status pending ${from} --json`)
+    }
+    // Resume the autopilot and forget failover history for the reset tail.
+    const state = await loadAuto(runId)
+    if (state) {
+      state.stopped = null
+      for (const id of downstream) {
+        delete state.triedAgents?.[id]
+        delete state.verdicts[id]
+      }
+      await saveAuto(runId, state)
+    }
+    void refresh()
+    return { ok: true as const, reset: [...downstream] }
   })
 
   orca.panels.handle('ui.set', async ({ key, value }) => {

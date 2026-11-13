@@ -30,6 +30,7 @@ const b64 = (s: string): string => {
 
 function makeHost() {
   let sends = 0
+  let created = 0
   let lastCommand = ''
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
@@ -67,7 +68,9 @@ function makeHost() {
       return '{"ok":true,"result":{"runId":"run_2"}}'
     }
     if (command.includes('task-create')) {
-      return '{"ok":true,"result":{"taskId":"task_new","id":"task_new"}}'
+      created += 1
+      const id = `task_${created}`
+      return JSON.stringify({ ok: true, result: { taskId: id, id } })
     }
     if (command.includes('gate-create')) {
       return '{"ok":true,"result":{"gateId":"gate_new"}}'
@@ -121,7 +124,7 @@ function makeHost() {
             researcher: 'agent: claude\nspec: RESEARCH SPEC\n',
             reviewer: 'agent: claude\nspec: REVIEW SPEC\n',
             coder: 'agent: claude\nspec: CODE SPEC\n',
-            tester: 'agent: claude\nmodel: cheap-model\nspec: TEST SPEC\n',
+            tester: 'agent: claude\nmodel: cheap-model\nfallback: [zcode, kimi]\nspec: TEST SPEC\n',
             committer: 'agent: claude\nspec: COMMIT SPEC\n'
           }
         : { demo: TEMPLATE_YAML }
@@ -233,6 +236,13 @@ test('template.instantiate создаёт Run, задачи и гейты бар
     }
     assert.ok(job, 'job должен записаться')
     assert.equal(job.status, 'done', job.error ?? '')
+    // The failover chain from the specialist lands in the run config.
+    const auto = (host.data().storage['auto.run_2'] ?? {}) as {
+      tasks?: Record<string, { fallback?: string[]; agent?: string; stepId?: string }>
+    }
+    const testerTasks = Object.values(auto.tasks ?? {}).filter((cfg) => cfg.stepId?.startsWith('test-'))
+    assert.equal(testerTasks.length, 2, 'test-api и test-ui в конфиге')
+    for (const cfg of testerTasks) assert.deepEqual(cfg.fallback, ['zcode', 'kimi'], `fallback ${cfg.stepId}`)
     assert.equal(job.runId, 'run_2')
     const commands = host.callsOf('terminal.sendText').map((c) => (c as { text: string }).text)
     // plan, research(optional), review, test-api, test-ui, commit — все материализуются.
@@ -263,6 +273,17 @@ test('settings.save нормализует и пишет настройки; bri
     assert.equal((host.data().storage['bridge.terminalId'] ?? null), null)
     const info = await worker.request('bridge.info')
     assert.equal(info.terminalId, 't1')
+  }))
+
+test('task.retry сбрасывает шаг и его хвост, автопилот просыпается', () =>
+  withWorker(async (worker, host) => {
+    const answer = await worker.request('task.retry', { runId: 'run_1', taskId: 'task_a' })
+    assert.equal(answer.ok, true)
+    assert.deepEqual([...answer.reset].sort(), ['task_a', 'task_b'], 'шаг и зависимый хвост')
+    const commands = host.callsOf('terminal.sendText').map((c) => (c as { text: string }).text)
+    const updates = commands.filter((c) => c.includes('task-update'))
+    assert.equal(updates.length, 2, 'по одному сбросу на задачу')
+    assert.ok(updates.every((c) => c.includes('--status pending')), 'статус pending')
   }))
 
 test('run.meta.set привязывает ран к проекту, runs.list её отдаёт', () =>

@@ -395,6 +395,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       gate: null,
       onReject: null,
       specialist: null,
+      fallback: [],
       sub: []
     }
     // New nodes land right below the selection, or under the bottom-most node.
@@ -793,6 +794,10 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         push()
       }))
       inspector.append(comboField('Модель (опц.)', child.model ?? '', () => [...new Set(specialists.map((sp) => sp.model).filter((m): m is string => !!m))], (v) => { child.model = v.trim() === '' ? null : v.trim(); push() }))
+      inspector.append(comboField('Fallback — агенты при провале', child.fallback.join(', '), () => ['claude', 'codex', 'zcode', 'kimi', 'gemini'], (v) => {
+        child.fallback = v.split(',').map((a) => a.trim()).filter(Boolean)
+        push()
+      }))
       const optLabel = document.createElement('label')
       optLabel.textContent = 'Опциональный (стартует только по RUN: из отчёта родителя)'
       const optRow = document.createElement('div')
@@ -858,6 +863,10 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     inspector.append(comboField('Модель (опц.)', step.model ?? '', () => [...new Set([...specialists.map((sp) => sp.model), ...graph.steps.map((st) => st.model)].filter((m): m is string => !!m))], (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }))
     const stepSpecialistForEffort = specialists.find((sp) => sp.slug === step.specialist)
     inspector.append(comboField('Effort (только с моделью)', step.effort ?? '', () => effortsFor(step.agent ?? stepSpecialistForEffort?.agent), (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }))
+    inspector.append(comboField('Fallback — агенты при провале (через запятую вводится вручную)', step.fallback.join(', '), () => ['claude', 'codex', 'zcode', 'kimi', 'gemini'], (v) => {
+      step.fallback = v.split(',').map((a) => a.trim()).filter(Boolean)
+      push()
+    }))
     inspector.append(field('specFile (путь в каталоге шаблонов)', step.specFile ?? '', (v) => { step.specFile = v.trim() === '' ? null : v.trim(); step.spec = null; push() }))
     const specLabel = document.createElement('label')
     specLabel.textContent = 'spec (инлайн, если нет specFile)'
@@ -910,7 +919,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       const n = step.sub.length + 1
       let id = `sub-${n}`
       while (graph.steps.some((st) => st.sub.some((c) => c.id === id))) id = `sub-${Number(id.slice(4)) + 1}`
-      step.sub.push({ id, title: null, specialist: null, agent: null, model: null, effort: null, spec: null, specFile: null, deps: [], optional: false })
+      step.sub.push({ id, title: null, specialist: null, agent: null, model: null, effort: null, fallback: [], spec: null, specFile: null, deps: [], optional: false })
       push()
       selection = { kind: 'sub', parentId: step.id, id }
       render()
@@ -993,7 +1002,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     while (stepById(`step${n}`)) n += 1
     const id = `step${n}`
     graph.steps.push({
-      id, title: `Шаг ${n}`, specialist: null, agent: 'claude', model: null, effort: null,
+      id, title: `Шаг ${n}`, specialist: null, agent: 'claude', model: null, effort: null, fallback: [],
       spec: 'Новая задача: {{objective}}.', specFile: null, deps: [], gate: null, onReject: null, sub: []
     })
     graph.layout[id] = p

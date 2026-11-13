@@ -35,6 +35,29 @@ steps:
     on_reject: { goto: dev, max_rounds: 2 }
 `
 
+test('парсер: fallback-цепочка на шаге и подшаге', () => {
+  const value = parseYaml(`id: t
+title: T
+steps:
+  - id: dev
+    agent: claude
+    spec: |
+      работать
+    fallback: [codex, kimi]
+  - id: tests
+    agent: claude
+    spec: |
+      проверить
+    sub:
+      - { id: test-api, agent: claude, fallback: [zcode] }
+`) as { [k: string]: unknown }
+  const steps = value.steps as Array<{ [k: string]: unknown }>
+  assert.deepEqual(steps[0].fallback, ['codex', 'kimi'])
+  const child = (steps[1].sub as Array<{ [k: string]: unknown }>)[0]
+  assert.deepEqual(child.fallback, ['zcode'])
+  assert.deepEqual(parseTemplate('t', value).steps[0].fallback, ['codex', 'kimi'])
+})
+
 test('парсер: блоки, потоки, кавычки, блочные скаляры', () => {
   const value = parseYaml(TEMPLATE) as { [k: string]: unknown }
   assert.equal(value.id, 'feature-dev')
