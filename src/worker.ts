@@ -154,15 +154,19 @@ export default function activate(orca: OrcaWorkerApi): void {
         dispatchId: dispatch,
         agent: null,
         model: null,
-        fallback: []
+        fallback: [],
+        parentTaskId: null
       }
     })
     // Template config from instantiate: agent and model per task, when we raised the run.
     const autoStored = await orca.storage.get(`auto.${runId}`)
     if (autoStored && typeof autoStored === 'object') {
-      const autoTasks = (autoStored as {
+      const autoData = (autoStored as {
         tasks?: Record<string, { agent?: string; model?: string | null; fallback?: string[] }>
-      }).tasks ?? {}
+        children?: Record<string, string>
+        optionals?: Record<string, { parentTaskId: string }>
+      }) ?? {}
+      const autoTasks = autoData.tasks ?? {}
       for (const task of tasks) {
         const cfg = autoTasks[task.id]
         if (cfg) {
@@ -170,6 +174,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           task.model = cfg.model ?? null
           task.fallback = cfg.fallback ?? []
         }
+        task.parentTaskId = autoData.children?.[task.id] ?? autoData.optionals?.[task.id]?.parentTaskId ?? null
       }
     }
     // Manual agent notes for runs raised before per-step configuration existed.
@@ -289,6 +294,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     tasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null; fallback: string[] }>
     /** Agents already tried per task, the failover chain's position. */
     triedAgents: Record<string, string[]>
+    /** Sub-step tasks -> their owning block task, for nested display. */
+    children: Record<string, string>
     reviews: Record<string, { devTaskId: string; devStepId: string; maxRounds: number; source: 'verdict' | 'failure' }>
     optionals: Record<string, { parentTaskId: string; stepId: string }>
     verdicts: Record<string, 'approve' | 'request-changes'>
@@ -951,11 +958,17 @@ export default function activate(orca: OrcaWorkerApi): void {
         }
         // Optional sub-steps: started on a RUN: <id> request from the parent's report.
         const autoOptionals: Record<string, { parentTaskId: string; stepId: string }> = {}
+        // Every sub-step task knows its owning block task, so the panel can nest them.
+        const autoChildren: Record<string, string> = {}
         for (const unit of units) {
-          if (!unit.optional) continue
+          if (unit.role !== 'child') continue
           const parentTaskId = stepIdToTask.get(unit.stepId)
           const ownTaskId = taskOf.get(unit.id)
-          if (parentTaskId && ownTaskId) autoOptionals[ownTaskId] = { parentTaskId, stepId: unit.id }
+          if (!ownTaskId) continue
+          // A pure block (no spec of its own) has no parent task: anchor by the step id,
+          // the panel renders such groups under a block header.
+          autoChildren[ownTaskId] = parentTaskId && parentTaskId !== ownTaskId ? parentTaskId : `step:${unit.stepId}`
+          if (unit.optional && parentTaskId) autoOptionals[ownTaskId] = { parentTaskId, stepId: unit.id }
         }
         await orca.storage.set(`auto.${run.runId}`, {
           worktreeName: input.worktreeName,
@@ -965,6 +978,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           tasks: autoTasks,
           reviews: autoReviews,
           optionals: autoOptionals,
+          children: autoChildren,
           verdicts: {},
           rounds: {},
           triedAgents: {},

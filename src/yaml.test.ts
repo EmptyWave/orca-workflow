@@ -55,7 +55,7 @@ steps:
   assert.deepEqual(steps[0].fallback, ['codex', 'kimi'])
   const child = (steps[1].sub as Array<{ [k: string]: unknown }>)[0]
   assert.deepEqual(child.fallback, ['zcode'])
-  assert.deepEqual(parseTemplate('t', value).steps[0].fallback, ['codex', 'kimi'])
+  assert.deepEqual(parseTemplate('t', value as never).steps[0].fallback, ['codex', 'kimi'])
 })
 
 test('парсер: блоки, потоки, кавычки, блочные скаляры', () => {

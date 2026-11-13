@@ -80,6 +80,16 @@
       .step .body { flex: 1; min-width: 0; }
       .step .title { font-weight: 600; overflow-wrap: anywhere; }
       .step .meta { font-size: 11px; color: var(--orca-muted-foreground); margin-top: 1px; overflow-wrap: anywhere; }
+      .step.childrow { padding-left: 34px; position: relative; }
+      .step.childrow::before {
+        content: ''; position: absolute; left: 20px; top: 0; bottom: 0;
+        border-left: 1px dashed var(--orca-border);
+      }
+      .step.childrow .title { font-weight: 500; }
+      .blockhead {
+        display: flex; gap: 8px; align-items: center; padding: 5px 6px 3px; margin-top: 4px;
+        color: var(--orca-muted-foreground); font-size: 11.5px; letter-spacing: .02em;
+      }
       .step.sub { padding-left: 28px; }
       .step.sub .title { font-weight: 400; color: var(--orca-muted-foreground); }
       .step .start { margin: 6px 0 2px; display: flex; flex-direction: column; gap: 6px; }
@@ -497,7 +507,46 @@
         const gateByTask = new Map(gates.map((g) => [g.taskId, g]))
 
         const eff = effectiveStatuses(snap.tasks || [], snap.gates || [])
-        const steps = (snap.tasks || []).map((t) => {
+        // Group sub-step tasks under their parent (or under a block header for pure blocks).
+        const kidsOf = new Map()
+        for (const t of snap.tasks || []) {
+          if (!t.parentTaskId) continue
+          const arr = kidsOf.get(t.parentTaskId) || []
+          arr.push(t)
+          kidsOf.set(t.parentTaskId, arr)
+        }
+        const emitted = new Set()
+        const stepRows = []
+        const aggregate = (kids) => {
+          const st = kids.map((k) => (eff.get(k.id) || { status: k.status }).status)
+          if (st.includes('failed')) return 'failed'
+          if (st.includes('dispatched')) return 'dispatched'
+          if (st.every((x) => x === 'succeeded')) return 'succeeded'
+          if (st.includes('blocked')) return 'blocked'
+          if (st.includes('ready')) return 'ready'
+          return 'queued'
+        }
+        for (const t of snap.tasks || []) {
+          if (emitted.has(t.id)) continue
+          if (t.parentTaskId && t.parentTaskId.startsWith('step:')) {
+            const kids = kidsOf.get(t.parentTaskId) || []
+            for (const k of kids) emitted.add(k.id)
+            const agg = aggregate(kids)
+            stepRows.push(`<div class="blockhead">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — параллельные подшаги</div>`)
+            for (const k of kids) stepRows.push(stepRow(k, true))
+            continue
+          }
+          if (t.parentTaskId) continue // nested under a real parent task, rendered with it
+          emitted.add(t.id)
+          stepRows.push(stepRow(t, false))
+          for (const k of kidsOf.get(t.id) || []) {
+            emitted.add(k.id)
+            stepRows.push(stepRow(k, true))
+          }
+        }
+        const steps = stepRows.join('')
+
+        function stepRow(t, child) {
           const e = eff.get(t.id) || { status: t.status }
           const gateHint = e.gate ? `гейт: «${esc(e.gate.question.slice(0, 60))}${e.gate.question.length > 60 ? '…' : ''}»` : ''
           const via = e.via ? `(через ${esc(e.via)})` : ''
@@ -545,17 +594,23 @@
             if (S.reports[t.id] !== undefined) bits.push(`<pre>${esc(S.reports[t.id])}</pre>`)
             drawer = `<div class="step-drawer">${bits.join('')}</div>`
           }
-          return `<div class="step">
+          const nest = child ? ' childrow' : ''
+          const branch = child ? `<span style="color:var(--orca-muted-foreground)">↳ </span>` : ''
+          const inBlock = child && String(t.parentTaskId || '').startsWith('step:')
+            ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
+            : ''
+          return `<div class="step${nest}">
             <div class="st">${statusIcon(e.status)}</div>
             <div class="ag">${agentIcon(t.agent)}</div>
             <div class="body">
-              <div class="title">${esc(t.title || t.id)}${startBtn}${chev}</div>
+              <div class="title">${branch}${esc(t.title || t.id)}${startBtn}${chev}</div>
+              ${inBlock}
               <div class="meta">${esc(meta)}</div>
               ${startForm}
               ${drawer}
             </div>
           </div>`
-        }).join('')
+        }
 
         const jobCard = S.job && S.job.status !== 'done' ? `<div class="callout ${S.job.status === 'failed' ? 'danger' : ''}">${esc(S.job.error || 'поднятие рана: ' + (S.job.status || '…'))}</div>` : ''
         return sel + runTitle + errorCallout + jobCard +

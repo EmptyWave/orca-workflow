@@ -14,6 +14,8 @@ export type WfTask = {
   model: string | null
   /** Failover chain for the step: agents left to try when it fails. */
   fallback: string[]
+  /** The owning block step for sub-step tasks (test-api inside tests); null for main steps. */
+  parentTaskId: string | null
 }
 
 export type WfGate = {
