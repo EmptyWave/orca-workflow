@@ -118,6 +118,7 @@ export function emit(graph: WfGraph): string {
         if (child.agent) bits.push(`agent: ${child.agent}`)
         if (child.model) bits.push(`model: ${child.model}`)
         if (child.fallback.length > 0) bits.push(`fallback: [${child.fallback.join(', ')}]`)
+        bits.push(`phase: ${child.phase ?? (child.optional ? 'after' : 'before_start')}`)
         if (child.optional) bits.push('optional: true')
         if (child.specFile) bits.push(`specFile: ${child.specFile}`)
         lines.push(`      - { ${bits.join(', ')} }`)

@@ -1,5 +1,6 @@
 // Unit tests for the mini-YAML parser and the template schema validation.
 import { assert, test } from 'orca/testing'
+import { materialize } from './workflow'
 import { parseYaml } from './yaml'
 import { applyPlaceholders, parseTemplate } from './workflow'
 
@@ -56,6 +57,40 @@ steps:
   const child = (steps[1].sub as Array<{ [k: string]: unknown }>)[0]
   assert.deepEqual(child.fallback, ['zcode'])
   assert.deepEqual(parseTemplate('t', value as never).steps[0].fallback, ['codex', 'kimi'])
+})
+
+test('фазы подшагов: before_start готовит, before_end параллелен, after — постшаг', () => {
+  const tpl = parseTemplate('phases', parseYaml(`
+id: phases
+title: Фазы
+steps:
+  - id: plan
+    specialist: planner
+    sub:
+      - { id: prep, specialist: researcher }
+      - { id: side, specialist: researcher, phase: before_end }
+      - { id: post, specialist: researcher, phase: after, optional: true }
+  - id: review
+    specialist: reviewer
+    sub:
+      - { id: arch, specialist: reviewer, phase: before_end }
+    on_reject: { goto: plan, max_rounds: 2 }
+  - id: dev
+    specialist: coder
+`))
+  assert.deepEqual(tpl.steps[0].sub.map((c) => [c.id, c.phase]), [
+    ['prep', 'before_start'],
+    ['side', 'before_end'],
+    ['post', 'after']
+  ], 'фаза читается, дефолты: обязательный → before_start, optional → after')
+  const { units } = materialize(tpl.steps)
+  const deps = new Map(units.map((u) => [u.id, u.deps]))
+  assert.deepEqual(deps.get('prep'), [], 'before_start наследует позицию родителя (первый шаг — без deps)')
+  assert.deepEqual(deps.get('side'), [], 'before_end стартует вместе с родителем')
+  assert.deepEqual(deps.get('post'), ['plan'], 'after ждёт родителя')
+  assert.deepEqual(deps.get('plan'), ['prep'], 'родитель ждёт только before_start-подшаги')
+  assert.ok((deps.get('review') ?? []).includes('arch') === false, 'before_end НЕ блокирует родителя')
+  assert.ok((deps.get('dev') ?? []).includes('arch'), 'следующий шаг ждёт и родителя, и его before_end-подшаги')
 })
 
 test('воркеры: ключ worker каноничен, specialist — легаси-синоним', () => {

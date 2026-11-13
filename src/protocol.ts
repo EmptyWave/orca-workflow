@@ -76,6 +76,10 @@ export type WfStep = {
   id: string
   title: string | null
   /** aip-style: reference to a specialist file (`.orca/specialists/<slug>.yaml`). */
+  /** When the sub runs relative to its parent: before_start (prepares, parent waits),
+   *  before_end (runs alongside; the parent's followers wait for the pair), after (post-step,
+   *  RUN:/coordinator triggered). Defaults: required -> before_start, optional -> after. */
+  phase: 'before_start' | 'before_end' | 'after'
   specialist: string | null
   agent: string | null
   model: string | null

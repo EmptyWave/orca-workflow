@@ -700,7 +700,7 @@
             const subs = (step.sub || []).map((child) => `<div class="step sub">
               <div class="ag">${agentIcon(child.agent)}</div>
               <div class="body"><div class="title">↳ ${esc(child.id)}${child.title ? ' · ' + esc(child.title) : ''}</div>
-              <div class="meta">${child.optional ? 'опциональный: стартует по RUN из отчёта' : ''}</div></div>
+              <div class="meta">${child.optional ? 'опциональный: ' : ''}${child.phase === 'before_end' ? 'параллельно с родителем' : child.phase === 'after' ? (child.optional ? 'по RUN из отчёта' : 'после родителя') : child.optional ? 'до родителя, по решению координатора' : 'готовит родителя'}${child.optional && child.phase === 'after' ? '' : ''}</div></div>
             </div>`).join('')
             return [main, subs]
           }).join('')

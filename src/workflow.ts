@@ -147,9 +147,16 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
         for (const d of childDeps) {
           if (!subSeen.has(d)) throw new Error(`подшаг "${childId}": зависимость "${d}" вне блока "${stepId}"`)
         }
+        const phaseRaw = strOrNull(rawChild.phase, 'sub[].phase') ?? strOrNull(rawChild.when, 'sub[].when')
+        let phase: 'before_start' | 'before_end' | 'after'
+        if (phaseRaw === 'before_start' || phaseRaw === 'before_end' || phaseRaw === 'after') phase = phaseRaw
+        else if (phaseRaw === 'optional') phase = 'after'
+        else if (phaseRaw === null) phase = rawChild.optional === true ? 'after' : 'before_start'
+        else throw new Error(`подшаг "${childId}": phase "${phaseRaw}" — жду before_start | before_end | after`)
         sub.push({
           id: childId,
           title: strOrNull(rawChild.title, 'sub[].title'),
+          phase,
           specialist: childSpecialist,
           agent: childAgent,
           model: strOrNull(rawChild.model, 'sub[].model'),
@@ -249,7 +256,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
     if (!step) return [id]
     if (!isBlock(id)) return [id]
     const members: string[] = []
-    for (const child of step.sub ?? []) if (!child.optional) members.push(child.id)
+    for (const child of step.sub ?? []) if (!child.optional && child.phase !== 'after') members.push(child.id)
     if (hasParentUnit.get(id)) members.push(id)
     return members
   }
@@ -262,6 +269,21 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
     const external = step.deps.flatMap((d) => expandDep(d, hasParentUnit))
     if (isBlock(step.id)) {
       for (const child of step.sub ?? []) {
+        // Phase wiring (before_start default for required, after for optional):
+        //  before_start — prepares the parent: child inherits the parent's chain position,
+        //                 the parent waits for it.
+        //  before_end   — runs WITH the parent: same start point, the parent does not wait;
+        //                 whatever follows the parent waits for the pair (post-processing below).
+        //  after        — runs after the parent completed: deps on the parent (a parentless
+        //                 block ends with its required children, so an `after` child gates on them).
+        let deps: string[]
+        if (child.phase === 'after') {
+          deps = hasParentUnit.get(step.id)
+            ? [step.id]
+            : (step.sub ?? []).filter((c) => !c.optional && c.phase !== 'after').map((c) => c.id)
+        } else {
+          deps = child.deps.length > 0 ? [...child.deps] : [...external]
+        }
         units.push({
           id: child.id,
           stepId: step.id,
@@ -273,7 +295,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
           fallback: child.fallback,
           spec: child.spec,
           specFile: child.specFile,
-          deps: child.optional ? [] : child.deps.length > 0 ? [...child.deps] : [...external],
+          deps,
           gate: null,
           onReject: null,
           role: 'child',
@@ -292,7 +314,11 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
           fallback: step.fallback,
           spec: step.spec,
           specFile: step.specFile,
-          deps: (step.sub ?? []).filter((c) => !c.optional).map((c) => c.id),
+          deps: (() => {
+            const starters = (step.sub ?? []).filter((c) => !c.optional && c.phase === 'before_start').map((c) => c.id)
+            // без before_start-детей родитель сохраняет свою позицию в цепочке (external deps)
+            return starters.length > 0 ? starters : [...external]
+          })(),
           gate: step.gate,
           onReject: step.onReject,
           role: 'step',
@@ -300,7 +326,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
         })
       } else if (step.onReject) {
         blockWatches.push({
-          children: (step.sub ?? []).filter((c) => !c.optional).map((c) => c.id),
+          children: (step.sub ?? []).filter((c) => !c.optional && c.phase === 'before_start').map((c) => c.id),
           goto: step.onReject.goto,
           maxRounds: step.onReject.maxRounds
         })
@@ -325,6 +351,28 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
       })
     }
   }
+  // before_end children run alongside their parent: anything waiting on the parent waits
+  // on the pair, so the step's outcome (verdict included) considers both.
+  const beforeEndOf = new Map<string, string[]>()
+  const afterChildrenOf = new Map<string, Set<string>>()
+  for (const step of steps) {
+    const parallel = (step.sub ?? []).filter((c) => c.phase === 'before_end' && !c.optional).map((c) => c.id)
+    if (parallel.length > 0) beforeEndOf.set(step.id, parallel)
+    const after = new Set((step.sub ?? []).filter((c) => c.phase === 'after').map((c) => c.id))
+    if (after.size > 0) afterChildrenOf.set(step.id, after)
+  }
+  if (beforeEndOf.size > 0) {
+    for (const unit of units) {
+      const extra: string[] = []
+      for (const dep of unit.deps) {
+        // after-подшаг стартует по отчёту родителя (RUN:) и не ждёт его before_end-соседей
+        if (afterChildrenOf.get(dep)?.has(unit.id)) continue
+        extra.push(...(beforeEndOf.get(dep) ?? []))
+      }
+      for (const e of extra) if (!unit.deps.includes(e)) unit.deps.push(e)
+    }
+  }
+
   // Gate-on-block: a gate declared on a parentless block gates its first child.
   for (const step of steps) {
     if (!step.gate || !isBlock(step.id) || hasParentUnit.get(step.id)) continue

@@ -625,7 +625,18 @@ export default function activate(orca: OrcaWorkerApi): void {
           step.gate ? `ГЕЙТ перед шагом: ${step.gate.question} — стоп для человека` : null,
           step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
         ].filter(Boolean)
-        const subs = (step.sub ?? []).map((c) => `      • ${c.id} — ${c.specialist ?? c.agent}${c.optional ? ' (опциональный: стартует, если родитель написал RUN: ' + c.id + ')' : ''}`)
+        const phaseText = (phase: string | undefined, optional: boolean): string => {
+          const p = phase ?? (optional ? 'after' : 'before_start')
+          if (optional) {
+            return p === 'after'
+              ? ' (optional, после отчёта родителя: стартуй по RUN: из отчёта или сам, если задаче нужно; не нужен — пропусти)'
+              : ` (optional, ${p === 'before_start' ? 'до родителя' : 'параллельно с родителем'}: реши сам по сути задачи; не нужен — пропусти)`
+          }
+          return p === 'before_start' ? ' (готовит родителя: пройдёт до его старта)'
+            : p === 'before_end' ? ' (идёт ПАРАЛЛЕЛЬНО с родителем: дождись оба, потом решай дальше; любой request-changes — цикл доработки)'
+              : ' (после отчёта родителя)'
+        }
+        const subs = (step.sub ?? []).map((c) => `      • ${c.id} — ${c.specialist ?? c.agent}${phaseText(c.phase, c.optional === true)}`)
         return `${i + 1}. ${step.id} (${who}${extra.length > 0 ? '; ' + extra.join('; ') : ''})` + (subs.length > 0 ? '\n' + subs.join('\n') : '')
       })
       .join('\n')
@@ -640,7 +651,8 @@ export default function activate(orca: OrcaWorkerApi): void {
       `1. Немедленно: orca orchestration run-use --id ${runId} --json`,
       `2. orca orchestration task-list --run ${runId} --json — стартуй готовые шаги (worker-start --task <id> --worktree name:${worktreeName} --agent <agent> --json).`,
       '3. Отчёты завершившихся — worker-read; строка VERDICT: approve | request-changes в отчёте ревью управляет циклами доработки.',
-      '4. Вопросы воркеров — orchestration check; отвечай reply, решай сам всё, что решаемо.',
+      '4. Вопросы воркеров — orchestration check; отвечай reply, решай сам всё, что решаемо. Запуская подшаг по RUN:, пересылай ему список вопросов из отчёта родителя.',
+      '4a. optional-подшаги — условные: если тип задачи явно не требует (например, нет бэкенда — не запускай бэкенд-проверку), пропускай их и не жди.',
       '5. Не можешь решить — напиши человеку в этот чат (суть, варианты, рекомендация) и заверши ход.',
       '6. Гейты из флоу — стоп для человека: жди его ответа здесь.',
       '7. Итог: когда последний шаг завершён, собери сводку по флою и закончи.'
