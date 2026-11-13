@@ -195,7 +195,7 @@ declare module 'orca' {
     /** Delete a specialist file; refuses while any project template still references it. */
     'workers.delete': { input: { projectPath: string; slug: string }; output: { ok: true } }
     /** A worker's report for one step (bounded transcript tail). */
-    'task.report': { input: { dispatchId: string }; output: { report: string } }
+    'task.report': { input: { dispatchId?: string; runId?: string; taskId?: string }; output: { report: string } }
     /** Wake the auto-pilot of a stopped run (clears the stop reason). */
     'pilot.resume': { input: { runId: string }; output: { ok: true } }
     /** Retry a Run from a step: resets it and everything downstream; autopilot continues. */

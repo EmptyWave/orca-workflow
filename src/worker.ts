@@ -423,14 +423,29 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
     if (acted) return
 
+    // A finished task loses its dispatchId in the concise task list; the run's worker
+    // list still remembers it — verdicts and RUN: probes need that dispatch.
+    const dispatchOf = (taskId: string): string | null => {
+      const task = byId.get(taskId)
+      if (task?.dispatchId) return task.dispatchId
+      const row = snap.workers.find((w) => w.taskId === taskId)
+      return row?.dispatchId ?? null
+    }
+
     // 2. Freshly succeeded review units: parse the verdict once, then act.
     for (const task of snap.tasks) {
       if (acted) break
-      if (task.status !== 'succeeded' || !task.dispatchId) continue
+      if (task.status !== 'succeeded') continue
       const review = state.reviews[task.id]
       if (!review || state.verdicts[task.id]) continue
-      const report = await readWorkerReport(task.dispatchId)
-      const verdict = parseVerdict(report)
+      const reviewDispatch = dispatchOf(task.id)
+      if (!reviewDispatch) continue
+      const report = await readWorkerReport(reviewDispatch)
+      let verdict = parseVerdict(report)
+      if (!hasVerdictLine(report)) {
+        const fromInbox = await verdictFromInbox(task.id)
+        if (fromInbox) verdict = fromInbox
+      }
       state.verdicts[task.id] = verdict
       if (verdict === 'request-changes') {
         const round = (state.rounds[review.devTaskId] ?? 0) + 1
@@ -444,9 +459,10 @@ export default function activate(orca: OrcaWorkerApi): void {
         const devCfg = state.tasks[review.devTaskId]
         const from2 = await fromFlag()
         await act(`перезапуск ${review.devStepId} (раунд ${round}/${review.maxRounds})`, async () => {
-          if (devTask?.dispatchId) {
+          const devDispatch = dispatchOf(review.devTaskId)
+          if (devDispatch) {
             await bridge.run(
-              `orca orchestration send --to dispatch:${task.dispatchId} --subject "Замечания ревью (раунд ${round})" --body ${shellQuote(
+              `orca orchestration send --to dispatch:${devDispatch} --subject "Замечания ревью (раунд ${round})" --body ${shellQuote(
                 extractRemarks(report)
               )} --json`
             )
@@ -553,8 +569,10 @@ export default function activate(orca: OrcaWorkerApi): void {
       if (byId.get(optionalTaskId)?.status && byId.get(optionalTaskId)?.status !== 'pending') continue
       if (state.rounds[`__opt_started_${optionalTaskId}`]) continue
       const parent = byId.get(link.parentTaskId)
-      if (!parent?.dispatchId || parent.status !== 'succeeded') continue
-      const report = await readWorkerReport(parent.dispatchId)
+      if (!parent || parent.status !== 'succeeded') continue
+      const parentDispatch = dispatchOf(link.parentTaskId)
+      if (!parentDispatch) continue
+      const report = await readWorkerReport(parentDispatch)
       const wants = new RegExp(`RUN:\\s*${link.stepId}\\b`).test(report)
       if (!wants) continue
       state.rounds[`__opt_started_${optionalTaskId}`] = 1
@@ -628,9 +646,38 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   /** `VERDICT: approve|request-changes` in the report tail; default approve on failure to say. */
   function parseVerdict(report: string): 'approve' | 'request-changes' {
-    const tail = report.slice(-4000)
-    const match = tail.match(/VERDICT:\s*(approve|request-changes)/i)
+    const match = report.slice(-4000).match(/VERDICT:\s*(approve|request-changes)/i)
     return match && match[1].toLowerCase() === 'request-changes' ? 'request-changes' : 'approve'
+  }
+
+  /** True when the report says the verdict explicitly (not the approve default). */
+  function hasVerdictLine(report: string): boolean {
+    return /VERDICT:\s*(approve|request-changes)/i.test(report.slice(-4000))
+  }
+
+  function parseJsonSafe<T>(text: string): T | null {
+    try {
+      return JSON.parse(text) as T
+    } catch {
+      return null
+    }
+  }
+
+  /** Reviewers sometimes put the verdict only in their done-message subject; the run inbox
+   *  keeps it. One extra bridge call, only when the report is silent. */
+  async function verdictFromInbox(taskId: string): Promise<'approve' | 'request-changes' | null> {
+    try {
+      const raw = await bridge.run('orca orchestration inbox --json')
+      const parsed = parseJsonSafe<{ result?: { messages?: Array<{ type?: string; subject?: string; payload?: { taskId?: string } }> } }>(raw)
+      for (const m of parsed?.result?.messages ?? []) {
+        if (m.type !== 'worker_done' || m.payload?.taskId !== taskId) continue
+        if (/request-changes/i.test(m.subject ?? '')) return 'request-changes'
+        if (/\bapprove\b/i.test(m.subject ?? '')) return 'approve'
+      }
+      return null
+    } catch {
+      return null
+    }
   }
 
   function extractRemarks(report: string): string {
@@ -1417,8 +1464,15 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { ok: true as const }
   })
 
-  orca.panels.handle('task.report', async ({ dispatchId }) => {
+  orca.panels.handle('task.report', async (input) => {
     everUsed = true
+    let dispatchId: string | undefined = input.dispatchId ?? undefined
+    if (!dispatchId && input.runId && input.taskId) {
+      const snap = await snapshot(input.runId)
+      const task = snap.tasks.find((t) => t.id === input.taskId)
+      dispatchId = task?.dispatchId ?? snap.workers.find((w) => w.taskId === input.taskId)?.dispatchId ?? undefined
+    }
+    if (!dispatchId) throw new BridgeError('у шага ещё нет отчёта — воркер не запускался', 'cli_error')
     return { report: await readWorkerReport(dispatchId) }
   })
 
