@@ -1166,11 +1166,19 @@ export default function activate(orca: OrcaWorkerApi): void {
           driver: 'coordinator',
           coordinatorTerminal: null
         })
-        // The run is led by a live coordinator agent: launch its session in the project
-        // workspace and hand it the flow brief. It binds itself with run-use.
+        // The run is led by a live coordinator agent. First materialize the run's own
+        // worktree workspace (what a person expects to appear when a run starts), then
+        // launch the coordinator session THERE — the main checkout stays untouched.
         try {
-          const list = await orca.host.call('workspace.list', undefined)
-          const home = list.workspaces.find((w) => w.path === input.projectPath) ?? list.workspaces[0]
+          const baseFlag = input.baseBranch ? ` --base-branch ${shellQuote(input.baseBranch)}` : ''
+          await bridge.run(
+            `orca worktree create --repo path:${shellQuote(input.projectPath ?? '.')} --name ${shellQuote(input.worktreeName)}${baseFlag} --json || true`,
+            90_000
+          )
+          const list = await orca.host.call<{ workspaces: Array<{ id: string; name: string; path: string }> }>('workspace.list', undefined)
+          const runWorktree = list.workspaces.find((w) => w.name === input.worktreeName)
+            ?? list.workspaces.find((w) => w.path.endsWith(`/${input.worktreeName}`))
+          const home = runWorktree ?? list.workspaces.find((w) => w.path === input.projectPath) ?? list.workspaces[0]
           const coordinator = specialists.find((sp) => sp.slug === 'coordinator')
           const brief = coordinatorBrief(run.runId, template, input.objective, input.worktreeName, input.projectPath)
           const launched = await orca.host.call('agent.launch', {
