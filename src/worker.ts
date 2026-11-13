@@ -161,6 +161,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         title: String(field(row, 'taskTitle', 'title') ?? ''),
         status: dispatch ? 'dispatched' : readyIds.has(id) ? 'ready' : normalizeStatus(rawStatus),
         deps: stringList(field(row, 'deps')),
+        order: null,
         dispatchId: dispatch,
         agent: null,
         model: null,
@@ -183,6 +184,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           task.agent = cfg.agent ?? task.agent
           task.model = cfg.model ?? null
           task.fallback = cfg.fallback ?? []
+          task.order = typeof cfg.order === 'number' ? cfg.order : null
         }
         task.parentTaskId = autoData.children?.[task.id] ?? autoData.optionals?.[task.id]?.parentTaskId ?? null
       }
@@ -1089,7 +1091,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         job.step = 'materialized'
         await saveJob(job)
         // Auto-pilot bookkeeping: per-task step configs, review retry pairs, optional subs.
-        const autoTasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null; fallback: string[] }> = {}
+        const autoTasks: Record<string, { stepId: string; agent: string; model: string | null; effort: string | null; fallback: string[]; order: number }> = {}
         for (const unit of units) {
           const taskId = taskOf.get(unit.id)
           if (!taskId || !unit.agent) continue
@@ -1098,7 +1100,10 @@ export default function activate(orca: OrcaWorkerApi): void {
             agent: unit.agent,
             model: unit.model,
             effort: unit.model ? unit.effort : null,
-            fallback: unit.fallback ?? []
+            fallback: unit.fallback ?? [],
+            // Flow position of the unit: the CLI reorders task-list freely (status flips,
+            // retries), so the panel must sort by this stamp to keep the template's order.
+            order: topoUnits(units).findIndex((u) => u.id === unit.id)
           }
         }
         // aip semantics: on_reject on a review unit sends the work back to on_reject.goto.
@@ -1613,6 +1618,22 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
 
   orca.panels.handle('bridge.debug', async () => bridge.stats())
+
+  // TEMP(shot): flip chosen tasks to 'dispatched' in the cached snapshot for a screenshot.
+  orca.panels.handle('shot.stage', async ({ runId, titles }) => {
+    const cached = await orca.storage.get('state.snapshot').catch(() => null)
+    if (!cached || typeof cached !== 'object') return { ok: false, error: 'нет кэша' }
+    const snap = cached as WfSnapshot
+    if (snap.run?.runId !== runId) return { ok: false, error: 'кэш другого рана' }
+    const want = Array.isArray(titles) ? titles.map(String) : []
+    snap.tasks = snap.tasks.map((t) => (want.some((x) => t.title.startsWith(x)) && t.status !== 'succeeded'
+      ? { ...t, status: 'dispatched', dispatchId: t.dispatchId ?? 'ctx_staged' }
+      : t))
+    snap.at = Date.now()
+    await orca.storage.set('state.snapshot', snap)
+    orca.panels.post('state.changed', { at: snap.at, pendingGates: 0, readyTasks: 0 })
+    return { ok: true }
+  })
 
 }
 

@@ -547,10 +547,13 @@
         const gates = (snap.gates || []).filter((g) => g.status === 'pending')
         const gateByTask = new Map(gates.map((g) => [g.taskId, g]))
 
-        const eff = effectiveStatuses(snap.tasks || [], snap.gates || [])
+        // Flow order from the template beats the CLI's task-list order (it reshuffles
+        // whenever statuses flip); tasks without a stamp keep the arrival order.
+        const orderedTasks = [...(snap.tasks || [])].sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
+        const eff = effectiveStatuses(orderedTasks, snap.gates || [])
         // Group sub-step tasks under their parent (or under a block header for pure blocks).
         const kidsOf = new Map()
-        for (const t of snap.tasks || []) {
+        for (const t of orderedTasks) {
           if (!t.parentTaskId) continue
           const arr = kidsOf.get(t.parentTaskId) || []
           arr.push(t)
@@ -567,7 +570,7 @@
           if (st.includes('ready')) return 'ready'
           return 'queued'
         }
-        for (const t of snap.tasks || []) {
+        for (const t of orderedTasks) {
           if (emitted.has(t.id)) continue
           if (t.parentTaskId && t.parentTaskId.startsWith('step:')) {
             const kids = kidsOf.get(t.parentTaskId) || []

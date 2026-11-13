@@ -16,6 +16,9 @@ export type WfTask = {
   fallback: string[]
   /** The owning block step for sub-step tasks (test-api inside tests); null for main steps. */
   parentTaskId: string | null
+  /** Flow position from the template (AutoState stamp); the panel sorts by it — the CLI's
+   *  task-list order is not stable. */
+  order: number | null
 }
 
 export type WfGate = {
