@@ -226,7 +226,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       })
     )
     const pilotState = await loadAuto(runId)
-    const autoPilotOn = (await orca.settings.get('autoPilot')) !== false
+    const autoPilotOn = true // легаси-раны (driver=autopilot) ведутся всегда; новые — координатором
     const pilot = pilotState
       ? {
           on: pilotState.driver === 'coordinator' ? true : autoPilotOn && !pilotState.stopped,
@@ -1615,6 +1615,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
 
   orca.panels.handle('bridge.debug', async () => bridge.stats())
+
 
 
 

@@ -175,7 +175,7 @@
         openStep: null,           // task id expanded: gate, report, retry live inside the step
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null, autoPilot: null
+        cfg: null, bridge: null
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает',
@@ -315,7 +315,6 @@
           if (!S.agent) S.agent = S.cfg.defaultAgent
           S.bridge = (await req('bridge.info', undefined, 10000)).terminalId
         } catch { /* extras, not required */ }
-        try { S.autoPilot = (await orca.settings.get()).autoPilot !== false } catch { S.autoPilot = null }
         render()
       }
 
@@ -402,12 +401,6 @@
         try { await req('bridge.reset', undefined, 10000); S.bridge = (await req('bridge.info', undefined, 10000)).terminalId }
         catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
       }
-      async function toggleAutoPilot(on) {
-        S.autoPilot = on
-        await orca.settings.set('autoPilot', on).catch(() => {})
-        render()
-      }
-
       // ------------------------------------------------------------------ render
       const el = () => document.getElementById('view')
       function render() {
@@ -492,8 +485,6 @@
             if (key === 'tab') render()
           }
         })
-        const ap = document.getElementById('autopilot')
-        if (ap) ap.onchange = () => void toggleAutoPilot(ap.checked)
       }
 
       // ---- loading state that knows how long it has been loading
@@ -739,13 +730,10 @@
         return `<div class="card"><h2>Настройки</h2>
           <label class="f"><span>Каталог библиотеки шаблонов</span><input data-bind="cfg.libraryDir" value="${esc(S.cfg.libraryDir)}"/></label>
           <div class="grid2">
-            <label class="f"><span>Интервал обновления, мс (2000–120000)</span><input type="number" data-bind="cfg.refreshMs" value="${esc(S.cfg.refreshMs)}"/></label>
+            <label class="f" title="как часто воркер перечитывает ран (2000–120000)"><span>Опрос ранов, мс</span><input type="number" data-bind="cfg.refreshMs" value="${esc(S.cfg.refreshMs)}"/></label>
             <label class="f"><span>Агент по умолчанию</span><input data-bind="cfg.defaultAgent" value="${esc(S.cfg.defaultAgent)}"/></label>
           </div>
           <div class="rowline" style="margin-top:9px"><button class="btn primary" data-act="save-cfg">Сохранить</button></div></div>
-        <div class="card"><h2>Автопилот</h2>
-          <label class="rowline"><input type="checkbox" id="autopilot" style="width:auto"${S.autoPilot === false ? '' : ' checked'}/>
-          <span>вести шаги самому (легаси; новые раны ведёт координатор-агент)</span></label></div>
         <div class="card"><h2>Мост</h2>
           <div class="kv">
             <span>помощник</span><span>${S.bridge ? `<code>${esc(S.bridge.slice(0, 22))}…</code>` : 'не создан'}</span>
