@@ -1,80 +1,149 @@
-# Workflow View
+# orca-workflow
 
-Orca plugin: a sidebar panel for orchestration Runs (steps, decision gates, workers)
-plus per-project workflow templates in YAML, portable between projects with one click.
-Built in the spirit of [ai-pipeline](https://github.com/hoknie/ai-pipeline) on top of
-Orca's own engine (Runs, task DAGs, gates, workers, worktrees).
+Плагин для [Orca](https://orca.stably.ai): продуктовые воркфлоу для агентной разработки —
+шаблоны пайплайнов на проект, визуальный граф-редактор, панель ранов с гейтами и отчётами,
+и живой **координатор-агент**, который ведёт конвейер от постановки задачи до коммита.
 
-## What it adds
+Идея проста: один раз описываешь воркфлоу — дальше ставишь задачу координатору,
+и конвейер идёт сам: план → ревью → разработка → ревью кода → тесты → коммит.
+Циклы доработки решает вердикт ревьюера, вопросы воркеров закрывает координатор,
+а к человеку попадают только настоящие развилки.
 
-- **Runs tab** — pick a Run: steps table with statuses, pending gates with
-  `approve` / `request-changes` buttons, ready tasks with a `▶ Start` action
-  (agent + optional model/effort + worktree selection), live worker list.
-  Refresh: 10 s poll + `agent.status.changed`; the status bar shows pending gates.
-- **Templates tab** — workflow templates from two sources:
-  - **Library** — `workflows/` in this plugin folder (ships `feature-dev`):
-    the portable, project-agnostic pipeline.
-  - **Project** — `<repo>/.orca/workflows/*.yaml`, versioned with the project.
-  - One-click copying in both directions, preview of steps (agents, models,
-    checkpoints, deps) and `Raise a Run` — materializes a Run with the task DAG
-    and gates from the template.
+```
+┌───────────────────────── Workflow (панель) ─────────────────────────┐
+│ Запуски  Шаблоны  Настройки                                         │
+│ ─────────────────────────────────────────────────────────────────── │
+│ Ран ведёт координатор-агент · шагов 3/9                             │
+│ ✓ plan · План (openspec)          [claude]                          │
+│ ✓ plan-review · Ревью плана       [claude]   ← on_reject → plan     │
+│ ▸ dev · Разработка                [claude]   ⏿ гейт                 │
+│ ❑ Блок «tests» — подшаги 0/3                                         │
+│   ↳ test-api  ↳ test-static  ↳ test-ui                              │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-## Template format
+## Из чего состоит
+
+| Часть | Что делает |
+| --- | --- |
+| `src/panel.html` | HTML-панель в сайдбаре: раны (шаги, подшаги, гейты, отчёты, ретраи), шаблоны (превью, форма поднятия, копирование), настройки. Бренд-иконки агентов (Claude/Codex/Copilot) — инлайн-SVG |
+| `src/worker.ts` | Воркер плагина: мост к `orca` CLI в служебном терминале, материализация шаблона в ран (tasks/gates), запуск координатора, запросы панели |
+| `src/editor/` | Граф-редактор `.workflow.yaml` (custom editor): вертикальная цепочка, подшаги блоками справа, возвраты on_reject дугами слева, инспектор с комбобоксами, менеджер воркеров |
+| `src/workflow.ts`, `src/yaml.ts` | Схема шаблона и строгий мини-YAML (терпит запятые и списки без дефисов при ручной правке) |
+| `workflows/`, `workers/` | Библиотека: переносимый шаблон feature-dev и карточки воркеров, копируются в проект одним кликом |
+
+## Схема шаблона (`.orca/workflows/*.workflow.yaml`)
 
 ```yaml
-id: feature-dev
-title: 'Feature: plan → review → dev → review → tests → commit'
+id: main
+title: 'biz/erp development'
 steps:
-  - { id: plan, agent: claude, specFile: specs/plan.md }
-  - { id: plan-review, agent: claude, specFile: specs/plan-review.md, deps: [plan] }
-  - id: dev-gate                      # barrier step: no agent, only a checkpoint
-    deps: [plan-review]
-    checkpoint: { question: 'Plan approved? Start dev?', options: [approve, request-changes] }
-  - { id: dev, agent: claude, specFile: specs/dev.md, deps: [dev-gate] }
+  - id: plan
+    title: 'План (openspec)'
+    worker: planner                      # карточка из .orca/workers/
+    sub:                                 # параллельный блок подшагов
+      - { id: code-research, title: 'Ресерч по коду', worker: code-researcher, optional: true }
+  - { id: plan-review, title: 'Ревью плана', worker: plan-reviewer }
+    on_reject: { goto: plan, max_rounds: 2 }   # вердикт ревью вернёт работу назад
+  - id: dev
+    worker: coder
+    fallback: [codex, zcode]             # фейловер: цепочка агентов при провале шага
+  - id: tests
+    sub:
+      - { id: test-api, worker: api-tester }
+      - { id: test-ui, worker: ui-tester, optional: true }
+    gate: { question: 'Код аппрувнут?', options: [approve, request-changes] }
 ```
 
-- `agent` + `spec`/`specFile` (+ optional `model`, `effort`) — a materialized task;
-  `deps` — the DAG (barrier steps pass dependencies through transitively).
-- `checkpoint` — a decision gate on that step; on a barrier step it gates the next
-  materialized task.
-- Placeholders `{{objective}}`, `{{repo}}`, `{{base_branch}}`, `{{worktree}}` are
-  substituted on instantiation.
-- `on_reject {goto, max_rounds}` — parsed and validated; automated loops are not
-  wired yet (manual retry per round for now).
+- **`worker:`** — slug карточки из `.orca/workers/` (старое имя `specialist:` работает как синоним).
+  Шаги без deps идут цепочкой по порядку; явный `deps:` строит DAG.
+- **`sub:`** — параллельный блок: подшаги идут одновременно, следующий шаг ждёт весь блок.
+  `optional: true` — подшаг стартует, только если родитель написал `RUN: <id>` в отчёте.
+- **`on_reject`** — цикл доработки: ревьюер заканчивает отчёт строкой
+  `VERDICT: approve` или `VERDICT: request-changes`; при возврате целевой шаг перезапускается
+  с замечаниями, затем ревью проверяет снова (≤ max_rounds).
+- **`fallback:`** — при провале шага конвейер перезапускает его на следующем агенте цепочки.
+- **`gate:`** — ручное подтверждение перед шагом: «необходимо подтверждение (шаг не начнётся без ответа)».
+- **Плейсхолдеры** `{{objective}}`, `{{repo}}`, `{{base_branch}}`, `{{worktree}}` подставляются при поднятии рана.
 
-## How it talks to Orca
+## Воркеры (`.orca/workers/`)
 
-Orca has no plugin API for orchestration, so the worker (`src/bridge.ts`) owns one
-background terminal ("workflow-view bridge") where it runs
-`orca orchestration … --json` commands between unique markers and parses the JSON —
-the documented "a trusted-worker can act as the `orca` CLI does" path. Every
-interpolated value goes through POSIX single-quote escaping (`shellQuote`);
-specs travel as base64. Capabilities: `terminal:send`, `terminal:read`,
-`workspace:read`, `agent:read`, `storage:own`, `settings:own`. No network, no
-filesystem outside `/tmp` spec files and the template directories.
+Каталоги можно группировать по шагам — папки названы по id воркера/шага:
 
-## Sources
+```
+.orca/workers/
+  planner.yaml  coder.yaml  committer.yaml  coordinator.yaml
+  plan/code-researcher.yaml  plan/web-researcher.yaml
+  tests/api-tester.yaml  tests/ui-tester.yaml
+```
 
-| File | Role |
-| --- | --- |
-| `src/panel.html` | the UI (HTML panel in a sandboxed frame: inline SVG agent/status icons, aip-style rows) |
-| `src/worker.ts` | handlers: snapshot, gates, task start, templates, instantiation jobs |
-| `src/bridge.ts` | the terminal CLI bridge (markers, queue, timeouts) |
-| `src/yaml.ts` | dependency-free strict YAML subset parser for templates |
-| `src/workflow.ts` | template schema validation + placeholder substitution |
-| `src/protocol.ts` | panel ↔ worker request/event contract |
-| `workflows/` | the portable library (`feature-dev` + `specs/`) |
+Ссылка в шаблоне — плоским именем файла (`worker: code-researcher`), вложенность не важна.
+Карточка:
 
-## Develop
+```yaml
+agent: claude          # или codex, zcode, …
+model: claude-sonnet-4-6   # опц.
+effort: high           # опц., зависит от агента (claude: low..xhigh/max)
+fallback: [codex]      # опц., наследуется всеми шагами этого воркера
+spec: |
+  Задача: {{objective}}.
+  Ты — независимый ревьюер. …
+```
+
+Создавать/править/удалять карточки можно из граф-редактора — кнопка «Воркеры» в тулбаре.
+
+## Координатор-агент
+
+«Поднять Run» делает четыре вещи: создаёт ран и задачи, материализует гейты,
+запускает **сессию координатора** (claude в workspace проекта) и передаёт ей бриф —
+цель, весь флоу, правила. Координатор:
+
+- привязывается к рану (`run-use`) и ведёт шаги по порядку;
+- читает отчёты воркеров, крутит VERDICT-циклы доработки;
+- отвечает на вопросы воркеров из ящика рана (`check`/`reply`) — сам, без человека;
+- **эскалирует в свой чат**, когда решить не может: пишет суть, варианты, рекомендацию —
+  человек отвечает прямо в сессии координатора;
+- уважает гейты: шаг за гейтом не стартует без ответа человека.
+
+Для ранов, поднятых до появления координатора, остаётся кодовый автопилот (fallback).
+
+## Установка
 
 ```sh
-npx -y -p typescript@5.9 tsc -p .   # typecheck (typings live in .orca/types)
-orca plugin test .                  # 26 tests: yaml, workflow, worker (mock bridge), editor
-orca plugin check .                 # manifest + editor load; shoot the panel with `plugin shot`
-orca plugin validate .
-orca plugin dev watch .             # load into Orca and follow logs; Ctrl-C unloads
+orca plugin install git@github.com:EmptyWave/orca-workflow.git --approve <fingerprint>
 ```
 
-Loading into Orca needs a one-time approval (the plugin runs code):
-`orca plugin dev load . --approve <fingerprint>` — Orca prints the exact list it
-grants and the fingerprint when you run the same command without `--approve`.
+Требуется Orca ≥ 1.4.248. Плагин запрашивает: терминалы (мост к CLI), workspace,
+чтение агентов и запуск агентских сессий (координатор), storage/settings.
+
+Первый запуск в проекте: открой панель Workflow → «Шаблоны» → источник «Библиотека» →
+«↳ в проект» — шаблон и карточки воркеров скопируются в `<repo>/.orca/`.
+
+## Разработка
+
+```sh
+git clone git@github.com:EmptyWave/orca-workflow.git && cd orca-workflow
+npx -y -p typescript@5.9 tsc -p .        # типы
+orca plugin test .                        # 33 теста: yaml, workflow, worker (мок моста), editor
+orca plugin validate .
+orca plugin dev load .                    # живая разработка; правки подхватываются reload'ом
+orca plugin shot local.workflow-view --panel workflow --out .orca/shots/x.png
+```
+
+## Как это устроено внутри
+
+- **Мост.** Плагинового API у оркестрации нет, поэтому воркер гоняет `orca` CLI
+  в служебном терминале «workflow-view bridge» с маркерным протоколом. Orca пускает ввод
+  только в терминалы фокусного воркспейса — мост следует за фокусом, переживает зомби,
+  перепривязывается к рану (`run-use`) при `consumer_fenced`.
+- **Панель** — изолированный HTML-фрейм: полный контроль DOM, темы через `--orca-*`,
+  состояние в storage плагина. Читает готовые снимки рана из storage; мост трогает
+  только воркер.
+- **Скоупинг.** Раны привязаны к проектам (мета пишется при создании), панель фильтрует
+  по фокусному проекту; проект без ранов открывает вкладку «Шаблоны».
+
+## Ограничения
+
+- Редактор типизирован под нашу схему (шаг/барьер/подшаг), это не общий Excalidraw.
+- Гейт на чистом блоке (без своего воркера) вешается на первый следующий шаг.
+- Кросс-провайдерный фейловер по квотам не отслеживается — fallback срабатывает по факту провала.
