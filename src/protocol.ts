@@ -19,6 +19,8 @@ export type WfTask = {
   /** Flow position from the template (AutoState stamp); the panel sorts by it — the CLI's
    *  task-list order is not stable. */
   order: number | null
+  /** Optional sub-step: skippable by the coordinator; a never-started one renders as skipped. */
+  optional: boolean
 }
 
 export type WfGate = {

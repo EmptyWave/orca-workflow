@@ -107,6 +107,14 @@
       }
       @keyframes wf-spin { to { transform: rotate(360deg); } }
 
+      .skipdot {
+        width: 13px; height: 13px; border-radius: 50%;
+        border: 2px solid var(--orca-muted); position: relative; box-sizing: border-box;
+      }
+      .skipdot::after {
+        content: ''; position: absolute; left: 2px; right: 2px; top: 50%;
+        border-top: 2px solid var(--orca-muted); transform: translateY(-1px);
+      }
       /* ---- gates ---- */
       .gate-q { font-weight: 600; margin: 0 0 2px; }
       .gate-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
@@ -178,7 +186,7 @@
         cfg: null, bridge: null
       }
       const STATUS_TEXT = {
-        pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает',
+        pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
         blocked: 'ждёт гейт', queued: 'в очереди', succeeded: 'готово',
         failed: 'провал', unknown: 'неизвестно'
       }
@@ -234,6 +242,10 @@
         for (const t of tasks) calc(t.id)
         return memo
       }
+      // «пропущен»: optional не запущен, а флоу уже прошёл его позицию (закрытая глава рана).
+      const skippedIcon = (t, passedOrder) =>
+        t.optional && ['pending', 'ready'].includes(t.status) && passedOrder > (t.order ?? 0)
+          ? '<div class="skipdot" title="пропущен: optional-шаг не потребовался"></div>' : ''
       const statusIcon = (status) =>
         status === 'succeeded' ? ICON.ok
         : status === 'failed' ? ICON.fail
@@ -553,6 +565,8 @@
         }
         const emitted = new Set()
         const stepRows = []
+        // самый дальний пройденный порядок: незапущенные optional позади него — пропущены
+        const maxPassedOrder = orderedTasks.reduce((m, t) => ((eff.get(t.id) || { status: t.status }).status === 'succeeded' ? Math.max(m, t.order ?? 0) : m), -1)
         const aggregate = (kids) => {
           const st = kids.map((k) => (eff.get(k.id) || { status: k.status }).status)
           if (st.includes('failed')) return 'failed'
@@ -637,7 +651,7 @@
             ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
             : ''
           return `<div class="step${nest}">
-            <div class="st">${statusIcon(e.status)}</div>
+            <div class="st">${skippedIcon(t, maxPassedOrder) || statusIcon(e.status)}</div>
             <div class="ag">${agentIcon(t.agent)}</div>
             <div class="body">
               <div class="title">${branch}${esc(t.title || t.id)}${startBtn}${chev}</div>

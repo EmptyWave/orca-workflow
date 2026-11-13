@@ -159,6 +159,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         status: dispatch ? 'dispatched' : readyIds.has(id) ? 'ready' : normalizeStatus(rawStatus),
         deps: stringList(field(row, 'deps')),
         order: null,
+        optional: false,
         dispatchId: dispatch,
         agent: null,
         model: null,
@@ -184,6 +185,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           task.order = typeof cfg.order === 'number' ? cfg.order : null
         }
         task.parentTaskId = autoData.children?.[task.id] ?? autoData.optionals?.[task.id]?.parentTaskId ?? null
+        if (autoData.optionals?.[task.id]) task.optional = true
       }
     }
     // Manual agent notes for runs raised before per-step configuration existed.
@@ -651,8 +653,13 @@ export default function activate(orca: OrcaWorkerApi): void {
       `1. Немедленно: orca orchestration run-use --id ${runId} --json`,
       `2. orca orchestration task-list --run ${runId} --json — стартуй готовые шаги (worker-start --task <id> --worktree name:${worktreeName} --agent <agent> --json).`,
       '3. Отчёты завершившихся — worker-read; строка VERDICT: approve | request-changes в отчёте ревью управляет циклами доработки.',
-      '4. Вопросы воркеров — orchestration check; отвечай reply, решай сам всё, что решаемо. Запуская подшаг по RUN:, пересылай ему список вопросов из отчёта родителя.',
+      '4. Вопросы воркеров — orchestration check; отвечай reply, решай сам всё, что решаемо.',
       '4a. optional-подшаги — условные: если тип задачи явно не требует (например, нет бэкенда — не запускай бэкенд-проверку), пропускай их и не жди.',
+      'Факты и контекст (главная твоя работа между шагами):',
+      '• Отчёт каждого шага — источник фактов для следующих. Прочитал отчёт — вынь из него фактический блок (пути, версии, решения, замечания) и пересылай следующему воркеру при старте: разработчику — план + замечания ревью + факты ресёрча; ревьюеру — артефакт + факты, влияющие на проверку.',
+      '• Запуская подшаг по RUN: из отчёта родителя — передай ему ТОЧНЫЙ список вопросов/фактов, которые родитель просил собрать (скопируй их из отчёта, не пересказывай).',
+      '• Результат подшага верни родителю дословно в этом же ключе: воркер.wait — не жди; worker-read отчёт подшага и приложи его факты к следующему раунду родителя.',
+      '• Ничего не додумывай за воркеров: пересылай факты как есть, свои выводы помечай отдельно.',
       '5. Не можешь решить — напиши человеку в этот чат (суть, варианты, рекомендация) и заверши ход.',
       '6. Гейты из флоу — стоп для человека: жди его ответа здесь.',
       '7. Итог: когда последний шаг завершён, собери сводку по флою и закончи.'
