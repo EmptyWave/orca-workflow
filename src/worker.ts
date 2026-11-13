@@ -1,7 +1,7 @@
 // The plugin's worker: the CLI bridge, orchestration snapshot, gate/task management and
 // template materialization. Runs for as long as the plugin is enabled (it owns a status
 // bar item), polls a light refresh, and pushes 'state.changed' to open panels.
-import { Bridge, BridgeError, shellPath } from './bridge'
+import { Bridge, BridgeError, shellPath, sleep } from './bridge'
 import type { WfGate, WfJob, WfRun, WfSnapshot, WfSpecialist, WfStep, WfTask, WfTemplate, WfWorker } from './protocol'
 import { applyPlaceholders, materialize, parseTemplate, topoUnits } from './workflow'
 import { parseYaml, type YamlValue } from './yaml'
@@ -95,6 +95,15 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   // ---- snapshot --------------------------------------------------------------------------------
 
+  /** Storage reads on the request path are raced: a hung storage call must not take the
+   *  request (and the bridge queue behind it) down with it. */
+  function storageGet<T>(key: string): Promise<T | null> {
+    return Promise.race([
+      orca.storage.get(key).catch(() => null),
+      sleep(3_000).then(() => null)
+    ]) as Promise<T | null>
+  }
+
   async function listRuns(): Promise<WfRun[]> {
     const result = await cli<{ runs?: unknown } | unknown[]>('orca orchestration run-list --limit 20 --json')
     const rows: Record<string, unknown>[] = Array.isArray(result)
@@ -105,16 +114,16 @@ export default function activate(orca: OrcaWorkerApi): void {
       const runId = String(field(row, 'runId', 'id') ?? '')
       let projectPath: string | null = null
       try {
-        const meta = await orca.storage.get(`runmeta.${runId}`)
+        const meta = await storageGet<{ projectPath?: unknown }>(`runmeta.${runId}`)
         if (meta && typeof meta === 'object') {
-          const path = (meta as { projectPath?: unknown }).projectPath
+          const path = meta.projectPath
           if (typeof path === 'string' && path !== '') projectPath = path
         }
         if (!projectPath) {
           // Runs the autopilot raised know their repo from their own state.
-          const auto = await orca.storage.get(`auto.${runId}`)
+          const auto = await storageGet<{ repoPath?: unknown }>(`auto.${runId}`)
           if (auto && typeof auto === 'object') {
-            const path = (auto as { repoPath?: unknown }).repoPath
+            const path = auto.repoPath
             if (typeof path === 'string' && path !== '') projectPath = path
           }
         }
@@ -1270,24 +1279,56 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { dispatchId: result.dispatchId, state: result.state }
   })
 
-  let projectCache: { at: number; project: { repoId: string; name: string; path: string } | null } | null = null
+  type WfProject = { repoId: string; name: string; path: string }
+  let projectCache: { at: number; project: WfProject | null; isWorkflow: boolean } | null = null
   orca.panels.handle('project.current', async () => {
     everUsed = true
-    if (projectCache && Date.now() - projectCache.at < 60_000) return { project: projectCache.project }
+    if (projectCache && Date.now() - projectCache.at < 60_000) {
+      return { project: projectCache.project, isWorkflow: projectCache.isWorkflow }
+    }
     const detected = await detectProject().catch(() => null)
-    projectCache = { at: Date.now(), project: detected }
-    return { project: detected }
+    const runs = await listRuns().catch(() => [] as WfRun[])
+    let project = detected
+    let isWorkflow = false
+    if (detected) {
+      isWorkflow = runs.some((r) => r.projectPath === detected.path) || (await workflowDirsExist(detected.path))
+    }
+    if (!isWorkflow) {
+      // Focus sits in a workspace that is not a workflow project (the home folder, a scratch
+      // pad): keep the panel on the project of the most recent run instead of blanking it.
+      const last = runs.find((r) => r.projectPath)?.projectPath
+      if (last) {
+        project = { repoId: detected?.repoId ?? '', name: last.split('/').filter(Boolean).pop() ?? last, path: last }
+        isWorkflow = true
+      }
+    }
+    projectCache = { at: Date.now(), project, isWorkflow }
+    return { project, isWorkflow }
   })
 
-  async function detectProject(): Promise<{ repoId: string; name: string; path: string } | null> {
-    // The focused workspace's terminal carries a worktreeId of "repoId::repoPath", which names
-    // the project directly. One bridge command prints both mappings at once.
-    const context = await orca.host.call('workspace.readContext', undefined)
-    const terminalId = context?.terminals?.[0]?.id
-    if (!terminalId) return null
-    const combined = await bridge.run(
-      `echo __WFC__; orca terminal list --json; echo __WFR__; orca repo list --json; echo __WFE__`
-    )
+  async function workflowDirsExist(projectPath: string): Promise<boolean> {
+    try {
+      const out = await bridge.run(
+        `if [ -d ${shellPath(`${projectPath}/.orca/workflows`)} ] || [ -d ${shellPath(`${projectPath}/.orca/workers`)} ] || [ -d ${shellPath(`${projectPath}/.orca/specialists`)} ]; then echo __WF_PROJ__; fi; true`
+      )
+      return out.includes('__WF_PROJ__')
+    } catch {
+      return false
+    }
+  }
+
+  async function detectProject(): Promise<WfProject | null> {
+    // The bridge terminal lives in the focused workspace, and `orca terminal list` (run through
+    // the bridge) carries each terminal's worktreeId "repoId::repoPath" — that names the project
+    // without workspace.readContext, which can hang forever in some window states. readContext,
+    // when it answers fast, still wins: it names the focused workspace's own first terminal.
+    const [context, combined] = await Promise.all([
+      Promise.race([
+        orca.host.call<{ terminals?: Array<{ id: string }> }>('workspace.readContext', undefined).catch(() => null),
+        sleep(3_000).then(() => null)
+      ]),
+      bridge.run(`echo __WFC__; orca terminal list --json; echo __WFR__; orca repo list --json; echo __WFE__`)
+    ])
     const lines = combined.split('\n')
     const between = (from: string, to: string): string => {
       const start = lines.indexOf(from)
@@ -1297,17 +1338,15 @@ export default function activate(orca: OrcaWorkerApi): void {
     const terminalJson = between('__WFC__', '__WFR__')
     const repoJson = between('__WFR__', '__WFE__')
     if (!terminalJson) return null
-    let worktreeId = ''
+    let wanted = context?.terminals?.[0]?.id ?? bridge.current()
     try {
       const listing = JSON.parse(extractJson(terminalJson)) as { result?: { terminals?: Array<{ handle?: string; worktreeId?: string }> } }
-      const entry = (listing.result?.terminals ?? []).find((t) => t.handle === terminalId)
-      worktreeId = entry?.worktreeId ?? ''
-    } catch {
-      return null
-    }
-    const repoId = worktreeId.split('::')[0]
-    if (!repoId) return null
-    try {
+      const terminals = listing.result?.terminals ?? []
+      let entry = terminals.find((t) => t.handle === wanted)
+      if (!entry && wanted !== bridge.current()) entry = terminals.find((t) => t.handle === bridge.current())
+      const worktreeId = entry?.worktreeId ?? ''
+      const repoId = worktreeId.split('::')[0]
+      if (!repoId) return null
       const repos = JSON.parse(extractJson(repoJson)) as { result?: { repos?: Array<{ id?: string; displayName?: string; path?: string }> } }
       const repo = (repos.result?.repos ?? []).find((r) => r.id === repoId)
       if (!repo) return null
@@ -1563,6 +1602,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     const terminalId = bridge.current() ?? (await bridge.ensure().catch(() => null))
     return { terminalId }
   })
+
+  orca.panels.handle('bridge.debug', async () => bridge.stats())
 }
 
 function message(error: unknown): string {

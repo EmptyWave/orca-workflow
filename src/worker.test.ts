@@ -28,13 +28,17 @@ const b64 = (s: string): string => {
   return btoa(binary)
 }
 
-function makeHost() {
+function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = {}) {
   let sends = 0
   let created = 0
   let lastCommand = ''
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
     const dir = LS_DIR
+    if (command.includes('__WF_PROJ__')) {
+      // The workflow-dirs probe: only the biz.erp project has .orca/workflows|workers.
+      return command.includes('/Users/tester/PhpstormProjects/biz.erp') ? '__WF_PROJ__' : ''
+    }
     if (command.includes('run-list')) {
       return '{"ok":true,"result":{"runs":[{"runId":"run_1","objective":"Демо — цель"}]}}'
     }
@@ -84,7 +88,12 @@ function makeHost() {
         '__WFC__',
         JSON.stringify({
           ok: true,
-          result: { terminals: [{ handle: 't1', title: 'workflow-view bridge', worktreeId: 'r1::/Users/tester/PhpstormProjects/biz.erp' }] }
+          result: {
+            terminals: [
+              { handle: 't1', title: 'workflow-view bridge', worktreeId: 'r1::/Users/tester/PhpstormProjects/biz.erp' },
+              { handle: 't2', title: 'Terminal', worktreeId: 'f1::/Users/tester' }
+            ]
+          }
         }),
         '__WFR__',
         JSON.stringify({
@@ -150,12 +159,12 @@ function makeHost() {
     return ''
   }
   return mockHost({
-    storage: {},
+    storage: opts.storage ?? {},
     results: {
       'workspace.readContext': {
         branch: 'master',
         displayName: 'biz.erp',
-        terminals: [{ id: 't1', title: 'workflow-view bridge' }]
+        terminals: [opts.focus ? { id: opts.focus, title: 'Terminal' } : { id: 't1', title: 'workflow-view bridge' }]
       },
       'workspace.list': {
         workspaces: [{ id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/x/biz.erp', branch: 'master', project: 'p', hostId: 'local' }],
@@ -169,10 +178,16 @@ function makeHost() {
         lastCommand = params.text
         return { accepted: true }
       },
-      'terminal.read': () => ({
-        lines: [`__WF${sends}B__`, canned(lastCommand), `__WF${sends}E_0__`],
-        truncated: false
-      }),
+      'terminal.read': () => {
+        // Echo the markers the sent command actually carries — the bridge's counter is
+        // randomly seeded, so the mock must parse it instead of counting sends.
+        const marker = lastCommand.match(/echo "__WF(\d+)B__"/)
+        const n = marker ? marker[1] : String(sends)
+        return {
+          lines: [`__WF${n}B__`, canned(lastCommand), `__WF${n}E_0__`],
+          truncated: false
+        }
+      },
       'statusBar.update': { ok: true }
     }
   })
@@ -180,8 +195,11 @@ function makeHost() {
 
 /** Every test deactivates its worker even when an assertion fails: the interval would keep
  *  the node:test child process alive forever otherwise. */
-async function withWorker(fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: MockHost) => Promise<void>): Promise<void> {
-  const host = makeHost()
+async function withWorker(
+  fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: MockHost) => Promise<void>,
+  opts: { focus?: string; storage?: Record<string, unknown> } = {}
+): Promise<void> {
+  const host = makeHost(opts)
   const worker = await mountWorker(main, { host })
   try {
     await fn(worker, host)
@@ -368,6 +386,18 @@ test('projects.list отдаёт git-репозитории с путями', ()
     ])
     const current = await worker.request('project.current')
     assert.deepEqual(current.project, { repoId: 'r1', name: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp' })
+    assert.equal(current.isWorkflow, true, 'есть .orca/workflows — проект воркфлоу')
+  }))
+
+test('project.current вне проекта держит скоуп на проекте последнего рана', () =>
+  withWorker(async (worker) => {
+    const current = await worker.request('project.current')
+    assert.equal(current.project.path, '/Users/tester/PhpstormProjects/biz.erp', 'фокус в ~, скоуп на biz.erp')
+    assert.equal(current.project.name, 'biz.erp')
+    assert.equal(current.isWorkflow, true)
+  }, {
+    focus: 't2',
+    storage: { 'runmeta.run_1': { projectPath: '/Users/tester/PhpstormProjects/biz.erp' } }
   }))
 
 test('template.edit открывает файл шаблона в Orca', () =>

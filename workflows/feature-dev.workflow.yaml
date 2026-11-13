@@ -1,7 +1,7 @@
 # Переносимый воркфлоу (aip-style): воркеры в workers/, шаги идут по порядку,
 # on_reject на ревью возвращает работу назад, тесты — один блок из трёх проверок.
-id: feature-dev
-title: 'biz/erp'
+id: main
+title: 'development'
 steps:
   - id: plan
     title: 'План (openspec)'

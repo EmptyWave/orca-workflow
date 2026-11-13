@@ -17,7 +17,7 @@
 │ ✓ plan · План (openspec)          [claude]                          │
 │ ✓ plan-review · Ревью плана       [claude]   ← on_reject → plan     │
 │ ▸ dev · Разработка                [claude]   ⏿ гейт                 │
-│ ❑ Блок «tests» — подшаги 0/3                                         │
+│ ❑ Блок «tests» — подшаги 0/3                                        │
 │   ↳ test-api  ↳ test-static  ↳ test-ui                              │
 └─────────────────────────────────────────────────────────────────────┘
 ```
@@ -36,14 +36,17 @@
 
 ```yaml
 id: main
-title: 'biz/erp development'
+title: 'development'
 steps:
   - id: plan
     title: 'План (openspec)'
     worker: planner                      # карточка из .orca/workers/
     sub:                                 # параллельный блок подшагов
       - { id: code-research, title: 'Ресерч по коду', worker: code-researcher, optional: true }
-  - { id: plan-review, title: 'Ревью плана', worker: plan-reviewer }
+  - id: plan-review, 
+    title: 'Ревью плана', 
+    worker: plan-reviewer,
+    gate: { question: 'Подтверждаем план?', options: [approve, request-changes] },
     on_reject: { goto: plan, max_rounds: 2 }   # вердикт ревью вернёт работу назад
   - id: dev
     worker: coder
@@ -52,7 +55,6 @@ steps:
     sub:
       - { id: test-api, worker: api-tester }
       - { id: test-ui, worker: ui-tester, optional: true }
-    gate: { question: 'Код аппрувнут?', options: [approve, request-changes] }
 ```
 
 - **`worker:`** — slug карточки из `.orca/workers/` (старое имя `specialist:` работает как синоним).
@@ -77,12 +79,12 @@ steps:
   tests/api-tester.yaml  tests/ui-tester.yaml
 ```
 
-Ссылка в шаблоне — плоским именем файла (`worker: code-researcher`), вложенность не важна.
+Ссылка в шаблоне — плоским именем файла (`worker: code-reviewer`), вложенность не важна.
 Карточка:
 
 ```yaml
 agent: claude          # или codex, zcode, …
-model: claude-sonnet-4-6   # опц.
+model: opus            # опц.
 effort: high           # опц., зависит от агента (claude: low..xhigh/max)
 fallback: [codex]      # опц., наследуется всеми шагами этого воркера
 spec: |
@@ -136,11 +138,18 @@ orca plugin shot local.workflow-view --panel workflow --out .orca/shots/x.png
   в служебном терминале «workflow-view bridge» с маркерным протоколом. Orca пускает ввод
   только в терминалы фокусного воркспейса — мост следует за фокусом, переживает зомби,
   перепривязывается к рану (`run-use`) при `consumer_fenced`.
+  Живучесть: каждый host-вызов ограничен таймаутом (зависший `workspace.readContext` не
+  останавливает очередь); маркеры сеются случайным счётчиком (новый воркер не примет
+  устаревшие маркеры из буфера терминала за свой ответ); ввод, не дошедший до терминала,
+  отрабатывается fail-fast'ом и пересозданием моста; осиротевшие мосты подчищаются.
 - **Панель** — изолированный HTML-фрейм: полный контроль DOM, темы через `--orca-*`,
   состояние в storage плагина. Читает готовые снимки рана из storage; мост трогает
   только воркер.
 - **Скоупинг.** Раны привязаны к проектам (мета пишется при создании), панель фильтрует
-  по фокусному проекту; проект без ранов открывает вкладку «Шаблоны».
+  по фокусному проекту; проект без ранов открывает вкладку «Шаблоны». Фокус в воркспейсе
+  без воркфлоу (домашняя папка, скрипач) не опустошает панель: скоуп удерживается на
+  проекте последнего рана. Если проект и вовсе не определился — вкладка «Шаблоны»
+  показывает библиотеку вместо тупика; кнопка ↻ доступна в любом состоянии.
 
 ## Ограничения
 

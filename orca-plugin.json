@@ -3,7 +3,7 @@
   "id": "workflow-view",
   "name": "Workflow View",
   "version": "0.1.0",
-  "description": "Per-project workflow templates (plan → review → dev → review → tests → commit) with one-click portability, an orchestration Runs panel, and gate management.",
+  "description": "Per-project workflow templates with one-click portability, an orchestration Runs panel, and gate management.",
   "engines": {
     "orca": ">=1.4.248"
   },

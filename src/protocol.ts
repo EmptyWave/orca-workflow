@@ -139,9 +139,12 @@ declare module 'orca' {
     'projects.list': {
       output: { projects: { repoId: string; name: string; path: string }[] }
     }
-    /** The project the focused workspace belongs to; null when it cannot be resolved. */
+    /** The project the panel is scoped to: the focused workspace's project when it is a
+     *  workflow project (templates, workers or runs), else the project of the most recent
+     *  run; null when nothing resolves. `isWorkflow` says whether the scoped project has
+     *  templates, workers or runs — the panel persists only such projects. */
     'project.current': {
-      output: { project: { repoId: string; name: string; path: string } | null }
+      output: { project: { repoId: string; name: string; path: string } | null; isWorkflow: boolean }
     }
     /** Fresh orchestration snapshot for a Run (runId null = latest runs summary only). */
     'state.get': { input: { runId: string | null }; output: WfSnapshot }

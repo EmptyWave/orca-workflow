@@ -166,7 +166,7 @@
         tab: 'runs',
         runs: null, runId: null, snap: null,
         project: null,
-        tplSource: 'project', templates: null, tplId: null,
+        tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
         objective: '', baseBranch: '', worktreeName: '',
         agent: 'claude', model: '', effort: '', worktree: '',
         startFor: null,           // task id with the start form open
@@ -245,7 +245,7 @@
       let loadingSince = {}
       async function loadRuns() {
         try {
-          const answer = await req('runs.list')
+          const answer = await req('runs.list', undefined, 60000)
           S.runs = answer.runs
           delete loadingSince['запуски']
           const ids = visibleRuns().visible.map((r) => r.runId)
@@ -270,10 +270,19 @@
         render()
       }
       async function loadProject() {
-        try { S.project = (await req('project.current')).project } catch { /* keep the remembered one */ }
-        if (S.project) await orca.storage.set('html.project', S.project).catch(() => {})
+        const before = S.project?.path ?? null
+        try {
+          const answer = await req('project.current', undefined, 90000)
+          // The worker resolves the scope: the focused workflow project, or the project of
+          // the most recent run — focus drifting outside a project never blanks the panel.
+          if (answer.project) {
+            if (answer.project.path !== before) { S.templates = null; S.tplId = null }
+            S.project = answer.project
+            if (answer.isWorkflow) await orca.storage.set('html.project', S.project).catch(() => {})
+          }
+        } catch { /* keep the remembered one */ }
         // Templates may have failed while the project was still unknown — retry now.
-        if (S.tab === 'templates' && (S.templates === null || S.templates.length === 0) && S.project) void loadTemplates()
+        if (S.tab === 'templates' && (S.templates === null || S.templates.length === 0)) void loadTemplates()
         render()
       }
       let tplInFlight = false
@@ -281,10 +290,14 @@
         if (tplInFlight) return
         tplInFlight = true
         try {
-        if (S.tplSource === 'project' && !S.project) await loadProject()
+        const wantProject = S.tplSource === 'project'
+        if (wantProject && !S.project) await loadProject()
+        // No project to read from: the library still has templates — show it instead of a dead end.
+        const useProject = wantProject && !!S.project
+        S.tplFellBack = wantProject && !useProject
         const answer = await req('template.list', {
-          source: S.tplSource,
-          projectPath: S.tplSource === 'project' ? S.project?.path ?? null : null
+          source: useProject ? 'project' : 'library',
+          projectPath: useProject ? S.project.path : null
         }, 60000)
         S.templates = answer.templates
         S.notice = null
@@ -332,8 +345,8 @@
           if (S.objective.trim() === '') throw new Error('заполни цель (objective)')
           if (S.worktreeName.trim() === '') throw new Error('заполни имя ворктри')
           const answer = await req('template.instantiate', {
-            source: S.tplSource,
-            projectPath: S.tplSource === 'project' ? S.project?.path ?? null : null,
+            source: S.tplFellBack ? 'library' : S.tplSource,
+            projectPath: !S.tplFellBack && S.tplSource === 'project' ? S.project?.path ?? null : null,
             templateId: tpl.id, objective: S.objective.trim(),
             baseBranch: S.baseBranch.trim() === '' ? null : S.baseBranch.trim(),
             worktreeName: S.worktreeName.trim(), agent: S.agent
@@ -355,10 +368,11 @@
       }
       async function copyTemplate(to) {
         setBusy('копирование шаблона')
+        const from = S.tplFellBack ? 'library' : S.tplSource
         try {
           await req('template.copy', {
-            from: S.tplSource, to, templateId: S.tplId,
-            fromProjectPath: S.tplSource === 'project' ? S.project?.path ?? null : null,
+            from, to, templateId: S.tplId,
+            fromProjectPath: from === 'project' ? S.project?.path ?? null : null,
             toProjectPath: to === 'project' ? S.project?.path ?? null : null
           })
           setNotice('шаблон скопирован (' + (to === 'library' ? 'в библиотеку' : 'в проект') + ')')
@@ -471,7 +485,7 @@
           node.onchange = async () => {
             const key = node.dataset.bindSelect
             await remember(key, node.value)
-            if (key === 'tplSource') { S.templates = null; S.tplId = null; render(); void loadTemplates() }
+            if (key === 'tplSource') { S.templates = null; S.tplId = null; S.tplFellBack = false; render(); void loadTemplates() }
             if (key === 'runId') void loadState()
             if (key === 'tab') render()
           }
@@ -646,23 +660,26 @@
 
       // ---- templates view
       function viewTemplates() {
-        const project = S.project
-          ? `<div class="rowline spread" style="margin-bottom:8px"><span class="chip">Проект: ${esc(S.project.name)}</span></div>`
-          : `<div class="callout warning">Проект не найден — открой workspace репозитория в Orca.</div>`
-        if (!S.templates) { void loadTemplates(); return project + stuck('шаблоны') }
-        if (S.templates.length === 0) {
-          const noProject = S.tplSource === 'project' && !S.project
-          return project + (noProject
-            ? `<div class="empty">Проект не определён: кликни workspace репозитория в Orca и обнови (↻).</div>`
-            : `<div class="empty">Нет шаблонов. Скопируй из библиотеки: источник «Библиотека» → «В проект».</div>`)
-        }
-        const tpl = S.templates.find((t) => t.id === S.tplId) ?? S.templates[0]
-        const srcSelect = `<div class="rowline" style="margin-bottom:8px">
+        const effSource = S.tplFellBack ? 'library' : S.tplSource
+        const header = `<div class="rowline" style="margin-bottom:8px">
           <select data-bind-select="tplSource" style="flex:1">
             <option value="project"${S.tplSource === 'project' ? ' selected' : ''}>Проект (.orca/workflows)</option>
             <option value="library"${S.tplSource === 'library' ? ' selected' : ''}>Библиотека</option>
           </select>
           <button class="btn ghost" data-act="refresh-tpl" title="Перечитать">${ICON.refresh}</button></div>`
+        const project = !S.project && !S.tplFellBack
+          ? `<div class="callout warning">Проект не найден — открой workspace репозитория в Orca.</div>`
+          : `<div class="rowline spread" style="margin-bottom:8px">
+              ${S.project ? `<span class="chip">Проект: ${esc(S.project.name)}</span>` : '<span></span>'}
+              ${S.tplFellBack ? '<span class="chip">не в проекте — показана библиотека</span>' : ''}
+            </div>`
+        if (!S.templates) { void loadTemplates(); return header + project + stuck('шаблоны') }
+        if (S.templates.length === 0) {
+          return header + project + (effSource === 'project'
+            ? `<div class="empty">В проекте нет шаблонов (.orca/workflows пуст). Скопируй из библиотеки: источник «Библиотека» → «↳ в проект».</div>`
+            : `<div class="empty">В библиотеке нет шаблонов — добавь ${'{'}id}.workflow.yaml в её каталог (Настройки).</div>`)
+        }
+        const tpl = S.templates.find((t) => t.id === S.tplId) ?? S.templates[0]
         const tplSelect = `<div class="rowline" style="margin-bottom:8px">
           <select data-bind-select="tplId" style="flex:1">
             ${S.templates.map((t) => `<option value="${esc(t.id)}"${t.id === tpl.id ? ' selected' : ''}>${esc(t.title || t.id)}</option>`).join('')}
@@ -694,7 +711,7 @@
           preview = `<div class="steps">${rows}</div>`
         }
 
-        return project + srcSelect + tplSelect +
+        return header + project + tplSelect +
           `<div class="card"><h2>${esc(tpl.title || tpl.id)}</h2>
             <div class="tiny muted" style="margin-bottom:6px">${esc(tpl.id)} · ${esc(tpl.file)}</div>
             ${preview}</div>` +
@@ -707,7 +724,7 @@
             <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
             <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
               <button class="btn primary" data-act="instantiate"${(tpl.missingWorkers ?? []).length > 0 ? ' disabled title="Сначала создай недостающих воркеров"' : ''}>Поднять Run</button>
-              ${S.tplSource === 'library' ? `<button class="btn" data-act="copy-project">↳ в проект</button>` : `<button class="btn" data-act="copy-library">↳ в библиотеку</button>`}
+              ${effSource === 'library' ? `<button class="btn" data-act="copy-project">↳ в проект</button>` : `<button class="btn" data-act="copy-library">↳ в библиотеку</button>`}
             </div></div>`
       }
 
