@@ -8,16 +8,16 @@ const TEMPLATE_YAML = `id: demo
 title: Демо
 steps:
   - id: plan
-    specialist: planner
+    worker: planner
     sub:
-      - { id: research, specialist: researcher, optional: true }
-  - { id: review, specialist: reviewer, on_reject: { goto: plan, max_rounds: 2 } }
+      - { id: research, worker: researcher, optional: true }
+  - { id: review, worker: reviewer, on_reject: { goto: plan, max_rounds: 2 } }
   - id: tests
     sub:
-      - { id: test-api, specialist: tester }
-      - { id: test-ui, specialist: tester }
+      - { id: test-api, worker: tester }
+      - { id: test-ui, worker: tester }
   - id: commit
-    specialist: committer
+    worker: committer
     deps: [tests]
     gate: { question: 'Коммитить?', options: [approve, request-changes] }
 `
@@ -317,7 +317,7 @@ test('templates.updated разбирает YAML редактора без мос
   withWorker(async (worker) => {
     const answer = await worker.request('templates.updated', {
       projectPath: '/x/biz.erp',
-      yaml: 'id: feature-dev\ntitle: Фича\nsteps:\n  - { id: plan, specialist: planner }\n  - { id: dev, specialist: coder, fallback: [zcode] }\n'
+      yaml: 'id: feature-dev\ntitle: Фича\nsteps:\n  - { id: plan, worker: planner }\n  - { id: dev, worker: coder, fallback: [zcode] }\n'
     })
     assert.equal(answer.template.id, 'feature-dev')
     assert.equal(answer.template.error, null)

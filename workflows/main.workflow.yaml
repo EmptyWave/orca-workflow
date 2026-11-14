@@ -4,36 +4,36 @@ title: 'development'
 steps:
   - id: plan
     title: 'План (openspec)'
-    specialist: planner
+    worker: planner
     sub:
-      - { id: code-research, title: 'Ресерч по коду', specialist: code-researcher}
-      - { id: web-search, title: 'Поиск необходимой информации', specialist: web-searcher, optional: true }
-      - { id: ba-review, title: 'Ревью бизнес дизайна', specialist: ba-reviewer, optional: true }
+      - { id: code-research, title: 'Ресерч по коду', worker: code-researcher}
+      - { id: web-search, title: 'Поиск необходимой информации', worker: web-searcher, optional: true }
+      - { id: ba-review, title: 'Ревью бизнес дизайна', worker: ba-reviewer, optional: true }
   - id: plan-review,
     title: 'Ревью плана',
-    specialist: plan-reviewer,
+    worker: plan-reviewer,
     sub:
-      - { id: architecture-review, title: 'Ревью архитектуры', specialist: architecture-reviewer}
+      - { id: architecture-review, title: 'Ревью архитектуры', worker: architecture-reviewer}
     on_reject: { goto: plan, max_rounds: 2 }
   - id: dev
     title: 'Разработка'
-    specialist: coder
+    worker: coder
   - id: code-review,
     title: 'Ревью кода',
-    specialist: code-reviewer,
+    worker: code-reviewer,
     sub:
-      { id: stat-analyze, title: 'Статический анализ', specialist: stat-analyzer },
+      { id: stat-analyze, title: 'Статический анализ', worker: stat-analyzer },
     on_reject: { goto: dev, max_rounds: 2 }
   - id: tests
     title: 'Тесты'
     sub:
-      - { id: test-api, title: 'API/бэкенд', specialist: api-tester }
-      - { id: test-ui, title: 'Фронт/UI', specialist: ui-tester, optional: true }
-      - { id: design-review, title: 'Фронт/UI', specialist: design-reviewer, optional: true }
+      - { id: test-api, title: 'API/бэкенд', worker: api-tester }
+      - { id: test-ui, title: 'Фронт/UI', worker: ui-tester, optional: true }
+      - { id: design-review, title: 'Фронт/UI', worker: design-reviewer, optional: true }
     on_reject: { goto: dev, max_rounds: 2 }
   - id: commit
     title: 'Коммит'
-    specialist: committer
+    worker: committer
     sub:
-      - { id: qa-doc-write, title: 'Подготовка документации для QA', specialist: qa-doc-writer }
+      - { id: qa-doc-write, title: 'Подготовка документации для QA', worker: qa-doc-writer }
     deps: [tests]

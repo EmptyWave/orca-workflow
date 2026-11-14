@@ -4,36 +4,36 @@ title: 'development'
 steps:
   - id: plan
     title: 'План (openspec)'
-    specialist: planner
+    worker: planner
     sub:
-      - { id: code-research, title: 'Ресерч по коду', specialist: code-researcher, phase: before_start }
-      - { id: web-search, title: 'Поиск необходимой информации', specialist: web-searcher, phase: after, optional: true }
-      - { id: ba-review, title: 'Ревью бизнес дизайна', specialist: ba-reviewer, phase: after, optional: true }
+      - { id: code-research, title: 'Ресерч по коду', worker: code-researcher, phase: before_start }
+      - { id: web-search, title: 'Поиск необходимой информации', worker: web-searcher, phase: after, optional: true }
+      - { id: ba-review, title: 'Ревью бизнес дизайна', worker: ba-reviewer, phase: after, optional: true }
   - id: plan-review,
     title: 'Ревью плана',
-    specialist: plan-reviewer,
+    worker: plan-reviewer,
     sub:
-      - { id: architecture-review, title: 'Ревью архитектуры', specialist: architecture-reviewer, phase: before_end }
+      - { id: architecture-review, title: 'Ревью архитектуры', worker: architecture-reviewer, phase: before_end }
     on_reject: { goto: plan, max_rounds: 2 }
   - id: dev
     title: 'Разработка'
-    specialist: coder
+    worker: coder
   - id: code-review,
     title: 'Ревью кода',
-    specialist: code-reviewer,
+    worker: code-reviewer,
     sub:
-      { id: stat-analyze, title: 'Статический анализ', specialist: stat-analyzer, phase: before_end },
+      { id: stat-analyze, title: 'Статический анализ', worker: stat-analyzer, phase: before_end },
     on_reject: { goto: dev, max_rounds: 2 }
   - id: tests
     title: 'Тесты'
     sub:
-      - { id: test-api, title: 'API/бэкенд', specialist: api-tester, phase: before_start }
-      - { id: test-ui, title: 'Фронт/UI', specialist: ui-tester, phase: after, optional: true }
-      - { id: design-review, title: 'Фронт/UI', specialist: design-reviewer, phase: after, optional: true }
+      - { id: test-api, title: 'API/бэкенд', worker: api-tester, phase: before_start }
+      - { id: test-ui, title: 'Фронт/UI', worker: ui-tester, phase: after, optional: true }
+      - { id: design-review, title: 'Фронт/UI', worker: design-reviewer, phase: after, optional: true }
     on_reject: { goto: dev, max_rounds: 2 }
   - id: commit
     title: 'Коммит'
-    specialist: committer
+    worker: committer
     sub:
-      - { id: qa-doc-write, title: 'Подготовка документации для QA', specialist: qa-doc-writer, phase: before_start }
+      - { id: qa-doc-write, title: 'Подготовка документации для QA', worker: qa-doc-writer, phase: before_start }
     deps: [tests]

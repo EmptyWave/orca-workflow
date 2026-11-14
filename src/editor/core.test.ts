@@ -115,11 +115,11 @@ title: 'Фича'
 steps:
   - id: plan
     title: 'План'
-    specialist: planner
+    worker: planner
     sub:
-      - { id: research, title: 'Ресерч', specialist: researcher, optional: true }
-  - { id: dev, title: 'Разработка', specialist: coder, gate: { question: 'Пустить?', options: [approve] } }
-  - { id: commit, title: 'Коммит', specialist: committer, deps: [dev] }
+      - { id: research, title: 'Ресерч', worker: researcher, optional: true }
+  - { id: dev, title: 'Разработка', worker: coder, gate: { question: 'Пустить?', options: [approve] } }
+  - { id: commit, title: 'Коммит', worker: committer, deps: [dev] }
 `
   const graph = decode(text)
   assert.deepEqual(validate(graph), [], 'специалист — не барьер')

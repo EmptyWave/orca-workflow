@@ -116,7 +116,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   }
 
   // ---- project workers: dropdown data + the manager panel -------------------------
-  type Sp = { slug: string; agent: string; model: string | null; effort: string | null; spec: string | null; error: string | null }
+  type Sp = { slug: string; agent: string; model: string | null; effort: string | null; parallel: number | null; spec: string | null; error: string | null }
   let specialists: Sp[] = []
   let projectPath: string | null = null
   const request = <T>(name: string, input: unknown, timeoutMs = 30000): Promise<T> =>
@@ -296,6 +296,14 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const effortWrap = comboField('effort (опц.)', editing === 'new' || !editing ? '' : editing.effort ?? '', () => effortsFor(agentEl.value), () => undefined)
     const effortEl = effortWrap.querySelector('input') as HTMLInputElement
     form.append(effortWrap)
+    const parL = document.createElement('label')
+    parL.textContent = 'parallel — макс. одновременных (пусто = без лимита)'
+    form.append(parL)
+    const parEl = document.createElement('input')
+    parEl.type = 'number'
+    parEl.min = '1'
+    parEl.value = editing && editing !== 'new' && editing.parallel ? String(editing.parallel) : ''
+    form.append(parEl)
     const specL = document.createElement('label')
     specL.textContent = 'prompt — промпт воркера'
     form.append(specL)
@@ -319,6 +327,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
             agent: agentEl.value,
             model: modelEl.value.trim() === '' ? null : modelEl.value.trim(),
             effort: effortEl.value.trim() === '' ? null : effortEl.value.trim(),
+            parallel: parEl.value.trim() === '' ? null : Number(parEl.value),
             spec: specEl.value
           },
           60000

@@ -12,7 +12,7 @@ export type ParsedTemplate = {
 }
 
 /** A step's `sub:` children, one level deep: a block runs its children in parallel and its
- *  own specialist (if any) after the required ones; `optional` children start only on request. */
+ *  own worker (if any) after the required ones; `optional` children start only on request. */
 export type WfSubStep = {
   id: string
   title: string | null
@@ -68,7 +68,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
     seen.add(stepId)
 
     const agent = strOrNull(raw.agent, 'steps[].agent')
-    const specialist = strOrNull(raw.worker ?? raw.specialist, 'steps[].worker') // specialist — старое имя
+    const specialist = strOrNull(raw.worker, 'steps[].worker')
     const fallback = stringOrArray(raw.fallback, `шаг "${stepId}": fallback`)
     const spec = strOrNull(raw.spec, 'steps[].spec')
     const specFile = strOrNull(raw.specFile, 'steps[].specFile')
@@ -84,14 +84,14 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
     if (!specialist && !agent && !hasSub) {
       // A bare barrier (no agent, only deps/gate) is legal: a join point for the DAG.
       if (deps.length === 0) {
-        throw new Error(`шаг "${stepId}": нужен specialist (slug), agent, sub-блок или deps-барьер`)
+        throw new Error(`шаг "${stepId}": нужен worker (slug), agent, sub-блок или deps-барьер`)
       }
     }
     if (agent && !specialist && !spec && !specFile && !hasSub) {
       throw new Error(`шаг "${stepId}": нужен spec (|) или specFile`)
     }
     if (!agent && !specialist && (spec || specFile)) {
-      throw new Error(`шаг "${stepId}": spec у барьера бессмыслен — убери spec/specFile или дай specialist`)
+      throw new Error(`шаг "${stepId}": spec у барьера бессмыслен — убери spec/specFile или дай worker`)
     }
 
     let gate: WfStep['gate'] = null
@@ -134,11 +134,11 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
         subSeen.add(childId)
         seen.add(childId)
         const childAgent = strOrNull(rawChild.agent, 'sub[].agent')
-        const childSpecialist = strOrNull(rawChild.worker ?? rawChild.specialist, 'sub[].worker')
+        const childSpecialist = strOrNull(rawChild.worker, 'sub[].worker')
         const childSpec = strOrNull(rawChild.spec, 'sub[].spec')
         const childSpecFile = strOrNull(rawChild.specFile, 'sub[].specFile')
         if (!childSpecialist && !childAgent) {
-          throw new Error(`подшаг "${childId}": нужен specialist (slug) или agent`)
+          throw new Error(`подшаг "${childId}": нужен worker (slug) или agent`)
         }
         const childDepsRaw = rawChild.deps
         let childDeps: string[] = []
@@ -174,6 +174,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
     steps.push({
       id: stepId,
       title: strOrNull(raw.title, 'steps[].title'),
+      parallel: null,
       agent,
       specialist,
       model: strOrNull(raw.model, 'steps[].model'),
@@ -245,7 +246,7 @@ export type WfBlockWatch = {
 }
 
 /** Flattens steps with `sub:` blocks into task units. Children (non-optional) gate on the
- *  block's external deps; the block's own specialist runs after its required children;
+ *  block's external deps; the block's own worker runs after its required children;
  *  a dep on a block id expands to all its required members (join). */
 export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: WfBlockWatch[] } {
   const byId = new Map(steps.map((s) => [s.id, s]))

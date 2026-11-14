@@ -160,6 +160,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         deps: stringList(field(row, 'deps')),
         order: null,
         optional: false,
+        parallel: null,
         dispatchId: dispatch,
         agent: null,
         model: null,
@@ -620,9 +621,10 @@ export default function activate(orca: OrcaWorkerApi): void {
   ): string {
     const flow = template.steps
       .map((step, i) => {
-        const who = step.specialist ? `специалист ${step.specialist}` : step.agent ? `агент ${step.agent}` : 'барьер'
+        const who = step.specialist ? `воркер ${step.specialist}` : step.agent ? `агент ${step.agent}` : 'барьер'
         const extra = [
           step.model ? `модель ${step.model}` : null,
+          step.parallel ? `ОДНОВРЕМЕННО не более ${step.parallel}` : null,
           (step.fallback ?? []).length > 0 ? `fallback: ${step.fallback.join(' → ')}` : null,
           step.gate ? `ГЕЙТ перед шагом: ${step.gate.question} — стоп для человека` : null,
           step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
@@ -888,10 +890,10 @@ export default function activate(orca: OrcaWorkerApi): void {
   async function loadSpecialists(projectPath: string | null, onlyProject = false): Promise<WfSpecialist[]> {
     const root = projectPath ? projectPath.replace(/\/+$/, '') : null
     const dirs: Array<string> = []
-    if (root) dirs.push(`${root}/.orca/workers`, `${root}/.orca/specialists`)
+    if (root) dirs.push(`${root}/.orca/workers`)
     if (!onlyProject) {
       const lib = (await libraryDir()).replace(/\/workflows$/, '')
-      dirs.push(`${lib}/workers`, `${lib}/specialists`)
+      dirs.push(`${lib}/workers`)
     }
     const out: WfSpecialist[] = []
     for (const dir of dirs) {
@@ -926,12 +928,13 @@ export default function activate(orca: OrcaWorkerApi): void {
               agent: String(raw.agent ?? 'claude'),
               model: typeof raw.model === 'string' ? raw.model : null,
               effort: typeof raw.effort === 'string' ? raw.effort : null,
+              parallel: typeof raw.parallel === 'number' && raw.parallel > 0 ? raw.parallel : null,
               fallback: Array.isArray(raw.fallback) ? raw.fallback.map(String) : typeof raw.fallback === 'string' && raw.fallback !== '' ? [String(raw.fallback)] : [],
               spec: typeof raw.prompt === 'string' ? raw.prompt : typeof raw.spec === 'string' ? raw.spec : null,
               error: null
             })
           } catch (error) {
-            out.push({ slug, agent: 'claude', model: null, effort: null, fallback: [], spec: null, error: message(error) })
+            out.push({ slug, agent: 'claude', model: null, effort: null, parallel: null, fallback: [], spec: null, error: message(error) })
           }
         }
       }
@@ -966,15 +969,16 @@ export default function activate(orca: OrcaWorkerApi): void {
       specFile: string | null
     ): { agent: string | null; model: string | null; effort: string | null; fallback: string[]; spec: string | null } => {
       const specOverride = specFile ? (specs[specFile] ?? spec) : spec
-      if (!specialist) return { agent, model, effort: model ? effort : null, fallback, spec: specOverride ?? spec }
+      if (!specialist) return { agent, model, effort: model ? effort : null, fallback, parallel: null, spec: specOverride ?? spec }
       const sp = bySlug.get(specialist)
-      if (!sp) return { agent, model, effort: model ? effort : null, fallback, spec: specOverride ?? spec }
+      if (!sp) return { agent, model, effort: model ? effort : null, fallback, parallel: null, spec: specOverride ?? spec }
       const finalModel = model ?? sp.model
       return {
         agent: agent ?? sp.agent,
         model: finalModel,
         effort: finalModel ? (effort ?? sp.effort) : null,
         fallback: fallback.length > 0 ? fallback : sp.fallback,
+        parallel: sp.parallel,
         spec: specOverride ?? sp.spec
       }
     }
@@ -1502,7 +1506,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { workers: await loadSpecialists(projectPath, true) }
   })
 
-  orca.panels.handle('workers.save', async ({ projectPath, slug, agent, model, effort, spec }) => {
+  orca.panels.handle('workers.save', async ({ projectPath, slug, agent, model, effort, parallel, spec }) => {
     if (projectPath) bridge.pin(projectPath)
     everUsed = true
     const clean = slug.trim().replace(/[^a-z0-9-]/g, '-')
@@ -1512,6 +1516,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       `agent: ${agent.trim() || 'claude'}`,
       model && model.trim() !== '' ? `model: ${model.trim()}` : null,
       effort && effort.trim() !== '' ? `effort: ${effort.trim()}` : null,
+      typeof parallel === 'number' && parallel > 0 ? `parallel: ${parallel}` : null,
       spec.trim() !== '' ? `prompt: |\n${spec.replace(/\n$/, '').split('\n').map((l) => '  ' + l).join('\n')}` : null
     ].filter((x): x is string => x !== null).join('\n') + '\n'
     await bridge.run(

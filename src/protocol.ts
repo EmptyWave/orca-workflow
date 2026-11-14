@@ -21,6 +21,8 @@ export type WfTask = {
   order: number | null
   /** Optional sub-step: skippable by the coordinator; a never-started one renders as skipped. */
   optional: boolean
+  /** Max concurrent instances of this worker's step (from the worker card); null = unlimited. */
+  parallel: number | null
 }
 
 export type WfGate = {
@@ -94,7 +96,9 @@ export type WfStep = {
   deps: string[]
   /** "This step does not start until a human answers." On a barrier step it gates the first
    *  materialized step after it (the explicit multi-target form). */
-  gate: { question: string; options: string[] } | null
+  gate: { question: string; options: string[]   /** Max concurrent instances (from the worker card); null = unlimited. */
+  parallel: number | null
+} | null
   onReject: { goto: string; maxRounds: number } | null
   /** Block children (`sub:`): parallel by default; optional ones start only on RUN: request. */
   sub: WfSubStepLike[]
@@ -122,6 +126,8 @@ export type WfSpecialist = {
   fallback: string[]
   spec: string | null
   error: string | null
+  /** Max concurrent instances of this worker inside one run; null = unlimited. */
+  parallel: number | null
 }
 
 export type WfTemplate = {

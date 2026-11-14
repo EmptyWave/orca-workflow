@@ -23,10 +23,10 @@ steps:
     deps: [plan-review]
     gate: { question: 'План аппрувнут?', options: [approve, request-changes] }
   - id: research
-    specialist: researcher
+    worker: researcher
     deps: [plan]
     sub:
-      - { id: probe, specialist: researcher, optional: true }
+      - { id: probe, worker: researcher, optional: true }
   - id: dev
     agent: claude
     model: some-model
@@ -65,18 +65,18 @@ id: phases
 title: Фазы
 steps:
   - id: plan
-    specialist: planner
+    worker: planner
     sub:
-      - { id: prep, specialist: researcher }
-      - { id: side, specialist: researcher, phase: before_end }
-      - { id: post, specialist: researcher, phase: after, optional: true }
+      - { id: prep, worker: researcher }
+      - { id: side, worker: researcher, phase: before_end }
+      - { id: post, worker: researcher, phase: after, optional: true }
   - id: review
-    specialist: reviewer
+    worker: reviewer
     sub:
-      - { id: arch, specialist: reviewer, phase: before_end }
+      - { id: arch, worker: reviewer, phase: before_end }
     on_reject: { goto: plan, max_rounds: 2 }
   - id: dev
-    specialist: coder
+    worker: coder
 `))
   assert.deepEqual(tpl.steps[0].sub.map((c) => [c.id, c.phase]), [
     ['prep', 'before_start'],
@@ -93,16 +93,14 @@ steps:
   assert.ok((deps.get('dev') ?? []).includes('arch'), 'следующий шаг ждёт и родителя, и его before_end-подшаги')
 })
 
-test('воркеры: ключ worker каноничен, specialist — легаси-синоним', () => {
-  const value = parseYaml(`id: t
-title: T
-steps:
-  - { id: a, worker: planner }
-  - { id: b, specialist: coder }
-`) as never as { steps: Array<Record<string, unknown>> }
-  const parsed = parseTemplate('t', value as never)
-  assert.equal(parsed.steps[0].specialist, 'planner', 'worker читается')
-  assert.equal(parsed.steps[1].specialist, 'coder', 'старый specialist тоже читается')
+test('воркеры: только worker:, specialist больше не читается', () => {
+  const good = parseTemplate('t', parseYaml('id: t\ntitle: T\nsteps:\n  - { id: a, worker: coder }\n'))
+  assert.equal(good.steps[0].specialist, 'coder')
+  assert.throws(
+    () => parseTemplate('t', parseYaml('id: t\ntitle: T\nsteps:\n  - { id: a, specialist: coder }\n')),
+    /нужен worker/,
+    'specialist без agent/spec больше не валиден'
+  )
 })
 
 test('парсер: блоки, потоки, кавычки, блочные скаляры', () => {
@@ -117,7 +115,7 @@ test('парсер: блоки, потоки, кавычки, блочные с�
   const gate = steps[2].gate as { [k: string]: unknown }
   assert.equal(gate.question, 'План аппрувнут?')
   assert.deepEqual(gate.options, ['approve', 'request-changes'])
-  assert.equal(steps[3].specialist, 'researcher')
+  assert.equal(steps[3].worker, 'researcher')
   const subChild = (steps[3].sub as Array<{ [k: string]: unknown }>)[0]
   assert.equal(subChild.optional, true)
   const reject = steps[4].on_reject as { [k: string]: unknown }

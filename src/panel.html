@@ -703,6 +703,7 @@
           const rows = tpl.steps.flatMap((step) => {
             const meta = [
               step.specialist ? 'воркер ' + step.specialist : null,
+              step.parallel ? `≤${step.parallel} паралл.` : null,
               (step.deps || []).length > 0 ? 'deps: ' + step.deps.join(', ') : null,
               step.gate ? 'гейт: ' + step.gate.question : null,
               step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
