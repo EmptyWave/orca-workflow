@@ -22,7 +22,7 @@ steps:
     title: 'Ревью кода',
     worker: code-reviewer,
     sub:
-      { id: stat-analyze, title: 'Статический анализ', worker: stat-analyzer, phase: before_end },
+      { id: stat-analyze, title: 'Статический анализ', worker: stat-analyzer, phase: before_start },
     on_reject: { goto: dev, max_rounds: 2 }
   - id: tests
     title: 'Тесты'
