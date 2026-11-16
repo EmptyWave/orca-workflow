@@ -132,11 +132,11 @@
 
       .skipdot {
         width: 14px; height: 14px; border-radius: 50%; position: relative; box-sizing: border-box;
-        border: 2px solid var(--orca-foreground); opacity: .8;
+        border: 2px solid rgba(139, 148, 158, .45);
       }
       .skipdot::after {
         content: ''; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px;
-        background: var(--orca-foreground); transform: translateX(-50%) rotate(45deg);
+        background: rgba(139, 148, 158, .45); transform: translateX(-50%) rotate(45deg);
       }
       .step.skipped .body .title, .step.skipped .body .meta { opacity: .45; }
       /* ---- gates ---- */
