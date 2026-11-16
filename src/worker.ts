@@ -73,6 +73,9 @@ function field(record: Record<string, unknown>, ...names: string[]): unknown {
 let stopTimer: (() => void) | null = null
 let activeBridge: Bridge | null = null
 
+/** Test seam: the agent boot wait before verifying the coordinator terminal. */
+export const coordLaunch = { bootWaitMs: 8_000 }
+
 export default function activate(orca: OrcaWorkerApi): void {
   const bridge = new Bridge(orca)
   activeBridge = bridge
@@ -1238,21 +1241,40 @@ export default function activate(orca: OrcaWorkerApi): void {
           } catch {
             // файл брифа — удобство, ран живёт и без него
           }
-          const launched = await orca.host.call('agent.launch', {
-            workspaceId: home.id,
-            agent: coordinator?.agent ?? input.agent,
-            prompt: brief
-          })
+          // agent.launch types the prompt the moment the terminal exists — if the agent CLI
+          // has not booted yet, the prompt lands in a bare shell and is lost. Verify the
+          // terminal actually runs an agent, otherwise close it and retry.
+          const launchVerified = async (): Promise<string> => {
+            for (let attempt = 0; attempt < 3; attempt++) {
+              const launched = await orca.host.call<{ terminalId: string }>('agent.launch', {
+                workspaceId: home.id,
+                agent: coordinator?.agent ?? input.agent,
+                prompt: brief
+              })
+              await sleep(coordLaunch.bootWaitMs)
+              try {
+                const listing = await bridge.json<{ result?: { terminals?: Array<{ handle?: string; title?: string }> } }>('orca terminal list --json')
+                const term = (listing.result?.terminals ?? []).find((t) => t.handle === launched.terminalId)
+                const title = term?.title ?? ''
+                if (/claude|codex|agent|zcode|opencode/i.test(title)) return launched.terminalId
+                await bridge.run(`orca terminal close --terminal ${launched.terminalId} || true`)
+              } catch {
+                return launched.terminalId // проверка не удалась — не мешаем запуску
+              }
+            }
+            throw new BridgeError('агент в терминале координатора так и не поднялся (3 попытки)', 'cli_error')
+          }
+          const launchedTerminal = await launchVerified()
           const stored = await loadAuto(run.runId)
           if (stored) {
-            stored.coordinatorTerminal = launched.terminalId
+            stored.coordinatorTerminal = launchedTerminal
             await saveAuto(run.runId, stored)
           }
           job.step = 'coordinator'
           await saveJob(job, run.runId)
         } catch (error) {
           // The run exists and tasks are materialized; a failed launch leaves it to the panel.
-          job.error = `координатор не поднялся: ${message(error)} — ране нужен водитель, подними вручную`
+          job.error = `координатор не поднялся: ${message(error)}. Ран готов, водитель поднимается вручную: открой claude в ворктри рана и дай ему две команды — (1) orca orchestration run-use --id ${run.runId} --json  (2) прочитай .orca/coordinator-brief.md и веди флоу по нему`
           await saveJob(job, run.runId)
         }
         job.step = 'done'

@@ -216,6 +216,7 @@ async function withWorker(
     spawnedCommands.push(command)
     return canned(command)
   }
+  main.coordLaunch.bootWaitMs = 5
   const worker = await mountWorker(main, { host })
   try {
     await fn(worker, host)
