@@ -207,7 +207,7 @@
         openStep: null,           // task id expanded: gate, report, retry live inside the step
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null, openAttempt: {}, attemptVerdicts: {}
+        cfg: null, bridge: null, openAttempt: {}
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
@@ -718,14 +718,6 @@
             // Попытки шага (GitLab-style): каждый диспетчер — свёрнутая строка, клик разворачивает отчёт.
             const attempts = (S.snap?.workers || []).filter((w) => w.taskId === t.id)
             if (attempts.length > 0) {
-              if (!S.attemptVerdicts[t.id]) {
-                S.attemptVerdicts[t.id] = '…'
-                void req('task.attemptVerdicts', { runId: S.runId, taskId: t.id }, 60000)
-                  .then((r) => { S.attemptVerdicts[t.id] = r.verdicts ?? {} })
-                  .catch(() => { S.attemptVerdicts[t.id] = {} })
-                  .finally(() => render())
-              }
-              const verdicts = typeof S.attemptVerdicts[t.id] === 'object' ? S.attemptVerdicts[t.id] : {}
               const openD = S.openAttempt[t.id]
               bits.push(`<div class="tiny muted" style="margin:4px 0 2px">Попытки (${attempts.length})</div>`)
               for (let ai = 0; ai < attempts.length; ai++) {
@@ -738,7 +730,7 @@
                     .catch((err) => { S.reports[at.dispatchId] = 'ошибка: ' + (err.message || err) })
                     .finally(() => render())
                 }
-                const v = verdicts[at.dispatchId]
+                const v = at.verdict ?? null
                 const stIcon = at.state === 'failed' ? ICON.fail
                   : at.state === 'ready' || at.state === 'starting' ? '<div class="spin" title="работает"></div>'
                   : at.state === 'succeeded'

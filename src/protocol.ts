@@ -39,6 +39,8 @@ export type WfWorker = {
   taskId: string | null
   taskTitle: string | null
   state: string
+  /** Review verdict parsed once when the attempt's report was first read; null until known. */
+  verdict: 'approve' | 'request-changes' | null
 }
 
 export type WfRun = {

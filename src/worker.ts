@@ -224,14 +224,29 @@ export default function activate(orca: OrcaWorkerApi): void {
         status: String(field(row, 'status') ?? 'pending') === 'resolved' ? 'resolved' : 'pending'
       }
     })
-    const workers: WfWorker[] = asArray<Record<string, unknown>>(workerRows.workers ?? workerRows.dispatches).map(
-      (row) => ({
-        dispatchId: String(field(row, 'dispatchId', 'id') ?? ''),
+    const workersRaw = asArray<Record<string, unknown>>(workerRows.workers ?? workerRows.dispatches)
+    const workers: WfWorker[] = []
+    for (const row of workersRaw) {
+      const dispatchId = String(field(row, 'dispatchId', 'id') ?? '')
+      const stored = await storageGet<'approve' | 'request-changes'>(`verdict.${dispatchId}`)
+      workers.push({
+        dispatchId,
         taskId: String(field(row, 'taskId') ?? '') || null,
         taskTitle: tasks.find((t) => t.id === String(field(row, 'taskId') ?? ''))?.title ?? null,
-        state: String(field(row, 'state', 'status') ?? '?')
+        state: String(field(row, 'state', 'status') ?? '?'),
+        verdict: stored ?? null
       })
-    )
+    }
+    // Свежезавершённая попытка без вердикта: один фоновый проход — прочитать отчёт и
+    // сохранить (write-through в readWorkerReport), затем панель увидит его в снимке.
+    for (const w of workers) {
+      if (w.state === 'succeeded' && w.verdict === null && !verdictFilling.has(w.dispatchId)) {
+        verdictFilling.add(w.dispatchId)
+        void readWorkerReport(w.dispatchId)
+          .catch(() => undefined)
+          .finally(() => { verdictFilling.delete(w.dispatchId); wakeSoon() })
+      }
+    }
     const pilotState = await loadAuto(runId)
     const autoPilotOn = true // легаси-раны (driver=autopilot) ведутся всегда; новые — координатором
     const pilot = pilotState
@@ -620,7 +635,12 @@ export default function activate(orca: OrcaWorkerApi): void {
         .filter((m) => m.role === 'assistant')
         .flatMap((m) => (m.blocks ?? []).filter((b) => b.type === 'text' && typeof b.text === 'string').map((b) => b.text as string))
         .join('\n\n')
-      if (spoken.trim() !== '') return spoken.slice(-8000)
+      if (spoken.trim() !== '') {
+        // Вердикт парсится один раз и хранится: попытка носит свой итог в снимке,
+        // панель не перечитывает отчёт при каждом открытии дровера.
+        void orca.storage.set(`verdict.${dispatchId}`, parseVerdict(spoken)).catch(() => undefined)
+        return spoken.slice(-8000)
+      }
       return (parsed.result?.rows ?? []).map((r) => r.text ?? '').join('\n')
     } catch {
       return ''
@@ -764,6 +784,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       void refresh()
     }, 1_000)
   }
+  const verdictFilling = new Set<string>()
   const eventsSub = orca.events.on('agent.status.changed', wakeSoon)
   // The bridge is pinned to the project's own workspace, so focus changes do not touch it —
   // only the project cache goes stale.
