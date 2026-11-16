@@ -183,6 +183,11 @@ orca plugin dev load .                    # живая разработка; п�
 orca plugin shot local.workflow-view --panel workflow --out .orca/shots/x.png
 ```
 
+## Документация
+
+- [`docs/orca-notes.md`](docs/orca-notes.md) — опыт работы с Orca: host API, CLI, dev-цикл, все грабли.
+- [`docs/internals.md`](docs/internals.md) — полная логика плагина: мост, схема шаблона, фазы, координатор, панель, редактор.
+
 ## Как это устроено внутри
 
 - **Мост.** Плагинового API у оркестрации нет, но trusted-worker может запускать `orca`
