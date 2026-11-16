@@ -204,7 +204,7 @@
         objective: '', baseBranch: '', worktreeName: '',
         agent: 'claude', model: '', effort: '', worktree: '',
         startFor: null,           // task id with the start form open
-        openStep: null,           // task id expanded: gate, report, retry live inside the step
+        openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
         cfg: null, bridge: null, openAttempt: {}
@@ -469,7 +469,7 @@
             dismiss: () => { S.notice = null; render() },
             reload: () => location.reload(),
             'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
-            'toggle-step': () => { S.openStep = S.openStep === arg ? null : arg; render() },
+            'toggle-step': () => { if (S.openStep[arg]) delete S.openStep[arg]; else S.openStep[arg] = true; render() },
             'load-report': async () => {
               const task = (S.snap?.tasks || []).find((x) => x.id === arg)
               if (!task?.dispatchId) return
@@ -703,7 +703,7 @@
             ? ` <button class="btn ghost mini" data-act="toggle-step:${esc(t.id)}" title="Подробности шага">${S.openStep === t.id ? '▾' : '▸'}</button>`
             : ''
           let drawer = ''
-          if (S.openStep === t.id) {
+          if (S.openStep[t.id]) {
             const bits = []
             if (gate) {
               const opts = gate.options && gate.options.length > 0 ? gate.options : ['approve', 'request-changes']
