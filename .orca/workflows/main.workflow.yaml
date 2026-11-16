@@ -7,8 +7,8 @@ steps:
     worker: planner
     sub:
       - { id: code-research, title: 'Ресерч по коду', worker: code-researcher, phase: before_start }
-      - { id: web-search, title: 'Поиск необходимой информации', worker: web-searcher, phase: after, optional: true }
-      - { id: ba-review, title: 'Ревью бизнес дизайна', worker: ba-reviewer, phase: after, optional: true }
+      - { id: web-search, title: 'Поиск необходимой информации', worker: web-searcher, phase: after_end, optional: true }
+      - { id: ba-review, title: 'Ревью бизнес дизайна', worker: ba-reviewer, phase: after_end, optional: true }
   - id: plan-review,
     title: 'Ревью плана',
     worker: plan-reviewer,
@@ -28,8 +28,8 @@ steps:
     title: 'Тесты'
     sub:
       - { id: test-api, title: 'API/бэкенд', worker: api-tester, phase: before_start }
-      - { id: test-ui, title: 'Фронт/UI', worker: ui-tester, phase: after, optional: true }
-      - { id: design-review, title: 'Фронт/UI', worker: design-reviewer, phase: after, optional: true }
+      - { id: test-ui, title: 'Фронт/UI', worker: ui-tester, phase: after_end, optional: true }
+      - { id: design-review, title: 'Фронт/UI', worker: design-reviewer, phase: after_end, optional: true }
     on_reject: { goto: dev, max_rounds: 2 }
   - id: commit
     title: 'Коммит'
