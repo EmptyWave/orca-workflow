@@ -108,13 +108,14 @@
       @keyframes wf-spin { to { transform: rotate(360deg); } }
 
       .skipdot {
-        width: 13px; height: 13px; border-radius: 50%;
-        border: 2px solid var(--orca-muted); position: relative; box-sizing: border-box;
+        width: 14px; height: 14px; border-radius: 50%; position: relative; box-sizing: border-box;
+        border: 2px solid var(--orca-foreground); opacity: .8;
       }
       .skipdot::after {
-        content: ''; position: absolute; left: 2px; right: 2px; top: 50%;
-        border-top: 2px solid var(--orca-muted); transform: translateY(-1px);
+        content: ''; position: absolute; left: 50%; top: -3px; bottom: -3px; width: 2px;
+        background: var(--orca-foreground); transform: translateX(-50%) rotate(45deg);
       }
+      .step.skipped .body .title, .step.skipped .body .meta { opacity: .45; }
       /* ---- gates ---- */
       .gate-q { font-weight: 600; margin: 0 0 2px; }
       .gate-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
@@ -243,9 +244,10 @@
         return memo
       }
       // «пропущен»: optional не запущен, а флоу уже прошёл его позицию (закрытая глава рана).
-      const skippedIcon = (t, passedOrder) =>
+      const isSkipped = (t, passedOrder) =>
         t.optional && ['pending', 'ready'].includes(t.status) && passedOrder > (t.order ?? 0)
-          ? '<div class="skipdot" title="пропущен: optional-шаг не потребовался"></div>' : ''
+      const skippedIcon = (t, passedOrder) =>
+        isSkipped(t, passedOrder) ? '<div class="skipdot" title="пропущен: optional-шаг не потребовался"></div>' : ''
       const statusIcon = (status) =>
         status === 'succeeded' ? ICON.ok
         : status === 'failed' ? ICON.fail
@@ -619,11 +621,12 @@
         const steps = stepRows.join('')
 
         function stepRow(t, child) {
+          const skipped = isSkipped(t, maxPassedOrder)
           const e = eff.get(t.id) || { status: t.status }
           const gateHint = e.gate ? `гейт: «${esc(e.gate.question.slice(0, 60))}${e.gate.question.length > 60 ? '…' : ''}»` : ''
           const via = e.via ? `(через ${esc(e.via)})` : ''
           const meta = [
-            t.agent, STATUS_TEXT[e.status] ?? e.status, gateHint, via,
+            t.agent, skipped ? 'ПРОПУЩЕН' : STATUS_TEXT[e.status] ?? e.status, gateHint, via,
             (t.deps || []).length > 0 ? 'после: ' + t.deps.map((d) => short(d, 'task_')).join(', ') : null,
             t.dispatchId ? 'воркер ' + short(t.dispatchId, 'ctx_') : null
           ].filter(Boolean).join(' · ')
@@ -671,7 +674,7 @@
           const inBlock = child && String(t.parentTaskId || '').startsWith('step:')
             ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
             : ''
-          return `<div class="step${nest}">
+          return `<div class="step${skipped ? ' skipped' : ''}${nest}">
             <div class="st">${skippedIcon(t, maxPassedOrder) || statusIcon(e.status)}</div>
             <div class="ag">${agentIcon(t.agent)}</div>
             <div class="body">
