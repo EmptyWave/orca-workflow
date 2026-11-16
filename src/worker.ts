@@ -115,24 +115,33 @@ export default function activate(orca: OrcaWorkerApi): void {
     for (const row of rows) {
       const runId = String(field(row, 'runId', 'id') ?? '')
       let projectPath: string | null = null
+      let worktreePath: string | null = null
       try {
-        const meta = await storageGet<{ projectPath?: unknown }>(`runmeta.${runId}`)
+        const meta = await storageGet<{ projectPath?: unknown; worktreePath?: unknown }>(`runmeta.${runId}`)
+        if (meta && typeof meta === 'object') {
+          const wp = meta.worktreePath
+          if (typeof wp === 'string' && wp !== '') worktreePath = wp
+        }
         if (meta && typeof meta === 'object') {
           const path = meta.projectPath
           if (typeof path === 'string' && path !== '') projectPath = path
         }
         if (!projectPath) {
           // Runs the autopilot raised know their repo from their own state.
-          const auto = await storageGet<{ repoPath?: unknown }>(`auto.${runId}`)
+          const auto = await storageGet<{ repoPath?: unknown; worktreeName?: unknown; worktreePath?: unknown }>(`auto.${runId}`)
           if (auto && typeof auto === 'object') {
             const path = auto.repoPath
             if (typeof path === 'string' && path !== '') projectPath = path
+            if (typeof auto.worktreePath === 'string' && auto.worktreePath !== '') worktreePath = auto.worktreePath
+            else if (typeof auto.worktreeName === 'string' && typeof path === 'string' && path !== '') {
+              worktreePath = `${homedir()}/orca/workspaces/${path.split('/').filter(Boolean).pop()}/${auto.worktreeName}`
+            }
           }
         }
       } catch {
         // metadata is an extra; the run still lists without a project
       }
-      out.push({ runId, objective: String(field(row, 'objective') ?? ''), projectPath })
+      out.push({ runId, objective: String(field(row, 'objective') ?? ''), projectPath, worktreePath })
     }
     return out
   }
@@ -1313,6 +1322,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           void home
           const stored = await loadAuto(run.runId)
           if (stored) {
+            stored.worktreePath = runWorktreePath
             stored.coordinatorTerminal = launchedTerminal
             await saveAuto(run.runId, stored)
           }
@@ -1811,6 +1821,24 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
 
   orca.panels.handle('bridge.debug', async () => bridge.stats())
+
+  /** The focused workspace's path — the session the panel lives in; runs bind to it. */
+  orca.panels.handle('session.workspace', async () => {
+    everUsed = true
+    try {
+      const context = await Promise.race([
+        orca.host.call<{ branch: string; displayName: string } | null>('workspace.readContext', undefined),
+        sleep(3_000).then(() => null)
+      ])
+      if (!context) return { path: null }
+      const list = await bridge.json<{ result?: { workspaces?: Array<{ path: string; name: string; branch: string | null }> } }>('orca worktree list --json')
+      const ws = (list.result?.workspaces ?? []).find((w) => w.name === context.displayName)
+        ?? (list.result?.workspaces ?? []).find((w) => w.branch === context.branch)
+      return { path: ws?.path ?? null }
+    } catch {
+      return { path: null }
+    }
+  })
 
   /** Available models from Orca's agent catalog (per agent, as discovered on this machine):
    *  what a proxy actually resolves — the ids a worker card's `model:` may use. */

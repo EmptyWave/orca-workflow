@@ -209,7 +209,7 @@
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null, openAttempt: {}
+        cfg: null, bridge: null, openAttempt: {}, sessionPath: null
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
@@ -286,12 +286,16 @@
       let loadingSince = {}
       async function loadRuns() {
         try {
+          void req('session.workspace', undefined, 20000)
+            .then((r) => { S.sessionPath = r.path ?? null })
+            .catch(() => { S.sessionPath = null })
           const answer = await req('runs.list', undefined, 60000)
           S.runs = answer.runs
           delete loadingSince['запуски']
-          const ids = visibleRuns().visible.map((r) => r.runId)
-          if (S.runId && !ids.includes(S.runId)) S.runId = null
-          if (!S.runId && ids.length > 0) S.runId = ids[0]
+          // Ран привязан к сессии: показываем рана ЭТОГО воркспейса, без выбора из списка.
+          const sessionRun = (S.sessionPath ? answer.runs.find((r) => r.worktreePath === S.sessionPath) : null) ?? null
+          const wantedId = sessionRun?.runId ?? null
+          if (S.runId !== wantedId) { S.runId = wantedId; S.snap = null }
         } catch (e) { if (!S.runs || S.runs.length === 0) S.runs = []; setNotice('Запуски не читаются: ' + esc(e.message || e)) }
         render()
       }
@@ -578,13 +582,13 @@
       }
       function viewRuns() {
         if (!S.runs) return stuck('запуски')
-        const rows = visibleRuns().visible
-        if (rows.length === 0) return `<div class="empty">Нет запусков.<br/><button class="btn mini" data-act="go-templates" style="margin-top:8px">Поднять Run из шаблона</button></div>`
+        const sessionRun = S.runs.find((r) => r.worktreePath === S.sessionPath) ?? null
+        if (!sessionRun) return `<div class="empty">В этой сессии нет рана.<br/><span class="tiny muted">ран живёт в воркспейсе, созданном при «Поднять Run» — открой его, чтобы следить</span><br/><button class="btn mini" data-act="go-templates" style="margin-top:8px">Поднять Run из шаблона</button></div>`
         const snap = S.snap
-        const sel = `<div class="rowline"><select data-bind-select="runId" style="flex:1">` +
-          rows.map((r) => `<option value="${esc(r.runId)}"${r.runId === S.runId ? ' selected' : ''}>${esc(r.objective).slice(0, 60)}</option>`).join('') + `</select>` +
+        const sel = `<div class="rowline" style="align-items:center;gap:6px">` +
+          `<span class="chip" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective).slice(0, 48)}</span>` +
           `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
-          `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button></div>` + scopeHint()
+          `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button></div>`
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
         const runTitle = snap.run ? `<div class="tiny muted" style="margin:6px 0 8px">${esc(snap.run.objective)}</div>` : ''
@@ -889,9 +893,9 @@
         if (!S.tab) S.tab = 'runs'
         render()
         const autoTab = () => {
-          // The session's project has no Runs yet: land on Templates, ready to raise one.
-          if (S.tab !== 'runs' || !S.project) return false
-          if (visibleRuns().mine > 0) return false
+          // The session has no Run: land on Templates, ready to raise one.
+          if (S.tab !== 'runs') return false
+          if ((S.runs || []).some((r) => r.worktreePath === S.sessionPath)) return false
           S.tab = 'templates'
           S.templates = null
           void loadTemplates()

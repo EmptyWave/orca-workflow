@@ -732,6 +732,13 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       const all = options().filter((o, i, arr) => arr.indexOf(o) === i)
       const filtered = all.filter((o) => o.toLowerCase().includes(typed))
       list.innerHTML = ''
+      if (all.length === 0) {
+        const empty = document.createElement('div')
+        empty.className = 'opt'
+        empty.style.cssText = 'opacity:.6;cursor:default'
+        empty.textContent = '— нет вариантов —'
+        list.append(empty)
+      }
       all.forEach((opt) => {
         if (!filtered.includes(opt)) return
         const row = document.createElement('div')

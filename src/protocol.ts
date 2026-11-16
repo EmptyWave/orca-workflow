@@ -48,6 +48,8 @@ export type WfRun = {
   objective: string
   /** The repo this Run belongs to, when known (set at instantiate time, or bound by hand). */
   projectPath: string | null
+  /** The run's own worktree — the session the run is bound to; null for legacy runs. */
+  worktreePath: string | null
 }
 
 export type WfSnapshot = {

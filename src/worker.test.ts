@@ -242,7 +242,7 @@ async function withWorker(
 test('runs.list и state.get читают оркестрацию через мост', () =>
   withWorker(async (worker) => {
     const runs = await worker.request('runs.list')
-    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель', projectPath: null }])
+    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель', projectPath: null, worktreePath: null }])
     assert.equal(runs.error, null)
 
     const state = await worker.request('state.get', { runId: 'run_1' })
