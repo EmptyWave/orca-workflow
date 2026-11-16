@@ -646,6 +646,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       .join('\n')
     return [
       `Ты координатор рана ${runId}. Задача от человека: «${objective}».`,
+      'Бриф сохранён в .orca/coordinator-brief.md ворктри рана — потерял контекст, перечитай его.',
       `Репозиторий: ${projectPath ?? 'см. воркспейс'}. Ворктри воркеров: name:${worktreeName}.`,
       '',
       'Флоу (веди строго по порядку):',
@@ -1206,6 +1207,20 @@ export default function activate(orca: OrcaWorkerApi): void {
           const home = runWorktree ?? list.workspaces.find((w) => w.path === input.projectPath) ?? list.workspaces[0]
           const coordinator = specialists.find((sp) => sp.slug === 'coordinator')
           const brief = coordinatorBrief(run.runId, template, input.objective, input.worktreeName, input.projectPath)
+          // The brief lives as a file too: any session in the run's worktree can pick up the
+          // coordinator role (run-use + read the brief) — the role is portable, not nailed
+          // to the one session the plugin launched.
+          try {
+            const wts = await bridge.json<{ result?: { worktrees?: Array<{ name?: string; path?: string }> } }>('orca worktree list --json')
+            const wtPath = (wts.result?.worktrees ?? []).find((w) => w.name === input.worktreeName)?.path
+            if (wtPath) {
+              await bridge.run(
+                `mkdir -p ${shellPath(`${wtPath}/.orca`)} && echo ${shellQuote(toBase64(brief))} | base64 -d > ${shellPath(`${wtPath}/.orca/coordinator-brief.md`)}`
+              )
+            }
+          } catch {
+            // файл брифа — удобство, ран живёт и без него
+          }
           const launched = await orca.host.call('agent.launch', {
             workspaceId: home.id,
             agent: coordinator?.agent ?? input.agent,
