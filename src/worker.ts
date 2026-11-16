@@ -1620,6 +1620,47 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { ok: true as const }
   })
 
+  /** The editor knows the template's worker slugs, not its project (focus lies): pick the
+   *  project whose cards actually cover those slugs — focused project first, then the
+   *  last-run project, then every repo with .orca/workers. */
+  orca.panels.handle('workers.listSmart', async ({ slugs }) => {
+    everUsed = true
+    const wanted: string[] = Array.isArray(slugs) ? slugs.map(String).filter((x) => x !== '') : []
+    const candidates: string[] = []
+    let detectedPath: string | null = null
+    try {
+      const meta = await orca.storage.get('runmeta.' + String(await orca.storage.get('html.runId') ?? ''))
+      if (meta && typeof meta === 'object') {
+        const mp = (meta as { projectPath?: unknown }).projectPath
+        if (typeof mp === 'string' && mp !== '') detectedPath = mp
+      }
+    } catch {
+      detectedPath = null
+    }
+    if (detectedPath) candidates.push(detectedPath)
+    try {
+      const repos = await bridge.json<{ result?: { repos?: Array<{ path?: string }> } }>('orca repo list --json')
+      for (const r of repos.result?.repos ?? []) if (r.path && !candidates.includes(r.path)) candidates.push(r.path)
+    } catch {
+      // репозитории недоступны — обойдёмся фокусным
+    }
+    let best: { path: string; workers: WfSpecialist[]; score: number } | null = null
+    for (const path of candidates) {
+      let workers: WfSpecialist[]
+      try {
+        workers = await loadSpecialists(path, true)
+      } catch {
+        continue
+      }
+      if (workers.length === 0) continue
+      const score = wanted.length === 0 ? 0 : wanted.filter((slug) => workers.some((w) => w.slug === slug)).length
+      if (!best || score > best.score) best = { path, workers, score }
+      if (best.score === wanted.length) break
+    }
+    if (!best) return { workers: [], projectPath: null }
+    return { workers: best.workers, projectPath: best.path }
+  })
+
   orca.panels.handle('workers.list', async ({ projectPath }) => {
     everUsed = true
     return { workers: await loadSpecialists(projectPath, true) }

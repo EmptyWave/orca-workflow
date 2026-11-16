@@ -139,14 +139,12 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     } catch {
       projectPath = null
     }
-    if (projectPath) {
-      try {
-        const answer = await request<{ workers: Sp[] }>('workers.list', { projectPath }, 60000)
-        specialists = answer.workers ?? []
-      } catch {
-        specialists = []
-      }
-    } else {
+    try {
+      const slugs = graph.steps.flatMap((st) => [st.specialist ?? '', ...(st.sub ?? []).map((c) => c.specialist ?? '')]).filter(Boolean)
+      const answer = await request<{ workers: Sp[]; projectPath: string | null }>('workers.listSmart', { slugs }, 60000)
+      specialists = answer.workers ?? []
+      if (answer.projectPath) projectPath = answer.projectPath
+    } catch {
       specialists = []
     }
     renderInspector()
@@ -558,9 +556,12 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       sub.setAttribute('class', 'sub')
       sub.setAttribute('x', '10')
       sub.setAttribute('y', '38')
-      sub.textContent = step.specialist ? `${step.specialist} (воркер)` : step.agent ?? ''
-        ? `${step.agent}${step.model ? ' · ' + step.model : ''}${step.specFile ? ' · ' + step.specFile : ''}`
-        : 'барьер / гейт'
+      const card = step.specialist ? specialists.find((sp) => sp.slug === step.specialist) : undefined
+      sub.textContent = step.specialist
+        ? (card ? `${step.specialist} · ${card.agent}${card.model ? ' · ' + card.model : ''}` : `${step.specialist} · нет карточки`)
+        : step.agent
+          ? `${step.agent}${step.model ? ' · ' + step.model : ''}${step.specFile ? ' · ' + step.specFile : ''}`
+          : 'барьер / гейт'
       const sub2 = document.createElementNS('http://www.w3.org/2000/svg', 'text')
       sub2.setAttribute('class', 'sub')
       sub2.setAttribute('x', '10')
@@ -639,7 +640,10 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         t2.setAttribute('class', 'sub')
         t2.setAttribute('x', '10')
         t2.setAttribute('y', '34')
-        t2.textContent = child.specialist ?? child.agent ?? '?'
+        const childCard = child.specialist ? specialists.find((sp) => sp.slug === child.specialist) : undefined
+      t2.textContent = child.specialist
+        ? (childCard ? `${child.specialist} · ${childCard.agent}${childCard.model ? ' · ' + childCard.model : ''}` : `${child.specialist} · нет карточки`)
+        : child.agent ?? '?'
         if (child.optional) {
           const t3 = document.createElementNS('http://www.w3.org/2000/svg', 'text')
           t3.setAttribute('class', 'sub')
@@ -882,6 +886,11 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       if (step.specialist) step.agent = null // либо specialist, либо agent
       push()
     }))
+    const sc = step.specialist ? specialists.find((sp) => sp.slug === step.specialist) : undefined
+    const scHint = document.createElement('div')
+    scHint.style.cssText = 'font-size:10.5px;color:var(--orca-muted-foreground);margin:-4px 0 4px'
+    scHint.textContent = sc ? `карточка: ${sc.agent}${sc.model ? ' · ' + sc.model : ''}${sc.effort ? ' · effort ' + sc.effort : ''}` : (step.specialist ? 'карточка воркера не найдена' : '')
+    inspector.append(scHint)
     inspector.append(field('Агент (пусто = барьер, если нет воркера)', step.agent ?? '', (v) => {
       step.agent = v.trim() === '' ? null : v.trim()
       if (step.agent) step.specialist = null
