@@ -631,7 +631,9 @@
             (t.deps || []).length > 0 ? 'после: ' + t.deps.map((d) => short(d, 'task_')).join(', ') : null,
             t.dispatchId ? 'воркер ' + short(t.dispatchId, 'ctx_') : null
           ].filter(Boolean).join(' · ')
-          const startForm = e.status === 'ready' && S.startFor === t.id ? `
+          const coordDriven = S.snap?.pilot?.driver === 'coordinator'
+          const startForm = e.status === 'ready' && coordDriven ? `<div class="tiny muted" style="margin:6px 0 2px">ран ведёт координатор — старт шага в его сессии</div>`
+            : e.status === 'ready' && S.startFor === t.id ? `
             <div class="start">
               <div class="grid2">
                 <label class="f"><span>агент</span><input data-bind="agent" value="${esc(S.agent)}"/></label>

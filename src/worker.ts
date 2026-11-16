@@ -601,14 +601,26 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
   }
 
-  /** Bounded worker report text (transcript source). */
+  /** Bounded worker report text: the assistant's spoken text from the dispatch transcript
+   *  (worker-read answers {transcript:{messages:[{role,blocks:[{type,text}]}]}}); the old
+   *  flat rows[] shape stays as a fallback. */
   async function readWorkerReport(dispatchId: string): Promise<string> {
     try {
       const out = await bridge.run(
         `orca orchestration worker-read --dispatch ${shellQuote(dispatchId)} --limit 200 --json`,
         15_000
       )
-      const parsed = JSON.parse(extractJson(out)) as { result?: { rows?: Array<{ text?: string }> } }
+      const parsed = JSON.parse(extractJson(out)) as {
+        result?: {
+          rows?: Array<{ text?: string }>
+          transcript?: { messages?: Array<{ role?: string; blocks?: Array<{ type?: string; text?: string }> }> }
+        }
+      }
+      const spoken = (parsed.result?.transcript?.messages ?? [])
+        .filter((m) => m.role === 'assistant')
+        .flatMap((m) => (m.blocks ?? []).filter((b) => b.type === 'text' && typeof b.text === 'string').map((b) => b.text as string))
+        .join('\n\n')
+      if (spoken.trim() !== '') return spoken.slice(-8000)
       return (parsed.result?.rows ?? []).map((r) => r.text ?? '').join('\n')
     } catch {
       return ''
