@@ -355,7 +355,7 @@
         if (!tpl) return
         setBusy('поднятие ' + tpl.title)
         try {
-          if (S.objective.trim() === '') throw new Error('заполни цель (objective)')
+          // цель опциональна: пустая — координатор сам спросит в чате, что делаем
           if (S.worktreeName.trim() === '') throw new Error('заполни имя ворктри')
           const answer = await req('template.instantiate', {
             source: S.tplFellBack ? 'library' : S.tplSource,
@@ -727,7 +727,7 @@
             <div class="tiny muted" style="margin-bottom:6px">${esc(tpl.id)} · ${esc(tpl.file)}</div>
             ${preview}</div>` +
           `<div class="card"><h2>Поднять Run</h2>
-            <label class="f"><span>цель (objective)</span><input data-bind="objective" value="${esc(S.objective)}" placeholder="что делаем — одна фраза"/></label>
+            <label class="f"><span>цель (опц.) — затравка; пусто = координатор спросит в чате</span><textarea data-bind="objective" rows="3" style="width:100%;box-sizing:border-box" placeholder="что делаем — одной фразой или подробно">${esc(S.objective)}</textarea></label>
             <div class="grid2">
               <label class="f"><span>base branch (опц.)</span><input data-bind="baseBranch" value="${esc(S.baseBranch)}" placeholder="master"/></label>
               <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>

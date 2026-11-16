@@ -644,8 +644,14 @@ export default function activate(orca: OrcaWorkerApi): void {
         return `${i + 1}. ${step.id} (${who}${extra.length > 0 ? '; ' + extra.join('; ') : ''})` + (subs.length > 0 ? '\n' + subs.join('\n') : '')
       })
       .join('\n')
+    const trimmed = objective.trim()
+    const kickoff = trimmed === ''
+      ? 'Задача человеком ещё НЕ описана. ТВОЙ ПЕРВЫЙ ХОД — интервью в этом чате: спроси, что будем делать (что/зачем/для кого), границы (что НЕ делаем), критерии готовности. Собери полное описание задачи и только потом веди флоу.'
+      : `Задача от человека (затравка из формы): «${trimmed}». Если она неполная — уточни в этом чате; человек согласен — веди флоу.`
     return [
-      `Ты координатор рана ${runId}. Задача от человека: «${objective}».`,
+      `Ты координатор рана ${runId}.`,
+      kickoff,
+      'ПОЛНОЕ описание задачи (из затравки + интервью) пересылай планировщику при старте: сразу после worker-start отправь его в его диспетчер — orca orchestration send --to dispatch:<dispatch_id> --body <полное описание> --json. Воркеры получают затравку в своей задаче; полный текст идёт от тебя.',
       'Бриф сохранён в .orca/coordinator-brief.md ворктри рана — потерял контекст, перечитай его.',
       `Репозиторий: ${projectPath ?? 'см. воркспейс'}. Ворктри воркеров: name:${worktreeName}.`,
       '',
@@ -1046,14 +1052,15 @@ export default function activate(orca: OrcaWorkerApi): void {
     await saveJob(job)
     void (async () => {
       try {
+        const objectiveSeed = input.objective.trim()
         const vars: Record<string, string> = {
-          objective: input.objective,
+          objective: objectiveSeed === '' ? 'Полную постановку задачи передаст координатор (интервью с человеком).' : objectiveSeed,
           repo: input.projectPath ?? '',
           base_branch: input.baseBranch ?? '',
           worktree: input.worktreeName
         }
         const run = await cli<{ runId: string }>(
-          `orca orchestration run-create --objective ${shellQuote(`${template.title} — ${input.objective}`)} --json`
+          `orca orchestration run-create --objective ${shellQuote(objectiveSeed === '' ? template.title : `${template.title} — ${objectiveSeed.split('\n')[0].slice(0, 80)}`)} --json`
         )
         // Which project this Run belongs to, so the panel can scope its Runs list.
         await orca.storage.set(`runmeta.${run.runId}`, {
@@ -1206,7 +1213,7 @@ export default function activate(orca: OrcaWorkerApi): void {
             ?? list.workspaces.find((w) => w.path.endsWith(`/${input.worktreeName}`))
           const home = runWorktree ?? list.workspaces.find((w) => w.path === input.projectPath) ?? list.workspaces[0]
           const coordinator = specialists.find((sp) => sp.slug === 'coordinator')
-          const brief = coordinatorBrief(run.runId, template, input.objective, input.worktreeName, input.projectPath)
+          const brief = coordinatorBrief(run.runId, template, objectiveSeed, input.worktreeName, input.projectPath)
           // The brief lives as a file too: any session in the run's worktree can pick up the
           // coordinator role (run-use + read the brief) — the role is portable, not nailed
           // to the one session the plugin launched.
