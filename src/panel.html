@@ -470,7 +470,7 @@
               catch (e) { S.reports[arg] = 'ошибка: ' + (e.message || e) }
               render()
             },
-            'open-attempt': (arg) => {
+            'open-attempt': () => {
               const [taskId, dispatchId] = String(arg).split('|')
               S.openAttempt[taskId] = dispatchId
               render()
