@@ -81,6 +81,15 @@
       .step .body { flex: 1; min-width: 0; }
       .step .title { font-weight: 600; overflow-wrap: anywhere; }
       .step .meta { font-size: 11px; color: var(--orca-muted-foreground); margin-top: 1px; overflow-wrap: anywhere; }
+      /* Трассер флоу: сегмент над каждым шагом основного флоу, цвет — состояние шага. */
+      .step.flow, .blockhead.flow { position: relative; }
+      .step.flow::before, .blockhead.flow::before {
+        content: ''; position: absolute; left: 11px; top: -4px; height: 15px;
+        border-left: 2px solid var(--conn, rgba(139, 148, 158, .55)); border-radius: 1px;
+      }
+      .step.flow.conn-ok, .blockhead.flow.conn-ok { --conn: #3fb950; }
+      .step.flow.conn-run, .blockhead.flow.conn-run { --conn: #d29922; }
+      .step.flow.conn-idle, .blockhead.flow.conn-idle { --conn: rgba(139, 148, 158, .55); }
       .step.childrow { padding-left: 34px; position: relative; }
       .step.childrow::before {
         content: ''; position: absolute; left: 20px; top: 0; bottom: 0;
@@ -588,6 +597,7 @@
         }
         const emitted = new Set()
         const stepRows = []
+        let flowIndex = 0
         // самый дальний пройденный порядок: незапущенные optional позади него — пропущены
         const maxPassedOrder = orderedTasks.reduce((m, t) => ((eff.get(t.id) || { status: t.status }).status === 'succeeded' ? Math.max(m, t.order ?? 0) : m), -1)
         const aggregate = (kids) => {
@@ -606,7 +616,8 @@
             for (const k of kids) emitted.add(k.id)
             const agg = aggregate(kids)
             const doneKids = kids.filter((k) => (eff.get(k.id) || { status: k.status }).status === 'succeeded').length
-            stepRows.push(`<div class="blockhead">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
+            stepRows.push(`<div class="blockhead${flowIndex > 0 ? ` flow conn-${agg === 'succeeded' ? 'ok' : agg === 'dispatched' ? 'run' : 'idle'}` : ' flow conn-idle'}">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
+            flowIndex += 1
             for (const k of kids) stepRows.push(stepRow(k, true))
             continue
           }
@@ -622,6 +633,7 @@
             ? (kidsWorking ? 'dispatched' : kidsDone ? 'ready' : own.status)
             : own.status
           stepRows.push(stepRow({ ...t, status: groupStatus }, false))
+          flowIndex += 1
           for (const k of kids) {
             emitted.add(k.id)
             stepRows.push(stepRow(k, true))
@@ -705,7 +717,7 @@
             }
             drawer = `<div class="step-drawer">${bits.join('')}</div>`
           }
-          const nest = child ? ' childrow' : ''
+          const nest = child ? ' childrow' : (flowIndex > 0 ? ` flow conn-${e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}` : (flowIndex === 0 && !child ? ' flow conn-idle' : ''))
           const branch = child ? `<span style="color:var(--orca-muted-foreground)">↳ </span>` : ''
           const inBlock = child && String(t.parentTaskId || '').startsWith('step:')
             ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
