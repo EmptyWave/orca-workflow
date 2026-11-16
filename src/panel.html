@@ -81,28 +81,19 @@
       .step .body { flex: 1; min-width: 0; }
       .step .title { font-weight: 600; overflow-wrap: anywhere; }
       .step .meta { font-size: 11px; color: var(--orca-muted-foreground); margin-top: 1px; overflow-wrap: anywhere; }
-      /* Трассер флоу: линия растёт ИЗ иконки шага вниз (не от низа высокой строки);
-         цвет — статус этого шага. У blockhead строка короткая — там от низа. */
-      .step.flow, .blockhead.flow { position: relative; }
-      .step.flow .st::after {
-        content: ''; position: absolute; left: 50%; top: 100%; height: 26px;
-        border-left: 2px solid rgba(139, 148, 158, .55);
-        transform: translateX(-50%);
-      }
-      .blockhead.flow::after {
-        content: ''; position: absolute; left: 11px; bottom: -7px; height: 13px;
-        border-left: 2px solid rgba(139, 148, 158, .55);
-      }
-      .step.flow.conn-ok .st::after, .blockhead.flow.conn-ok::after { border-left-color: #3fb950; }
-      .step.flow.conn-run .st::after, .blockhead.flow.conn-run::after { border-left-color: #d29922; }
-      .step .st { background: var(--orca-background); z-index: 1; position: relative; }
-      .step.childrow { padding-left: 34px; position: relative; }
-      .step.childrow::before {
-        content: ''; position: absolute; left: 12px; top: -5px; bottom: -2px;
+      /* Единая пунктирная нить флоу через весь шаг (и подшаги) — цвет по статусу строки,
+         иконки прерывают нить своим фоном. Полоска-в-начале убрана: одна линия, без стыков. */
+      .step.flow, .blockhead.flow, .step.childrow { position: relative; }
+      .step.flow::before, .blockhead.flow::before, .step.childrow::before {
+        content: ''; position: absolute; left: 12px; top: -5px; bottom: -3px;
         border-left: 2px dashed rgba(139, 148, 158, .45);
       }
-      .step.childrow.conn-ok::before { border-left-color: #3fb950; }
-      .step.childrow.conn-run::before { border-left-color: #d29922; }
+      .step.flow.conn-first::before, .step.childrow.conn-first::before { top: 20px; }
+      .step.flow.conn-ok::before, .blockhead.flow.conn-ok::before, .step.childrow.conn-ok::before { border-left-color: #3fb950; }
+      .step.flow.conn-run::before, .blockhead.flow.conn-run::before, .step.childrow.conn-run::before { border-left-color: #d29922; }
+      .step .st { background: var(--orca-background); z-index: 1; position: relative; }
+      .step.childrow { padding-left: 34px; position: relative; }
+
       .step.childrow .title { font-weight: 500; }
       .blockhead {
         display: flex; gap: 8px; align-items: center; padding: 5px 6px 3px; margin-top: 4px;
@@ -746,9 +737,10 @@
             }
             drawer = `<div class="step-drawer">${bits.join('')}</div>`
           }
+          const conn = `conn-${e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}`
           const nest = child
-            ? ` childrow conn-${e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}`
-            : (flowIndex < totalFlow - 1 ? ` flow conn-${e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}` : '')
+            ? ` childrow ${conn}`
+            : (flowIndex < totalFlow - 1 ? ` flow ${conn}${flowIndex === 0 ? ' conn-first' : ''}` : '')
           const branch = child ? `<span style="color:var(--orca-muted-foreground)">↳ </span>` : ''
           const inBlock = child && String(t.parentTaskId || '').startsWith('step:')
             ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
