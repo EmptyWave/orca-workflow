@@ -1510,6 +1510,24 @@ export default function activate(orca: OrcaWorkerApi): void {
       )
     }
     // editor.open takes a path relative to the workspace root.
+    // Проба: открыть таб в АКТИВНОМ окне — workspaceId фокусного воркспейса + абсолютный путь.
+    // Если рантайм вешает таб на окно воркспейса из параметра, редактор откроется там, где
+    // человек нажал карандаш; иначе фолбэк — окно воркспейса файла (со всплытием вперёд).
+    let activeId: string | null = null
+    try {
+      const context = await orca.host.call<{ branch: string; displayName: string } | null>('workspace.readContext', undefined)
+      if (context) {
+        const list = await orca.host.call<{ workspaces: Array<{ id: string; name: string; branch: string | null }> }>('workspace.list', undefined)
+        activeId = (list.workspaces.find((w) => w.name === context.displayName)
+          ?? (context.branch ? list.workspaces.find((w) => w.branch === context.branch) : undefined))?.id ?? null
+      }
+    } catch {
+      activeId = null
+    }
+    if (activeId && activeId !== home.id) {
+      const direct = await orca.host.call('editor.open', { workspaceId: activeId, path: filePath }).catch(() => null)
+      if (direct) return { opened: true as const }
+    }
     await orca.host.call('workspace.open', { workspaceId: home.id }).catch(() => undefined)
     await orca.host.call('editor.open', { workspaceId: home.id, path: filePath.slice(projectPath.length + 1) })
     return { opened: true as const }
