@@ -194,23 +194,28 @@ export function autoLayout(graph: WfGraph): Record<string, { x: number; y: numbe
     layers.set(d, layer)
   }
   const layout: Record<string, { x: number; y: number }> = {}
-  for (const [d, layerIds] of [...layers.entries()].sort((a, b) => a[0] - b[0])) {
-    layerIds.forEach((id, i) => {
-      layout[id] = { x: 40 + i * (NODE_W + 50), y: 40 + d * (NODE_H + 90) }
-    })
+  // Слот шага выше, когда его подшаги — стопка справа: высота слоя = самый высокий слот,
+  // иначе подшаги наезжают на следующий уровень (шаг слоя NODE_H+90 против стопки NODE_H+20).
+  const SUB_GAP_Y = 20
+  const slotHeight = (stepId: string): number => {
+    const kids = byId.get(stepId)?.sub?.length ?? 0
+    return Math.max(NODE_H, kids * (NODE_H + SUB_GAP_Y))
   }
-  // Sub-steps are real blocks to the RIGHT of their parent: the chain keeps its vertical
-  // order, nested checks hang off sideways with a right-pointing arrow.
-  for (const step of graph.steps) {
-    const base = layout[step.id]
-    if (!base) continue
-    const kids = step.sub
-    kids.forEach((child, i) => {
-      layout[child.id] = {
-        x: base.x + NODE_W + SUB_GAP_X,
-        y: base.y + (i - (kids.length - 1) / 2) * (NODE_H + 20)
-      }
+  let y = 40
+  for (const [, layerIds] of [...layers.entries()].sort((a, b) => a[0] - b[0])) {
+    const layerH = Math.max(...layerIds.map(slotHeight))
+    layerIds.forEach((id, i) => {
+      layout[id] = { x: 40 + i * (NODE_W + 50), y: Math.round(y + (layerH - NODE_H) / 2) }
     })
+    // Sub-steps are real blocks to the RIGHT of their parent: a top-down stack beside
+    // the chain — the layer reserved height for the tallest stack, no overlaps.
+    for (const id of layerIds) {
+      const base = layout[id]
+      for (const [i, child] of (byId.get(id)?.sub ?? []).entries()) {
+        layout[child.id] = { x: base.x + NODE_W + SUB_GAP_X, y: y + i * (NODE_H + SUB_GAP_Y) }
+      }
+    }
+    y += layerH + 70
   }
   return layout
 }
