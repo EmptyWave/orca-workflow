@@ -81,20 +81,28 @@
       .step .body { flex: 1; min-width: 0; }
       .step .title { font-weight: 600; overflow-wrap: anywhere; }
       .step .meta { font-size: 11px; color: var(--orca-muted-foreground); margin-top: 1px; overflow-wrap: anywhere; }
-      /* Единая пунктирная нить флоу: начинается на 10px ниже иконки строки (top: 32px — до иконки
-         не дотягивает, вверх не торчит), заканчивается чуть ниже строки, перекрывая зазор
-         до иконки следующей (пробел читается как пауза пунктира). Никаких масок-фонов. */
+      /* Нить флоу — деревом: вертикальный пунктир непрерывен через все строки шага
+         (5px ниже иконки главной строки, дальше без разрывов), подшаги сидят на нити
+         и подключены коротким горизонтальным штрихом. z-index выше ховера —
+         подсветка строки нить не перекрывает. Масок-фонов нет: любая тема. */
       .step.flow, .blockhead.flow, .step.childrow { position: relative; }
       .step.flow::before, .step.childrow::before {
-        content: ''; position: absolute; left: 12px; top: 32px; bottom: -10px;
-        border-left: 2px dashed rgba(139, 148, 158, .45);
+        content: ''; position: absolute; left: 12px; top: -3px; bottom: -3px;
+        border-left: 2px dashed rgba(139, 148, 158, .45); z-index: 1;
       }
+      .step.flow::before { top: 27px; }
       .blockhead.flow::before {
-        content: ''; position: absolute; left: 12px; top: 20px; bottom: -10px;
-        border-left: 2px dashed rgba(139, 148, 158, .45);
+        content: ''; position: absolute; left: 12px; top: 16px; bottom: -3px;
+        border-left: 2px dashed rgba(139, 148, 158, .45); z-index: 1;
       }
-      .step.flow.conn-ok::before, .blockhead.flow.conn-ok::before, .step.childrow.conn-ok::before { border-left-color: #3fb950; }
-      .step.flow.conn-run::before, .blockhead.flow.conn-run::before, .step.childrow.conn-run::before { border-left-color: #d29922; }
+      .step.childrow::after {
+        content: ''; position: absolute; left: 13px; top: 12px; width: 18px;
+        border-top: 2px dashed rgba(139, 148, 158, .45); z-index: 1;
+      }
+      .step.flow.conn-ok::before, .blockhead.flow.conn-ok::before, .step.childrow.conn-ok::before,
+      .step.childrow.conn-ok::after { border-left-color: #3fb950; border-top-color: #3fb950; }
+      .step.flow.conn-run::before, .blockhead.flow.conn-run::before, .step.childrow.conn-run::before,
+      .step.childrow.conn-run::after { border-left-color: #d29922; border-top-color: #d29922; }
       .step.childrow { padding-left: 34px; position: relative; }
 
       .step.childrow .title { font-weight: 500; }
