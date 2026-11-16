@@ -126,16 +126,14 @@ export default function activate(orca: OrcaWorkerApi): void {
           const path = meta.projectPath
           if (typeof path === 'string' && path !== '') projectPath = path
         }
-        if (!projectPath) {
-          // Runs the autopilot raised know their repo from their own state.
-          const auto = await storageGet<{ repoPath?: unknown; worktreeName?: unknown; worktreePath?: unknown }>(`auto.${runId}`)
-          if (auto && typeof auto === 'object') {
-            const path = auto.repoPath
-            if (typeof path === 'string' && path !== '') projectPath = path
-            if (typeof auto.worktreePath === 'string' && auto.worktreePath !== '') worktreePath = auto.worktreePath
-            else if (typeof auto.worktreeName === 'string' && typeof path === 'string' && path !== '') {
-              worktreePath = `${homedir()}/orca/workspaces/${path.split('/').filter(Boolean).pop()}/${auto.worktreeName}`
-            }
+        // AutoState knows the run's own worktree even when runmeta already carried the project.
+        const auto = await storageGet<{ repoPath?: unknown; worktreeName?: unknown; worktreePath?: unknown }>(`auto.${runId}`)
+        if (auto && typeof auto === 'object') {
+          const path = auto.repoPath
+          if (!projectPath && typeof path === 'string' && path !== '') projectPath = path
+          if (typeof auto.worktreePath === 'string' && auto.worktreePath !== '') worktreePath = auto.worktreePath
+          else if (worktreePath === null && typeof auto.worktreeName === 'string' && typeof path === 'string' && path !== '') {
+            worktreePath = `${homedir()}/orca/workspaces/${path.split('/').filter(Boolean).pop()}/${auto.worktreeName}`
           }
         }
       } catch {
