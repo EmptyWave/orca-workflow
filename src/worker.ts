@@ -1702,7 +1702,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (!id.startsWith('run_')) throw new BridgeError('это не id рана', 'cli_error')
     const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
     const live = await bridge.run(
-      `sqlite3 ${shellQuote(db)} "SELECT COUNT(*) FROM worker_dispatches wd JOIN dispatch_contexts dc ON wd.dispatch_id = dc.dispatch_id WHERE dc.run_id = '${id.replace(/'/g, '')}' AND wd.state IN ('ready','running');"`
+      `sqlite3 ${shellQuote(db)} "SELECT COUNT(*) FROM worker_dispatches wd JOIN dispatch_contexts dc ON wd.dispatch_id = dc.id WHERE dc.run_id = '${id.replace(/'/g, '')}' AND wd.state IN ('starting','ready');"`
     )
     if (Number(live.trim()) > 0) throw new BridgeError('у рана есть работающие воркеры — сначала останови их', 'cli_error')
     await bridge.run(
