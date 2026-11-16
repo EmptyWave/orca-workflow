@@ -626,7 +626,8 @@
           const gateHint = e.gate ? `гейт: «${esc(e.gate.question.slice(0, 60))}${e.gate.question.length > 60 ? '…' : ''}»` : ''
           const via = e.via ? `(через ${esc(e.via)})` : ''
           const meta = [
-            t.agent, skipped ? 'ПРОПУЩЕН' : STATUS_TEXT[e.status] ?? e.status, gateHint, via,
+            t.agent, skipped ? 'ПРОПУЩЕН' : STATUS_TEXT[e.status] ?? e.status,
+            t.order == null ? 'вне шаблона (создана координатором)' : null, gateHint, via,
             (t.deps || []).length > 0 ? 'после: ' + t.deps.map((d) => short(d, 'task_')).join(', ') : null,
             t.dispatchId ? 'воркер ' + short(t.dispatchId, 'ctx_') : null
           ].filter(Boolean).join(' · ')

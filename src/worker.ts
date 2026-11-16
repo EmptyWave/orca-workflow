@@ -674,7 +674,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       'Действия:',
       `1. Немедленно: orca orchestration run-use --id ${runId} --json`,
       `2. orca orchestration task-list --run ${runId} --json — стартуй готовые шаги (worker-start --task <id> --worktree name:${worktreeName} --agent <agent> --json). Подшаг (строка «•») принадлежит своему шагу — его фаза отсчитывается от ЭТОГО шага, не от соседних. Получил task_not_startable — значит рано: зависимости не закрыты, вернись позже. Не перетасовывай порядок сам.`,
-      '3. Отчёты завершившихся — worker-read; строка VERDICT: approve | request-changes в отчёте ревью управляет циклами доработки.',
+      '3. Отчёты завершившихся — worker-read; строка VERDICT: approve | request-changes в отчёте ревью управляет циклами доработки. Цикл доработки = ПЕРЕЗАПУСК целевого шага: task-update --id <task> --status pending, затем worker-start заново (замечания ревью передай в --prompt-файле или сообщением в диспетчер). СВОИ задачи (task-create) НЕ создавай — раунды считает движок, всё нужное уже в задачах шаблона.',
       '4. Вопросы воркеров — orchestration check; отвечай reply, решай сам всё, что решаемо.',
       '4a. optional-подшаги — условные: если тип задачи явно не требует (например, нет бэкенда — не запускай бэкенд-проверку), пропускай их и не жди.',
       'Факты и контекст (главная твоя работа между шагами):',
