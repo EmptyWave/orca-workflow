@@ -3,7 +3,7 @@
 // bar item), polls a light refresh, and pushes 'state.changed' to open panels.
 import { Bridge, BridgeError, expandHome, shellPath, sleep } from './bridge'
 import type { WfGate, WfJob, WfRun, WfSnapshot, WfSpecialist, WfStep, WfTask, WfTemplate, WfWorker } from './protocol'
-import { applyPlaceholders, materialize, parseTemplate, topoUnits } from './workflow'
+import { applyPlaceholders, materialize, parseTemplate, rechecksDue, topoUnits } from './workflow'
 import { parseYaml, type YamlValue } from './yaml'
 import { homedir } from 'node:os'
 import type { OrcaWorkerApi } from 'orca/worker'
@@ -485,6 +485,25 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
       state.verdicts[task.id] = verdict
       if (verdict === 'request-changes') {
+        const devTask = byId.get(review.devTaskId)
+        if (devTask && devTask.status !== 'succeeded') {
+          // Another rejecting check already sent the work back: fold into the same round —
+          // forward the remarks to the live dev dispatch; the re-check pass re-runs this
+          // check after the rework instead of burning a second round on it.
+          const cfg = state.tasks[task.id]
+          const devDispatch = dispatchOf(review.devTaskId)
+          if (devDispatch) {
+            await bridge
+              .run(
+                `orca orchestration send --to dispatch:${devDispatch} --subject "Замечания проверки ${cfg?.stepId ?? task.id}" --body ${shellQuote(
+                  extractRemarks(report)
+                )} --json`
+              )
+              .catch(() => undefined)
+          }
+          await saveAuto(runId, state)
+          continue
+        }
         const round = (state.rounds[review.devTaskId] ?? 0) + 1
         state.rounds[review.devTaskId] = round
         if (round > review.maxRounds) {
@@ -492,9 +511,9 @@ export default function activate(orca: OrcaWorkerApi): void {
           await saveAuto(runId, state)
           return
         }
-        const devTask = byId.get(review.devTaskId)
         const devCfg = state.tasks[review.devTaskId]
         await act(`перезапуск ${review.devStepId} (раунд ${round}/${review.maxRounds})`, async () => {
+          delete state.verdicts[review.devTaskId]
           const devDispatch = dispatchOf(review.devTaskId)
           if (devDispatch) {
             await bridge.run(
@@ -521,26 +540,36 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
     if (acted) return
 
-    // 3. After a reworked dev task completes, re-run its reviewer.
-    for (const [reviewTaskId, review] of Object.entries(state.reviews)) {
+    // 3. After a reworked dev task completes, re-run the checks that rejected it — the
+    //    reviewer of a parented step and the children of a check container alike (a stale
+    //    green must not wave the block through; a failed check gets its re-run here too).
+    //    One per tick; the mark clears once nothing is due.
+    for (const mark of Object.keys(state.rounds)) {
       if (acted) break
-      if (review.source !== 'verdict') continue
-      const retryMark = state.rounds[`__retry_review_${review.devTaskId}`]
-      if (!retryMark) continue
-      const devTask = byId.get(review.devTaskId)
-      const reviewTask = byId.get(reviewTaskId)
-      if (devTask?.status === 'succeeded' && reviewTask?.status === 'succeeded' && state.verdicts[reviewTaskId] === 'request-changes') {
-        delete state.rounds[`__retry_review_${review.devTaskId}`]
-        const cfg = state.tasks[reviewTaskId]
-        await act(`перепроверка после правок`, async () =>
-          bridge.run(
-            `orca orchestration worker-start --task ${shellQuote(reviewTaskId)} --worktree ${shellQuote(
-              `name:${state.worktreeName}`
-            )} --agent ${shellQuote(cfg?.agent ?? 'claude')} --json`,
-            90_000
-          )
-        )
+      if (!mark.startsWith('__retry_review_')) continue
+      const devTaskId = mark.slice('__retry_review_'.length)
+      const devTask = byId.get(devTaskId)
+      if (!devTask || devTask.status !== 'succeeded') continue
+      const statuses: Record<string, string> = {}
+      for (const [id, t] of byId) statuses[id] = t.status
+      const due = rechecksDue(state.reviews, statuses, state.verdicts, devTaskId)
+      if (due.length === 0) {
+        delete state.rounds[mark]
+        await saveAuto(runId, state)
+        continue
       }
+      const taskId = due[0]
+      const cfg = state.tasks[taskId]
+      await act(`перепроверка после правок (${cfg?.stepId ?? taskId})`, async () => {
+        // The fresh report must re-enter loop 2 — drop the cached verdict of the old attempt.
+        delete state.verdicts[taskId]
+        return bridge.run(
+          `orca orchestration worker-start --task ${shellQuote(taskId)} --worktree ${shellQuote(
+            `name:${state.worktreeName}`
+          )} --agent ${shellQuote(cfg?.agent ?? 'claude')} --json`,
+          90_000
+        )
+      })
     }
     if (acted) return
 
@@ -559,14 +588,20 @@ export default function activate(orca: OrcaWorkerApi): void {
         return
       }
       const devCfg = state.tasks[review.devTaskId]
-      await act(`подшаг упал — перезапуск ${review.devStepId} (${round}/${review.maxRounds})`, async () =>
-        bridge.run(
+      await act(`подшаг упал — перезапуск ${review.devStepId} (${round}/${review.maxRounds})`, async () => {
+        delete state.verdicts[review.devTaskId]
+        return bridge.run(
           `orca orchestration worker-start --task ${shellQuote(review.devTaskId)} --worktree ${shellQuote(
             `name:${state.worktreeName}`
           )} --agent ${shellQuote(devCfg?.agent ?? 'claude')} --json`,
           90_000
         )
-      )
+      })
+      if (acted) return
+      // The failed check re-runs after the rework (loop 3), not by failover alone.
+      state.rounds[`__retry_review_${review.devTaskId}`] = 1
+      await saveAuto(runId, state)
+      return
     }
     if (acted) return
 
@@ -583,8 +618,10 @@ export default function activate(orca: OrcaWorkerApi): void {
       if (!next) continue // chain exhausted — the failure stays for the person to see
       tried.push(next)
       state.triedAgents[task.id] = tried
-      await act(`шаг ${cfg.stepId} упал на ${tried[tried.length - 2]} — фейловер на ${next}`, async () =>
-        bridge.run(
+      await act(`шаг ${cfg.stepId} упал на ${tried[tried.length - 2]} — фейловер на ${next}`, async () => {
+        // The failover attempt gets a clean verdict slot: its fresh report must re-enter loop 2.
+        delete state.verdicts[task.id]
+        return bridge.run(
           `orca orchestration worker-start --task ${shellQuote(task.id)} --worktree ${shellQuote(
             `name:${state.worktreeName}`
           )} --agent ${shellQuote(next)}${cfg.model ? ` --model ${shellQuote(cfg.model)}` : ''}${
@@ -592,7 +629,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           } --json`,
           90_000
         )
-      )
+      })
     }
     if (acted) return
 
@@ -664,7 +701,13 @@ export default function activate(orca: OrcaWorkerApi): void {
   ): string {
     const flow = template.steps
       .map((step, i) => {
-        const who = step.specialist ? `воркер ${step.specialist}` : step.agent ? `агент ${step.agent}` : 'барьер'
+        const who = step.specialist
+          ? `воркер ${step.specialist}`
+          : step.agent
+            ? `агент ${step.agent}`
+            : (step.sub?.length ?? 0) > 0
+              ? 'контейнер проверок (своего воркера нет)'
+              : 'барьер'
         const extra = [
           step.agent ? `агент-алиас для worker-start: ${step.agent}` : null,
           step.model ? `модель ${step.model}` : null,
@@ -674,8 +717,15 @@ export default function activate(orca: OrcaWorkerApi): void {
           step.gate ? `ГЕЙТ перед шагом: ${step.gate.question} — стоп для человека` : null,
           step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
         ].filter(Boolean)
-        const phaseText = (phase: string | undefined, optional: boolean, stepId: string): string => {
+        const phaseText = (phase: string | undefined, optional: boolean, stepId: string, hasWorker: boolean): string => {
           const p = phase ?? (optional ? 'after_end' : 'before_end')
+          if (!hasWorker) {
+            // Контейнер проверок: фазы отсчитываются не от воркера, а от соседей по блоку.
+            if (optional) return ' (optional: реши сам по сути диффа; не нужен — пропусти и не жди)'
+            return p === 'after_end'
+              ? ` (добивочная проверка блока «${stepId}»: стартуй после основных проверок, ход конвейера не держит)`
+              : ` (проверка блока «${stepId}»: стартуй по готовности вместе с соседями; итог блока — отчёты всех запущенных проверок)`
+          }
           if (optional) {
             return ` (optional, ${p === 'before_start' ? `ДО старта воркера шага «${stepId}»` : p === 'parallel' ? `ПАРАЛЛЕЛЬНО воркеру шага «${stepId}»` : p === 'before_end' ? `после РАБОТЫ воркера «${stepId}», до потребления его отчёта` : `ПОСЛЕ отчёта шага «${stepId}»`}: реши сам по сути задачи; не нужен — пропусти)`
           }
@@ -684,7 +734,9 @@ export default function activate(orca: OrcaWorkerApi): void {
               : p === 'before_end' ? ` (ПОСЛЕ работы воркера «${stepId}», ДО потребления его отчёта: сначала воркер завершает работу, затем этот подшаг проверяет/дополняет, и только потом считай отчёт шага финальным и иди дальше)`
                 : ` (после отчёта шага «${stepId}»: стартуй по RUN: из отчёта или сам)`
         }
-        const subs = (step.sub ?? []).map((c) => `      • ${c.id} — ${c.specialist ?? c.agent}${phaseText(c.phase, c.optional === true, step.id)}`)
+        const subs = (step.sub ?? []).map((c) =>
+          `      • ${c.id} — ${c.specialist ?? c.agent}${phaseText(c.phase, c.optional === true, step.id, Boolean(step.specialist || step.agent))}`
+        )
         return `${i + 1}. ${step.id} (${who}${extra.length > 0 ? '; ' + extra.join('; ') : ''})` + (subs.length > 0 ? '\n' + subs.join('\n') : '')
       })
       .join('\n')
@@ -713,6 +765,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       `1. Немедленно: orca orchestration run-use --id ${runId} --json`,
       `2. orca orchestration task-list --run ${runId} --json — стартуй готовые шаги (worker-start --task <id> --worktree name:${worktreeName} --agent <agent> --json). Подшаг (строка «•») принадлежит своему шагу — его фаза отсчитывается от ЭТОГО шага, не от соседних. Получил task_not_startable — значит рано: зависимости не закрыты, вернись позже. Не перетасовывай порядок сам.`,
       '3. Отчёты завершившихся — worker-read; строка VERDICT: approve | request-changes в отчёте ревью управляет циклами доработки. Цикл доработки = ПЕРЕЗАПУСК целевого шага: task-update --id <task> --status pending, затем worker-start заново (замечания ревью передай в --prompt-файле или сообщением в диспетчер). СВОИ задачи (task-create) НЕ создавай — раунды считает движок, всё нужное уже в задачах шаблона.',
+      '3a. Контейнер проверок (шаг без воркера): итог блока — отчёты всех запущенных проверок. request-changes или падение ЛЮБОЙ запущенной проверки = блок реджектнут: перезапусти on_reject-цель блока, собрав замечания ВСЕХ отклонивших проверок в один раунд (не по одному на проверку); после доработки перезапусти только отклонившие/падавшие проверки — одобрившие не дублируй.',
       '4. Вопросы воркеров — orchestration check; отвечай reply, решай сам всё, что решаемо.',
       '4a. optional-подшаги — условные: если тип задачи явно не требует (например, нет бэкенда — не запускай бэкенд-проверку), пропускай их и не жди.',
       'Факты и контекст (главная твоя работа между шагами):',

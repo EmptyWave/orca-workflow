@@ -2,7 +2,7 @@
 import { assert, test } from 'orca/testing'
 import { materialize } from './workflow'
 import { parseYaml } from './yaml'
-import { applyPlaceholders, parseTemplate } from './workflow'
+import { applyPlaceholders, parseTemplate, rechecksDue } from './workflow'
 
 const TEMPLATE = `# комментарий
 id: feature-dev
@@ -116,6 +116,52 @@ test('воркеры: только worker:, specialist больше не чит�
     /нужен worker/,
     'specialist без agent/spec больше не валиден'
   )
+})
+
+test('контейнер проверок: блок без воркера — on_reject смотрит все запущенные проверки', () => {
+  const tpl = parseTemplate('c', parseYaml(`
+id: c
+title: C
+steps:
+  - id: development
+    worker: coder
+  - id: code-review
+    on_reject: { goto: development, max_rounds: 2 }
+    sub:
+      - { id: backend-review, worker: reviewer, phase: parallel }
+      - { id: frontend-review, worker: reviewer, phase: parallel, optional: true }
+      - { id: recheck, worker: reviewer, phase: after_end }
+  - id: tests
+    deps: [code-review]
+`))
+  const { units, blockWatches } = materialize(tpl.steps)
+  const watch = blockWatches.find((w) => w.goto === 'development')
+  assert.ok(watch, 'блок с on_reject наблюдается')
+  assert.deepEqual(
+    [...(watch?.children ?? [])].sort(),
+    ['backend-review', 'frontend-review'],
+    'parallel-дети (включая optional) в списке наблюдения; after_end не реджектит'
+  )
+  const deps = new Map(units.map((u) => [u.id, u.deps]))
+  assert.deepEqual(
+    deps.get('tests'),
+    ['backend-review'],
+    'dep на контейнер разворачивается в обязательные проверки — optional не держат цепочку'
+  )
+})
+
+test('rechecksDue: перепроверка после доработки — отклонившие и падавшие, не одобрившие', () => {
+  const reviews = {
+    r1: { devTaskId: 'dev' },
+    r2: { devTaskId: 'dev' },
+    r3: { devTaskId: 'dev' },
+    other: { devTaskId: 'dev2' }
+  }
+  const statuses = { r1: 'succeeded', r2: 'succeeded', r3: 'failed', other: 'failed' }
+  const verdicts = { r1: 'request-changes', r2: 'approve' }
+  assert.deepEqual(rechecksDue(reviews, statuses, verdicts, 'dev'), ['r1', 'r3'], 'реджектнувший и упавший; approve — нет')
+  assert.deepEqual(rechecksDue(reviews, statuses, verdicts, 'dev2'), ['other'], 'только своя цель доработки')
+  assert.deepEqual(rechecksDue(reviews, { ...statuses, r1: 'dispatched' }, verdicts, 'dev'), ['r3'], 'перепроверка в полёте не дублируется')
 })
 
 test('парсер: блоки, потоки, кавычки, блочные скаляры', () => {

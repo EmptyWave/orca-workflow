@@ -327,7 +327,10 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
         })
       } else if (step.onReject) {
         blockWatches.push({
-          children: (step.sub ?? []).filter((c) => !c.optional && c.phase === 'before_start').map((c) => c.id),
+          // A check container's rejection comes from any child that actually ran — parallel,
+          // before_start, before_end, optional included (a check the coordinator chose to run
+          // and which found blockers must send the work back). after_end never rejects.
+          children: (step.sub ?? []).filter((c) => c.phase !== 'after_end').map((c) => c.id),
           goto: step.onReject.goto,
           maxRounds: step.onReject.maxRounds
         })
@@ -382,6 +385,21 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
     if (firstChild) firstChild.gate = step.gate
   }
   return { units, blockWatches }
+}
+
+/** Which watched units must re-run once the reworked dev task has finished: the ones that
+ *  rejected the work (verdict request-changes) or failed outright. Approving checks and
+ *  never-started optionals are left alone — a stale green does not re-verify for free. */
+export function rechecksDue(
+  reviews: Record<string, { devTaskId: string }>,
+  statuses: Record<string, string>,
+  verdicts: Record<string, unknown>,
+  devTaskId: string
+): string[] {
+  return Object.entries(reviews)
+    .filter(([, review]) => review.devTaskId === devTaskId)
+    .filter(([id]) => statuses[id] === 'failed' || (statuses[id] === 'succeeded' && verdicts[id] === 'request-changes'))
+    .map(([id]) => id)
 }
 
 /** Topological order of materialized units (stable for parallel branches). */
