@@ -635,18 +635,18 @@ export default function activate(orca: OrcaWorkerApi): void {
           step.gate ? `ГЕЙТ перед шагом: ${step.gate.question} — стоп для человека` : null,
           step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
         ].filter(Boolean)
-        const phaseText = (phase: string | undefined, optional: boolean): string => {
+        const phaseText = (phase: string | undefined, optional: boolean, stepId: string): string => {
           const p = phase ?? (optional ? 'after' : 'before_start')
           if (optional) {
             return p === 'after'
-              ? ' (optional, после отчёта родителя: стартуй по RUN: из отчёта или сам, если задаче нужно; не нужен — пропусти)'
-              : ` (optional, ${p === 'before_start' ? 'до родителя' : 'параллельно с родителем'}: реши сам по сути задачи; не нужен — пропусти)`
+              ? ` (optional, ПОСЛЕ отчёта шага «${stepId}»: стартуй по RUN: из его отчёта или сам, если задаче нужно; не нужен — пропусти)`
+              : ` (optional, ${p === 'before_start' ? `ДО старта шага «${stepId}»` : `ВМЕСТЕ со шагом «${stepId}»`}: реши сам по сути задачи; не нужен — пропусти)`
           }
-          return p === 'before_start' ? ' (готовит родителя: пройдёт до его старта)'
-            : p === 'before_end' ? ' (идёт ПАРАЛЛЕЛЬНО с родителем: дождись оба, потом решай дальше; любой request-changes — цикл доработки)'
-              : ' (после отчёта родителя)'
+          return p === 'before_start' ? ` (готовит шаг «${stepId}»: проходит ДО его старта, шаг ждёт его)`
+            : p === 'before_end' ? ` (идёт ВМЕСТЕ СО ШАГОМ «${stepId}», не с соседними: стартуй их одновременно, когда зависимости позволяют; итог шага — ОБА отчёта; request-changes в любом — цикл доработки)`
+              : ` (после отчёта шага «${stepId}»)`
         }
-        const subs = (step.sub ?? []).map((c) => `      • ${c.id} — ${c.specialist ?? c.agent}${phaseText(c.phase, c.optional === true)}`)
+        const subs = (step.sub ?? []).map((c) => `      • ${c.id} — ${c.specialist ?? c.agent}${phaseText(c.phase, c.optional === true, step.id)}`)
         return `${i + 1}. ${step.id} (${who}${extra.length > 0 ? '; ' + extra.join('; ') : ''})` + (subs.length > 0 ? '\n' + subs.join('\n') : '')
       })
       .join('\n')
@@ -673,7 +673,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       '',
       'Действия:',
       `1. Немедленно: orca orchestration run-use --id ${runId} --json`,
-      `2. orca orchestration task-list --run ${runId} --json — стартуй готовые шаги (worker-start --task <id> --worktree name:${worktreeName} --agent <agent> --json).`,
+      `2. orca orchestration task-list --run ${runId} --json — стартуй готовые шаги (worker-start --task <id> --worktree name:${worktreeName} --agent <agent> --json). Подшаг (строка «•») принадлежит своему шагу — его фаза отсчитывается от ЭТОГО шага, не от соседних. Получил task_not_startable — значит рано: зависимости не закрыты, вернись позже. Не перетасовывай порядок сам.`,
       '3. Отчёты завершившихся — worker-read; строка VERDICT: approve | request-changes в отчёте ревью управляет циклами доработки.',
       '4. Вопросы воркеров — orchestration check; отвечай reply, решай сам всё, что решаемо.',
       '4a. optional-подшаги — условные: если тип задачи явно не требует (например, нет бэкенда — не запускай бэкенд-проверку), пропускай их и не жди.',
