@@ -1211,8 +1211,10 @@ export default function activate(orca: OrcaWorkerApi): void {
           // coordinator role (run-use + read the brief) — the role is portable, not nailed
           // to the one session the plugin launched.
           try {
-            const wts = await bridge.json<{ result?: { worktrees?: Array<{ name?: string; path?: string }> } }>('orca worktree list --json')
-            const wtPath = (wts.result?.worktrees ?? []).find((w) => w.name === input.worktreeName)?.path
+            const wts = await bridge.json<{ result?: { worktrees?: Array<{ displayName?: string; path?: string }> } }>('orca worktree list --json')
+            const wtPath = (wts.result?.worktrees ?? []).find(
+              (w) => w.displayName === input.worktreeName || (w.path ?? '').endsWith(`/${input.worktreeName}`)
+            )?.path
             if (wtPath) {
               await bridge.run(
                 `mkdir -p ${shellPath(`${wtPath}/.orca`)} && echo ${shellQuote(toBase64(brief))} | base64 -d > ${shellPath(`${wtPath}/.orca/coordinator-brief.md`)}`
