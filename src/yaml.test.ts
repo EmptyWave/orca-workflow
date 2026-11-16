@@ -67,7 +67,7 @@ steps:
   - id: plan
     worker: planner
     sub:
-      - { id: prep, worker: researcher }
+      - { id: prep, worker: researcher, phase: before_start }
       - { id: side, worker: researcher, phase: parallel }
       - { id: verify, worker: researcher, phase: before_end }
       - { id: post, worker: researcher, phase: after_end, optional: true }
@@ -84,7 +84,10 @@ steps:
     ['side', 'parallel'],
     ['verify', 'before_end'],
     ['post', 'after_end']
-  ], 'фазы читаются; дефолты: обязательный → before_start, optional → after_end')
+  ], 'фазы читаются; дефолты: обязательный → before_end, optional → after_end')
+  const defaults = parseTemplate('d', parseYaml('id: d\ntitle: D\nsteps:\n  - id: a\n    worker: coder\n    sub:\n      - { id: req, worker: coder }\n      - { id: opt, worker: coder, optional: true }\n'))
+  assert.equal(defaults.steps[0].sub[0].phase, 'before_end', 'дефолт обязательного — before_end')
+  assert.equal(defaults.steps[0].sub[1].phase, 'after_end', 'дефолт опционального — after_end')
   assert.throws(
     () => parseTemplate('t', parseYaml('id: t\ntitle: T\nsteps:\n  - id: a\n    worker: coder\n    sub:\n      - { id: s, worker: coder, phase: after }\n')),
     /жду before_start/,

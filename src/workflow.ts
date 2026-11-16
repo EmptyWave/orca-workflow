@@ -150,7 +150,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
         const phaseRaw = strOrNull(rawChild.phase, 'sub[].phase')
         let phase: 'before_start' | 'parallel' | 'before_end' | 'after_end'
         if (phaseRaw === 'before_start' || phaseRaw === 'parallel' || phaseRaw === 'before_end' || phaseRaw === 'after_end') phase = phaseRaw
-        else if (phaseRaw === null) phase = rawChild.optional === true ? 'after_end' : 'before_start'
+        else if (phaseRaw === null) phase = rawChild.optional === true ? 'after_end' : 'before_end'
         else throw new Error(`подшаг "${childId}": phase "${phaseRaw}" — жду before_start | parallel | before_end | after_end`)
         sub.push({
           id: childId,

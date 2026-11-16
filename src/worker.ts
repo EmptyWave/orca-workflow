@@ -675,7 +675,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
         ].filter(Boolean)
         const phaseText = (phase: string | undefined, optional: boolean, stepId: string): string => {
-          const p = phase ?? (optional ? 'after_end' : 'before_start')
+          const p = phase ?? (optional ? 'after_end' : 'before_end')
           if (optional) {
             return ` (optional, ${p === 'before_start' ? `ДО старта воркера шага «${stepId}»` : p === 'parallel' ? `ПАРАЛЛЕЛЬНО воркеру шага «${stepId}»` : p === 'before_end' ? `после РАБОТЫ воркера «${stepId}», до потребления его отчёта` : `ПОСЛЕ отчёта шага «${stepId}»`}: реши сам по сути задачи; не нужен — пропусти)`
           }
