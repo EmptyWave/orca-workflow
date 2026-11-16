@@ -95,6 +95,10 @@
       .step.sub .title { font-weight: 400; color: var(--orca-muted-foreground); }
       .step .start { margin: 6px 0 2px; display: flex; flex-direction: column; gap: 6px; }
       .step-drawer { margin: 6px 0 2px; border-top: 1px dashed var(--orca-border); padding-top: 6px; }
+      .attempt { display: flex; gap: 7px; align-items: center; margin: 3px 0; cursor: pointer; font-size: 11.5px; color: var(--orca-foreground); }
+      .attempt:hover .att-title { text-decoration: underline; }
+      .attempt .att-state { width: 13px; display: inline-flex; }
+      .attempt pre { flex: 1; margin: 0; }
       .step-drawer pre {
         margin: 6px 0 0; max-height: 220px; overflow: auto; font: 11px ui-monospace, monospace;
         background: var(--orca-muted); border-radius: 6px; padding: 7px 9px; white-space: pre-wrap; overflow-wrap: anywhere;
@@ -184,7 +188,7 @@
         openStep: null,           // task id expanded: gate, report, retry live inside the step
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null
+        cfg: null, bridge: null, openAttempt: {}
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
@@ -456,6 +460,11 @@
               catch (e) { S.reports[arg] = 'ошибка: ' + (e.message || e) }
               render()
             },
+            'open-attempt': (arg) => {
+              const [taskId, dispatchId] = String(arg).split('|')
+              S.openAttempt[taskId] = dispatchId
+              render()
+            },
             'resume-pilot': async () => {
               setBusy('будим автопилот')
               try { await req('pilot.resume', { runId: S.runId }, 30000); await loadState() }
@@ -661,15 +670,39 @@
             }
             if (e.status === 'failed') {
               bits.push(`<div class="gate-btns"><button class="btn mini" data-act="retry-step:${esc(t.id)}">↻ Ретрай с этого шага</button></div>`)
-            } else if (['succeeded', 'dispatched'].includes(e.status) || t.dispatchId) {
-              bits.push(`<div class="gate-btns"><button class="btn mini" data-act="load-report:${esc(t.id)}"${t.dispatchId ? '' : ' disabled'}>Отчёт шага</button>${e.status === 'succeeded' && (t.fallback || []).length > 0 ? `<button class="btn mini" data-act="retry-step:${esc(t.id)}">↻ С начала шага</button>` : ''}</div>`)
-            } else {
+            }
+            // Попытки шага (GitLab-style): каждый диспетчер — свёрнутая строка, клик разворачивает отчёт.
+            const attempts = (S.snap?.workers || []).filter((w) => w.taskId === t.id)
+            if (attempts.length > 0) {
+              if (S.openAttempt[t.id] === undefined) S.openAttempt[t.id] = attempts[attempts.length - 1].dispatchId
+              const openD = S.openAttempt[t.id]
+              bits.push(`<div class="tiny muted" style="margin:4px 0 2px">Попытки (${attempts.length})</div>`)
+              for (let ai = 0; ai < attempts.length; ai++) {
+                const at = attempts[ai]
+                const isOpen = at.dispatchId === openD
+                if (isOpen && S.reports[at.dispatchId] === undefined) {
+                  S.reports[at.dispatchId] = '…'
+                  void req('task.report', { dispatchId: at.dispatchId }, 60000)
+                    .then((r) => { S.reports[at.dispatchId] = r.report || '(пусто)' })
+                    .catch((err) => { S.reports[at.dispatchId] = 'ошибка: ' + (err.message || err) })
+                    .finally(() => render())
+                }
+                const stIcon = at.state === 'succeeded' ? ICON.ok : at.state === 'failed' ? ICON.fail : at.state === 'ready' || at.state === 'starting' ? '<div class="spin" title="работает"></div>' : ICON.dot ?? ''
+                bits.push(`<div class="attempt" data-act="open-attempt:${esc(t.id)}|${esc(at.dispatchId)}">
+                  <span class="att-state">${stIcon}</span>
+                  <span class="att-title">#${ai + 1} ${esc(at.agent ?? '')}${at.model ? ' · ' + esc(at.model) : ''}</span>
+                </div>`)
+                if (isOpen && S.reports[at.dispatchId] !== undefined) {
+                  bits.push(`<div class="rowline" style="align-items:flex-start"><pre style="flex:1">${esc(S.reports[at.dispatchId])}</pre></div>`)
+                }
+              }
+              if (e.status === 'succeeded' && (t.fallback || []).length > 0) bits.push(`<div class="gate-btns"><button class="btn mini" data-act="retry-step:${esc(t.id)}">↻ С начала шага</button></div>`)
+            } else if (!gate) {
               bits.push(`<div class="tiny muted">Ещё не запускался${(t.fallback || []).length > 0 ? ' · fallback: ' + esc(t.fallback.join(', ')) : ''}</div>`)
             }
             if ((t.fallback || []).length > 0 && e.status !== 'failed') {
               bits.push(`<div class="tiny muted">fallback-цепочка: ${esc([t.agent, ...t.fallback].filter(Boolean).join(' → '))}</div>`)
             }
-            if (S.reports[t.id] !== undefined) bits.push(`<pre>${esc(S.reports[t.id])}</pre>`)
             drawer = `<div class="step-drawer">${bits.join('')}</div>`
           }
           const nest = child ? ' childrow' : ''
