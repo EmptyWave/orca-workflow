@@ -84,16 +84,17 @@
       /* Трассер флоу: сегмент над каждым шагом основного флоу, цвет — состояние шага. */
       .step.flow, .blockhead.flow { position: relative; }
       .step.flow::before, .blockhead.flow::before {
-        content: ''; position: absolute; left: 11px; top: -4px; height: 15px;
+        content: ''; position: absolute; left: 11px; top: -5px; height: 10px;
         border-left: 2px solid var(--conn, rgba(139, 148, 158, .55)); border-radius: 1px;
       }
+      .step .st { background: var(--orca-background); z-index: 1; position: relative; }
       .step.flow.conn-ok, .blockhead.flow.conn-ok { --conn: #3fb950; }
       .step.flow.conn-run, .blockhead.flow.conn-run { --conn: #d29922; }
       .step.flow.conn-idle, .blockhead.flow.conn-idle { --conn: rgba(139, 148, 158, .55); }
       .step.childrow { padding-left: 34px; position: relative; }
       .step.childrow::before {
-        content: ''; position: absolute; left: 20px; top: 0; bottom: 0;
-        border-left: 1px dashed var(--orca-border);
+        content: ''; position: absolute; left: 12px; top: -5px; bottom: -2px;
+        border-left: 2px dashed rgba(139, 148, 158, .45);
       }
       .step.childrow .title { font-weight: 500; }
       .blockhead {
@@ -616,7 +617,7 @@
             for (const k of kids) emitted.add(k.id)
             const agg = aggregate(kids)
             const doneKids = kids.filter((k) => (eff.get(k.id) || { status: k.status }).status === 'succeeded').length
-            stepRows.push(`<div class="blockhead${flowIndex > 0 ? ` flow conn-${agg === 'succeeded' ? 'ok' : agg === 'dispatched' ? 'run' : 'idle'}` : ' flow conn-idle'}">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
+            stepRows.push(`<div class="blockhead${flowIndex > 0 ? ` flow conn-${agg === 'succeeded' ? 'ok' : agg === 'dispatched' ? 'run' : 'idle'}` : ''}">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
             flowIndex += 1
             for (const k of kids) stepRows.push(stepRow(k, true))
             continue
@@ -686,7 +687,6 @@
             // Попытки шага (GitLab-style): каждый диспетчер — свёрнутая строка, клик разворачивает отчёт.
             const attempts = (S.snap?.workers || []).filter((w) => w.taskId === t.id)
             if (attempts.length > 0) {
-              if (S.openAttempt[t.id] === undefined) S.openAttempt[t.id] = attempts[attempts.length - 1].dispatchId
               const openD = S.openAttempt[t.id]
               bits.push(`<div class="tiny muted" style="margin:4px 0 2px">Попытки (${attempts.length})</div>`)
               for (let ai = 0; ai < attempts.length; ai++) {
@@ -717,7 +717,7 @@
             }
             drawer = `<div class="step-drawer">${bits.join('')}</div>`
           }
-          const nest = child ? ' childrow' : (flowIndex > 0 ? ` flow conn-${e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}` : (flowIndex === 0 && !child ? ' flow conn-idle' : ''))
+          const nest = child ? ' childrow' : (flowIndex > 0 ? ` flow conn-${e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}` : '')
           const branch = child ? `<span style="color:var(--orca-muted-foreground)">↳ </span>` : ''
           const inBlock = child && String(t.parentTaskId || '').startsWith('step:')
             ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
