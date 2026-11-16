@@ -473,6 +473,17 @@
             'resolve-custom': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), b.dataset.option),
             'start-open': () => { S.startFor = S.startFor === arg ? null : arg; render() },
             'start-run': () => void startTask(S.snap.tasks.find((t) => t.id === arg)),
+            'delete-run': async () => {
+              const r = S.runs.find((x) => x.runId === S.runId)
+              if (!r) return
+              if (!confirm(`Удалить ран «${r.objective.slice(0, 60)}» безвозвратно?`)) return
+              setBusy('удаление рана')
+              try {
+                await req('run.delete', { runId: S.runId }, 60000)
+                S.runId = null
+                await loadRuns(); await loadState()
+              } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+            },
             'instantiate': () => void instantiate(),
             'copy-project': () => void copyTemplate('project'),
             'copy-library': () => void copyTemplate('library'),
@@ -529,7 +540,8 @@
         const snap = S.snap
         const sel = `<div class="rowline"><select data-bind-select="runId" style="flex:1">` +
           rows.map((r) => `<option value="${esc(r.runId)}"${r.runId === S.runId ? ' selected' : ''}>${esc(r.objective).slice(0, 60)}</option>`).join('') + `</select>` +
-          `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button></div>` + scopeHint()
+          `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
+          `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button></div>` + scopeHint()
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
         const runTitle = snap.run ? `<div class="tiny muted" style="margin:6px 0 8px">${esc(snap.run.objective)}</div>` : ''

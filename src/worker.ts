@@ -5,6 +5,7 @@ import { Bridge, BridgeError, expandHome, shellPath, sleep } from './bridge'
 import type { WfGate, WfJob, WfRun, WfSnapshot, WfSpecialist, WfStep, WfTask, WfTemplate, WfWorker } from './protocol'
 import { applyPlaceholders, materialize, parseTemplate, topoUnits } from './workflow'
 import { parseYaml, type YamlValue } from './yaml'
+import { homedir } from 'node:os'
 import type { OrcaWorkerApi } from 'orca/worker'
 
 const DEFAULT_LIBRARY = '~/orca-plugins/workflow-view/workflows'
@@ -1663,6 +1664,39 @@ export default function activate(orca: OrcaWorkerApi): void {
   })
 
   orca.panels.handle('bridge.debug', async () => bridge.stats())
+
+  /** The engine has no run-delete command; the records live in the runtime's sqlite db
+   *  (its schema carries DELETE triggers). One run at a time, never one with live workers. */
+  orca.panels.handle('run.delete', async ({ runId }) => {
+    everUsed = true
+    const id = String(runId ?? '').trim()
+    if (!id.startsWith('run_')) throw new BridgeError('это не id рана', 'cli_error')
+    const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
+    const live = await bridge.run(
+      `sqlite3 ${shellQuote(db)} "SELECT COUNT(*) FROM worker_dispatches wd JOIN dispatch_contexts dc ON wd.dispatch_id = dc.dispatch_id WHERE dc.run_id = '${id.replace(/'/g, '')}' AND wd.state IN ('ready','running');"`
+    )
+    if (Number(live.trim()) > 0) throw new BridgeError('у рана есть работающие воркеры — сначала останови их', 'cli_error')
+    await bridge.run(
+      [
+        `sqlite3 ${shellQuote(db)} <<'SQL'`,
+        'BEGIN;',
+        `DELETE FROM messages WHERE run_id = '${id}';`,
+        `DELETE FROM deliveries WHERE run_id = '${id}';`,
+        `DELETE FROM worker_dispatches WHERE dispatch_id IN (SELECT dispatch_id FROM dispatch_contexts WHERE run_id = '${id}');`,
+        `DELETE FROM dispatch_contexts WHERE run_id = '${id}';`,
+        `DELETE FROM tasks WHERE run_id = '${id}';`,
+        `DELETE FROM decision_gates WHERE run_id = '${id}';`,
+        `DELETE FROM runs WHERE id = '${id}';`,
+        'COMMIT;',
+        'SQL'
+      ].join('\n')
+    )
+    await orca.storage.delete(`runmeta.${id}`).catch(() => undefined)
+    await orca.storage.delete(`auto.${id}`).catch(() => undefined)
+    await orca.storage.delete(`agents.${id}`).catch(() => undefined)
+    void refresh()
+    return { ok: true }
+  })
 
 
 
