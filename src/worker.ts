@@ -1510,6 +1510,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       )
     }
     // editor.open takes a path relative to the workspace root.
+    await orca.host.call('workspace.open', { workspaceId: home.id }).catch(() => undefined)
     await orca.host.call('editor.open', { workspaceId: home.id, path: filePath.slice(projectPath.length + 1) })
     return { opened: true as const }
   })
