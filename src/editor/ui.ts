@@ -888,8 +888,235 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       push()
     }))
     inspector.append(field('Заголовок', step.title ?? '', (v) => { step.title = v === '' ? null : v; push() }))
-    inspector.append(field('worker — имя воркера (называется один раз)', step.specialist ?? '', (v) => {(v) => {
+    inspector.append(field('worker — имя воркера (называется один раз)', step.specialist ?? '', (v) => {
       step.specialist = v.trim() === '' ? null : v.trim()
       if (step.specialist) step.agent = null // либо specialist, либо agent
       push()
     }))
+    const sc = step.specialist ? specialists.find((sp) => sp.slug === step.specialist) : undefined
+    const scHint = document.createElement('div')
+    scHint.style.cssText = 'font-size:10.5px;color:var(--orca-muted-foreground);margin:-4px 0 4px'
+    scHint.textContent = sc ? `карточка: ${sc.agent}${sc.model ? ' · ' + sc.model : ''}${sc.effort ? ' · effort ' + sc.effort : ''}` : (step.specialist ? 'карточка воркера не найдена' : '')
+    inspector.append(scHint)
+    inspector.append(field('Агент (пусто = барьер, если нет воркера)', step.agent ?? '', (v) => {
+      step.agent = v.trim() === '' ? null : v.trim()
+      if (step.agent) step.specialist = null
+      push()
+    }))
+    if (step.sub.length > 0) {
+      const subHead = document.createElement('label')
+      subHead.textContent = `Подшаги (${step.sub.length}) — параллельный блок`
+      inspector.append(subHead)
+      for (const child of step.sub) {
+        const line = document.createElement('div')
+        line.style.cssText = 'font-size:11.5px;color:var(--orca-muted-foreground);margin:2px 0'
+        line.textContent = `↳ ${child.id}${child.title ? ' · ' + child.title : ''} — ${child.specialist ?? child.agent ?? '?'}${child.optional ? ' · опциональный' : ''}`
+        inspector.append(line)
+      }
+      const subHint = document.createElement('div')
+      subHint.style.cssText = 'font-size:11px;color:var(--orca-muted-foreground);margin:4px 0 0'
+      subHint.textContent = 'Подшаги задаются в YAML (sub:) — редактор сохраняет их как есть.'
+      inspector.append(subHint)
+    }
+    void loadCatalogModels()
+    inspector.append(comboField('Модель (опц.) — каталог', step.model ?? '', modelOptions, (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }))
+    const stepSpecialistForEffort = specialists.find((sp) => sp.slug === step.specialist)
+    inspector.append(comboField('Effort (только с моделью)', step.effort ?? '', () => effortsFor(step.agent ?? stepSpecialistForEffort?.agent), (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }))
+    inspector.append(comboField('Fallback — агенты при провале (через запятую вводится вручную)', step.fallback.join(', '), () => ['claude', 'codex', 'zcode', 'kimi', 'gemini'], (v) => {
+      step.fallback = v.split(',').map((a) => a.trim()).filter(Boolean)
+      push()
+    }))
+    inspector.append(field('specFile (путь в каталоге шаблонов)', step.specFile ?? '', (v) => { step.specFile = v.trim() === '' ? null : v.trim(); step.spec = null; push() }))
+    const specLabel = document.createElement('label')
+    specLabel.textContent = 'промпт (инлайн; шаг без карточки воркера)'
+    inspector.append(specLabel)
+    const specArea = document.createElement('textarea')
+    specArea.value = step.spec ?? ''
+    specArea.addEventListener('input', () => { step.spec = specArea.value === '' ? null : specArea.value; step.specFile = null; push() })
+    inspector.append(specArea)
+    inspector.append(field('deps (через запятую)', step.deps.join(', '), (v) => {
+      step.deps = v.split(',').map((s) => s.trim()).filter(Boolean)
+      push()
+    }))
+
+    const gateLabel = document.createElement('label')
+    gateLabel.textContent = 'Необходимо подтверждение (шаг не начнётся без ответа)'
+    inspector.append(gateLabel)
+    const gateRow = document.createElement('div')
+    gateRow.className = 'row'
+    const gateCheck = document.createElement('input')
+    gateCheck.type = 'checkbox'
+    gateCheck.checked = step.gate !== null
+    gateCheck.addEventListener('change', () => {
+      step.gate = gateCheck.checked ? { question: 'Аппрувнут?', options: ['approve', 'request-changes'] } : null
+      push()
+    })
+    const gateText = document.createElement('span')
+    gateText.textContent = 'включить'
+    gateRow.append(gateCheck, gateText)
+    inspector.append(gateRow)
+    if (step.gate) {
+      inspector.append(field('Вопрос гейта', step.gate.question, (v) => { if (step.gate) step.gate.question = v; push() }))
+      inspector.append(field('Варианты (через запятую)', step.gate.options.join(', '), (v) => {
+        if (step.gate) step.gate.options = v.split(',').map((s) => s.trim()).filter(Boolean)
+        push()
+      }))
+    }
+    inspector.append(comboField('on_reject: goto', step.onReject?.goto ?? '', () => graph.steps.filter((st) => st.id !== step.id).map((st) => st.id), (v) => {
+      step.onReject = v.trim() === '' ? null : { goto: v.trim(), maxRounds: step.onReject?.maxRounds ?? 2 }
+      push()
+    }))
+    inspector.append(field('on_reject: max_rounds', step.onReject ? String(step.onReject.maxRounds) : '', (v) => {
+      const n = Number(v)
+      if (step.onReject && Number.isInteger(n) && n >= 1) step.onReject.maxRounds = n
+      push()
+    }))
+    const addSub = document.createElement('button')
+    addSub.textContent = '+ Подшаг (параллельный блок справа)'
+    addSub.style.cssText = 'margin-top:12px;font:12px inherit;padding:4px 10px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer'
+    addSub.addEventListener('click', () => {
+      const n = step.sub.length + 1
+      let id = `sub-${n}`
+      while (graph.steps.some((st) => st.sub.some((c) => c.id === id))) id = `sub-${Number(id.slice(4)) + 1}`
+      step.sub.push({ id, title: null, specialist: null, agent: null, model: null, effort: null, fallback: [], spec: null, specFile: null, deps: [], optional: false })
+      push()
+      selection = { kind: 'sub', parentId: step.id, id }
+      render()
+    })
+    inspector.append(addSub)
+    const del = document.createElement('button')
+    del.className = 'del'
+    del.textContent = 'Удалить шаг'
+    del.addEventListener('click', removeSelected)
+    inspector.append(del)
+  }
+
+  // ---- pointer interactions --------------------------------------------------------------
+  let dragNode: { id: string; dx: number; dy: number } | null = null
+  let pan: { x: number; y: number; vx: number; vy: number } | null = null
+
+  function svgPoint(e: PointerEvent | WheelEvent): { x: number; y: number } {
+    const rect = svg.getBoundingClientRect()
+    return { x: (e.clientX - rect.left - view.x) / view.k, y: (e.clientY - rect.top - view.y) / view.k }
+  }
+
+  /** Scales the initial view so the whole graph fits: vertical layouts can get tall. */
+  function fitView(): void {
+    const points = Object.values(graph.layout)
+    if (points.length === 0) return
+    const maxX = Math.max(...points.map((p) => p.x)) + NODE_W
+    const maxY = Math.max(...points.map((p) => p.y)) + NODE_H
+    const rect = svg.getBoundingClientRect()
+    const w = Math.max(200, rect.width - 30)
+    const h = Math.max(200, rect.height - 30)
+    view.k = Math.min(1, w / maxX, h / maxY)
+    view.x = 15
+    view.y = 15
+  }
+
+  function beginNodeDrag(e: PointerEvent, id: string): void {
+    const p = svgPoint(e)
+    const at = graph.layout[id] ?? { x: 0, y: 0 }
+    dragNode = { id, dx: p.x - at.x, dy: p.y - at.y }
+  }
+
+  svg.addEventListener('pointerdown', (e) => {
+    if ((e.target as Element).closest('.wfv-node')) return
+    selection = null
+    connectFrom = null
+    tmpEdge = null
+    canvas.classList.remove('connecting')
+    render()
+    pan = { x: e.clientX, y: e.clientY, vx: view.x, vy: view.y }
+    canvas.setPointerCapture(e.pointerId)
+  })
+
+  window.addEventListener('pointermove', (e) => {
+    if (dragNode) {
+      const p = svgPoint(e)
+      graph.layout[dragNode.id] = { x: p.x - dragNode.dx, y: p.y - dragNode.dy }
+      render()
+    } else if (pan) {
+      view.x = pan.vx + (e.clientX - pan.x)
+      view.y = pan.vy + (e.clientY - pan.y)
+      render()
+    } else if (connectFrom && tmpEdge) {
+      const p = svgPoint(e)
+      tmpEdge = { ...tmpEdge, x2: p.x, y2: p.y }
+      render()
+    }
+  })
+
+  window.addEventListener('pointerup', () => {
+    if (dragNode) {
+      dragNode = null
+      push()
+    }
+    pan = null
+  })
+
+  svg.addEventListener('dblclick', (e) => {
+    const p = svgPoint(e as unknown as PointerEvent)
+    let n = 1
+    while (stepById(`step${n}`)) n += 1
+    const id = `step${n}`
+    graph.steps.push({
+      id, title: `Шаг ${n}`, specialist: null, agent: 'claude', model: null, effort: null, fallback: [],
+      spec: 'Новая задача: {{objective}}.', specFile: null, deps: [], gate: null, onReject: null, sub: []
+    })
+    graph.layout[id] = p
+    selection = { kind: 'node', id }
+    push()
+  })
+
+  svg.addEventListener('wheel', (e) => {
+    e.preventDefault()
+    const k = Math.min(2, Math.max(0.3, view.k * Math.exp(-e.deltaY * 0.0012)))
+    const rect = svg.getBoundingClientRect()
+    const mx = e.clientX - rect.left
+    const my = e.clientY - rect.top
+    view.x = mx - ((mx - view.x) / view.k) * k
+    view.y = my - ((my - view.y) / view.k) * k
+    view.k = k
+    render()
+  }, { passive: false })
+
+  window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      connectFrom = null
+      tmpEdge = null
+      canvas.classList.remove('connecting')
+      selection = null
+      render()
+    }
+    if ((e.key === 'Delete' || e.key === 'Backspace') && selection) {
+      const target = e.target as HTMLElement
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return
+      e.preventDefault()
+      removeSelected()
+    }
+  })
+
+  // ---- boot ------------------------------------------------------------------------------
+  if (graph.parseError) {
+    errorBar.hidden = false
+    errorBar.textContent = `Файл не парсится: ${graph.parseError}`
+    const pre = document.createElement('pre')
+    pre.className = 'wfv-yaml'
+    pre.textContent = graph.raw
+    ;(root.querySelector('.wfv-body') as HTMLElement).append(pre)
+    canvas.remove()
+    inspector.remove()
+    return
+  }
+  ensureLayout()
+  fitView()
+  render()
+  doc.onReplace((next) => {
+    graph = next
+    selection = null
+    ensureLayout()
+    render()
+  })
+  window.addEventListener('resize', () => render())
+}
