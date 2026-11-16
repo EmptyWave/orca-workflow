@@ -81,17 +81,20 @@
       .step .body { flex: 1; min-width: 0; }
       .step .title { font-weight: 600; overflow-wrap: anywhere; }
       .step .meta { font-size: 11px; color: var(--orca-muted-foreground); margin-top: 1px; overflow-wrap: anywhere; }
-      /* Единая пунктирная нить флоу через весь шаг (и подшаги) — цвет по статусу строки,
-         иконки прерывают нить своим фоном. Полоска-в-начале убрана: одна линия, без стыков. */
+      /* Единая пунктирная нить флоу: начинается на 10px ниже иконки строки (top: 32px — до иконки
+         не дотягивает, вверх не торчит), заканчивается чуть ниже строки, перекрывая зазор
+         до иконки следующей (пробел читается как пауза пунктира). Никаких масок-фонов. */
       .step.flow, .blockhead.flow, .step.childrow { position: relative; }
-      .step.flow::before, .blockhead.flow::before, .step.childrow::before {
-        content: ''; position: absolute; left: 12px; top: -5px; bottom: -3px;
+      .step.flow::before, .step.childrow::before {
+        content: ''; position: absolute; left: 12px; top: 32px; bottom: -10px;
         border-left: 2px dashed rgba(139, 148, 158, .45);
       }
-      .step.flow.conn-first::before, .step.childrow.conn-first::before { top: 20px; }
+      .blockhead.flow::before {
+        content: ''; position: absolute; left: 12px; top: 20px; bottom: -10px;
+        border-left: 2px dashed rgba(139, 148, 158, .45);
+      }
       .step.flow.conn-ok::before, .blockhead.flow.conn-ok::before, .step.childrow.conn-ok::before { border-left-color: #3fb950; }
       .step.flow.conn-run::before, .blockhead.flow.conn-run::before, .step.childrow.conn-run::before { border-left-color: #d29922; }
-      .step .st { background: var(--orca-card); z-index: 1; position: relative; }
       .step.childrow { padding-left: 34px; position: relative; }
 
       .step.childrow .title { font-weight: 500; }
@@ -740,7 +743,7 @@
           const conn = `conn-${e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}`
           const nest = child
             ? ` childrow ${conn}`
-            : (flowIndex < totalFlow - 1 ? ` flow ${conn}${flowIndex === 0 ? ' conn-first' : ''}` : '')
+            : (flowIndex < totalFlow - 1 ? ` flow ${conn}` : '')
           const branch = child ? `<span style="color:var(--orca-muted-foreground)">↳ </span>` : ''
           const inBlock = child && String(t.parentTaskId || '').startsWith('step:')
             ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
