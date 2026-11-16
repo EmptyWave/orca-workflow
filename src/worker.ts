@@ -1677,6 +1677,18 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { report: await readWorkerReport(dispatchId) }
   })
 
+  orca.panels.handle('task.attemptVerdicts', async ({ runId, taskId }) => {
+    everUsed = true
+    const snap = await snapshot(runId)
+    const dispatches = snap.workers.filter((w) => w.taskId === taskId).map((w) => w.dispatchId)
+    const verdicts: Record<string, 'approve' | 'request-changes' | null> = {}
+    for (const dispatchId of dispatches) {
+      const report = await readWorkerReport(dispatchId)
+      verdicts[dispatchId] = report === '' ? null : parseVerdict(report)
+    }
+    return { verdicts }
+  })
+
   orca.panels.handle('task.retry', async ({ runId, taskId }) => {
     everUsed = true
     const snap = await snapshot(runId)
