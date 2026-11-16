@@ -171,7 +171,6 @@
         fail: ring(RED, `<path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="${RED}" stroke-width="1.6" stroke-linecap="round"/>`),
         flag: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 14.5V2m0 .8c1.7-1.1 3.4-1.1 5.1-.4 1.7.7 3.4.7 4.9-.4v6.4c-1.5 1.1-3.2 1.1-4.9.4C7.4 8.1 5.7 8.1 4 9.2" stroke="var(--orca-warning, #d29922)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
         pause: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.6" stroke="rgba(139,148,158,.6)" stroke-width="1.6"/><path d="M8 5.2V8l2.1 1.4" stroke="rgba(139,148,158,.6)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-        reject: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M12.5 8a4.5 4.5 0 1 1-1.6-3.46" stroke="#d29922" stroke-width="1.7" stroke-linecap="round"/><path d="M11.6 1.6v3.2H8.4" stroke="#d29922" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
         play: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M5 3.5v9l7.5-4.5z" fill="var(--orca-accent)"/></svg>`,
         dot: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.6" fill="var(--orca-muted-foreground)"/></svg>`,
         pencil: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M11.3 2.1l2.6 2.6-8.3 8.3-3.1.5.5-3.1zM10 3.4l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,
@@ -743,10 +742,10 @@
                 const stIcon = at.state === 'failed' ? ICON.fail
                   : at.state === 'ready' || at.state === 'starting' ? '<div class="spin" title="работает"></div>'
                   : at.state === 'succeeded'
-                    ? (v === 'request-changes' ? `${ICON.reject}` : v === 'approve' ? ICON.ok : ICON.dot)
+                    ? (v === 'request-changes' ? ICON.fail : v === 'approve' ? ICON.ok : ICON.dot)
                     : ICON.dot ?? ''
                 const vTitle = v === 'request-changes' ? ' · попытка ОТКЛОНЕНА (request-changes)' : v === 'approve' ? ' · вердикт approve' : ''
-                const vLabel = v === 'request-changes' ? ' <span style="color:#d29922">↩ отклонена</span>' : v === 'approve' ? '' : ''
+                const vLabel = v === 'request-changes' ? ' <span style="color:var(--orca-destructive, #f85149)">✗ отклонена</span>' : ''
                 bits.push(`<div class="attempt" data-act="open-attempt:${esc(t.id)}|${esc(at.dispatchId)}" title="попытка #${ai + 1}${vTitle}">
                   <span class="att-state">${stIcon}</span>
                   <span class="att-title">#${ai + 1} ${esc(at.agent ?? '')}${at.model ? ' · ' + esc(at.model) : ''}${vLabel}</span>
