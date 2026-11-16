@@ -543,7 +543,11 @@
         })
         document.querySelectorAll('.step[data-act]').forEach((row) => {
           const [act, arg] = row.dataset.act.split(':')
-          row.onclick = () => { if (map[act]) map[act]() }
+          row.onclick = () => {
+            if (act !== 'toggle-step') return
+            if (S.openStep[arg]) delete S.openStep[arg]; else S.openStep[arg] = true
+            render()
+          }
         })
         document.querySelectorAll('.step-drawer').forEach((d) => { d.onclick = (ev) => ev.stopPropagation() })
 
