@@ -599,6 +599,20 @@
         const emitted = new Set()
         const stepRows = []
         let flowIndex = 0
+        // Координаторские задачи «вне шаблона»: если в названии есть id шага (латиницей),
+        // история раундов показывается под этим шагом, а не хвостом внизу.
+        const extrasByStep = new Map()
+        const strayExtras = []
+        for (const t of orderedTasks) {
+          if (t.order != null || t.parentTaskId) continue
+          const hit = orderedTasks.find((o) => o.order != null && !o.parentTaskId && (t.title || '').toLowerCase().includes((o.title || ' ').split(' ')[0].toLowerCase()) && /[a-z-]{3,}/.test((o.title || ' ').split(' ')[0]))
+          if (hit) {
+            const arr = extrasByStep.get(hit.id) || []
+            arr.push(t); extrasByStep.set(hit.id, arr); emitted.add(t.id)
+          } else if (t.order == null) {
+            strayExtras.push(t); emitted.add(t.id)
+          }
+        }
         // самый дальний пройденный порядок: незапущенные optional позади него — пропущены
         const maxPassedOrder = orderedTasks.reduce((m, t) => ((eff.get(t.id) || { status: t.status }).status === 'succeeded' ? Math.max(m, t.order ?? 0) : m), -1)
         const aggregate = (kids) => {
@@ -639,6 +653,13 @@
             emitted.add(k.id)
             stepRows.push(stepRow(k, true))
           }
+          for (const ex of extrasByStep.get(t.id) || []) {
+            emitted.add(ex.id)
+            stepRows.push(`<div class="step childrow" title="задача координатора вне шаблона"><div class="st">${ICON.dot}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⟲ ${esc(ex.title)}</div></div></div>`)
+          }
+        }
+        for (const ex of strayExtras) {
+          stepRows.push(`<div class="step" title="задача координатора вне шаблона"><div class="st">${ICON.dot}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⚙ ${esc(ex.title)}</div><div class="meta">вне шаблона (координатор)</div></div></div>`)
         }
         const steps = stepRows.join('')
 
