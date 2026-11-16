@@ -118,6 +118,17 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   // ---- project workers: dropdown data + the manager panel -------------------------
   type Sp = { slug: string; agent: string; model: string | null; effort: string | null; parallel: number | null; spec: string | null; error: string | null }
   let specialists: Sp[] = []
+  /** Модели из каталога Орки (что реально резолвит прокси) — подсказки выпадашек model. */
+  let catalogModels: string[] = []
+  const modelOptions = (): string[] => [...new Set([...catalogModels, ...specialists.map((sp) => sp.model).filter((m): m is string => Boolean(m))])]
+  async function loadCatalogModels(): Promise<void> {
+    try {
+      const answer = await request('models.list', undefined, 15000) as { models?: Array<{ id?: string }> }
+      catalogModels = (answer.models ?? []).map((m) => m.id ?? '').filter((x) => x !== '')
+    } catch {
+      catalogModels = []
+    }
+  }
   let projectPath: string | null = null
   const request = <T>(name: string, input: unknown, timeoutMs = 30000): Promise<T> =>
     orca.plugin.request(name, input as never, { timeoutMs }) as Promise<T>
