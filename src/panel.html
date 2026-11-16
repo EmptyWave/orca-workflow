@@ -601,8 +601,17 @@
           }
           if (t.parentTaskId) continue // nested under a real parent task, rendered with it
           emitted.add(t.id)
-          stepRows.push(stepRow(t, false))
-          for (const k of kidsOf.get(t.id) || []) {
+          const kids = kidsOf.get(t.id) || []
+          const own = eff.get(t.id) || { status: t.status }
+          // Пока подшаги родителя работают, родитель не должен выглядеть мёртвым («ожидает»):
+          // его фактическое состояние — работа группы. Реальный статус придёт, когда родитель стартует сам.
+          const kidsWorking = kids.some((k) => (eff.get(k.id) || { status: k.status }).status === 'dispatched')
+          const kidsDone = kids.length > 0 && kids.every((k) => (eff.get(k.id) || { status: k.status }).status === 'succeeded')
+          const groupStatus = ['pending', 'ready', 'queued', 'unknown'].includes(own.status)
+            ? (kidsWorking ? 'dispatched' : kidsDone ? 'ready' : own.status)
+            : own.status
+          stepRows.push(stepRow({ ...t, status: groupStatus }, false))
+          for (const k of kids) {
             emitted.add(k.id)
             stepRows.push(stepRow(k, true))
           }
