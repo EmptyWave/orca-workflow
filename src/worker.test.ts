@@ -35,11 +35,15 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = 
   const canned = (command: string): string => {
     const dir = LS_DIR
     // Терминал-помощник для --from создаётся CLI-командой — тоже спавном.
+    if (command.includes('orca agent launch')) {
+      return '{"ok":true,"result":{"terminal":{"handle":"t_coord_session"}}}'
+    }
     if (command.includes('orca terminal create') && command.includes('workflow-view-runner')) {
       return '{"ok":true,"result":{"terminal":{"handle":"t_helper"}}}'
     }
     // Мутации оркестрации требуют идентичность отправителя, как настоящий CLI.
-    const mutation = / (run-create|task-create|gate-create|gate-resolve|task-update|worker-start|run-use|send) /.test(command)
+    // agent launch несёт бриф с командами флоу (« run-use ») — это не мутация, не гоняем через retry
+    const mutation = !command.includes('orca agent launch') && / (run-create|task-create|gate-create|gate-resolve|task-update|worker-start|run-use|send) /.test(command)
     if (mutation && !command.includes('--from')) {
       throw new Error('no_active_sender_terminal: Could not determine the calling terminal for this orchestration command. Pass --from with your own terminal handle.')
     }
@@ -342,10 +346,10 @@ test('новый ран поднимает координатора-агента
     }
     assert.ok(job, 'job записан')
     assert.equal(job!.status, 'done', job!.error ?? '')
-    const launches = host.callsOf('agent.launch') as Array<{ workspaceId: string; agent: string; prompt: string }>
-    assert.equal(launches.length, 1, 'сессия координатора запущена')
-    assert.ok(launches[0].prompt.includes('run-use'), 'бриф велит привязаться к рану')
-    assert.ok(launches[0].prompt.includes('Флоу'), 'в брифе есть флоу')
+    const launches = spawned().filter((c) => c.includes('orca agent launch'))
+    assert.equal(launches.length, 1, 'сессия координатора запущена через CLI agent launch')
+    assert.ok(launches[0].includes('run-use'), 'бриф велит привязаться к рану')
+    assert.ok(launches[0].includes('%D0%A4%D0%BB%D0%BE%D1%83') || launches[0].includes('Флоу'), 'в брифе есть флоу')
     const auto = (host.data().storage['auto.run_2'] ?? {}) as { driver?: string; coordinatorTerminal?: string }
     assert.equal(auto.driver, 'coordinator')
     assert.ok(auto.coordinatorTerminal, 'терминал координатора записан')

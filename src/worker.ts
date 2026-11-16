@@ -1228,11 +1228,13 @@ export default function activate(orca: OrcaWorkerApi): void {
           // The brief lives as a file too: any session in the run's worktree can pick up the
           // coordinator role (run-use + read the brief) — the role is portable, not nailed
           // to the one session the plugin launched.
+          let runWorktreePath: string | null = null
           try {
             const wts = await bridge.json<{ result?: { worktrees?: Array<{ displayName?: string; path?: string }> } }>('orca worktree list --json')
             const wtPath = (wts.result?.worktrees ?? []).find(
               (w) => w.displayName === input.worktreeName || (w.path ?? '').endsWith(`/${input.worktreeName}`)
             )?.path
+            runWorktreePath = wtPath ?? null
             if (wtPath) {
               await bridge.run(
                 `mkdir -p ${shellPath(`${wtPath}/.orca`)} && echo ${shellQuote(toBase64(brief))} | base64 -d > ${shellPath(`${wtPath}/.orca/coordinator-brief.md`)}`
@@ -1241,30 +1243,39 @@ export default function activate(orca: OrcaWorkerApi): void {
           } catch {
             // файл брифа — удобство, ран живёт и без него
           }
-          // agent.launch types the prompt the moment the terminal exists — if the agent CLI
-          // has not booted yet, the prompt lands in a bare shell and is lost. Verify the
-          // terminal actually runs an agent, otherwise close it and retry.
+          // The HOST agent.launch types the prompt the instant the terminal exists — a
+          // still-booting agent CLI means the brief lands in a bare shell and is lost. The
+          // CLI `orca agent launch` waits for the agent properly, so the coordinator starts
+          // through it, in the run's own worktree; one verification + retry as a belt.
           const launchVerified = async (): Promise<string> => {
-            for (let attempt = 0; attempt < 3; attempt++) {
-              const launched = await orca.host.call<{ terminalId: string }>('agent.launch', {
-                workspaceId: home.id,
-                agent: coordinator?.agent ?? input.agent,
-                prompt: brief
-              })
+            const selector = runWorktreePath ? `path:${runWorktreePath}` : `name:${input.worktreeName}`
+            for (let attempt = 0; attempt < 2; attempt++) {
+              const out = await bridge.run(
+                `orca agent launch --agent ${shellQuote(coordinator?.agent ?? input.agent)} --worktree ${shellQuote(selector)} --prompt ${shellQuote(brief)} --json`,
+                60_000
+              )
+              let handle = ''
+              try {
+                const parsed = JSON.parse(out.slice(out.indexOf('{'), out.lastIndexOf('}') + 1)) as { result?: { terminal?: { handle?: string }, terminalId?: string } }
+                handle = parsed.result?.terminal?.handle ?? parsed.result?.terminalId ?? ''
+              } catch {
+                // без хендла — просто доверяем запуску
+              }
+              if (handle === '') return handle
               await sleep(coordLaunch.bootWaitMs)
               try {
                 const listing = await bridge.json<{ result?: { terminals?: Array<{ handle?: string; title?: string }> } }>('orca terminal list --json')
-                const term = (listing.result?.terminals ?? []).find((t) => t.handle === launched.terminalId)
-                const title = term?.title ?? ''
-                if (/claude|codex|agent|zcode|opencode/i.test(title)) return launched.terminalId
-                await bridge.run(`orca terminal close --terminal ${launched.terminalId} || true`)
+                const term = (listing.result?.terminals ?? []).find((t) => t.handle === handle)
+                if (!term || /claude|codex|agent|zcode|opencode/i.test(term.title ?? '')) return handle
+                await bridge.run(`orca terminal close --terminal ${handle} || true`)
               } catch {
-                return launched.terminalId // проверка не удалась — не мешаем запуску
+                return handle
               }
             }
-            throw new BridgeError('агент в терминале координатора так и не поднялся (3 попытки)', 'cli_error')
+            throw new BridgeError('агент координатора не поднялся через CLI (2 попытки)', 'cli_error')
           }
           const launchedTerminal = await launchVerified()
+          void home
           const stored = await loadAuto(run.runId)
           if (stored) {
             stored.coordinatorTerminal = launchedTerminal
