@@ -739,7 +739,7 @@
             <div class="tiny muted" style="margin-bottom:6px">${esc(tpl.id)} · ${esc(tpl.file)}</div>
             ${preview}</div>` +
           `<div class="card"><h2>Поднять Run</h2>
-            <label class="f"><span>цель (опц.) — затравка; пусто = координатор спросит в чате</span><textarea data-bind="objective" rows="3" style="width:100%;box-sizing:border-box" placeholder="что делаем — одной фразой или подробно">${esc(S.objective)}</textarea></label>
+            <label class="f"><span>заголовок (опц.) — координатор всегда уточнит цель, описание и скоуп в чате</span><textarea data-bind="objective" rows="2" style="width:100%;box-sizing:border-box" placeholder="имя задачи, например «Momento: партнёрская авторизация»">${esc(S.objective)}</textarea></label>
             <div class="grid2">
               <label class="f"><span>base branch (опц.)</span><input data-bind="baseBranch" value="${esc(S.baseBranch)}" placeholder="master"/></label>
               <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>
