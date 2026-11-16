@@ -38,6 +38,9 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = 
     if (command.includes('orca agent launch')) {
       return '{"ok":true,"result":{"terminal":{"handle":"t_coord_session"}}}'
     }
+    if (command.includes('agent-model-catalog')) {
+      return '{"agent":"claude","discovered":{"models":[{"id":"glm-5.3","label":"Glm 5.3"},{"id":"glm-5.3[1m]","label":"Glm 5.3 (1M context)"}]}}\n{"agent":"codex","discovered":{"models":[{"id":"gpt-5","label":"GPT-5"}]}}'
+    }
     if (command.includes('orca terminal create') && command.includes('workflow-view-runner')) {
       return '{"ok":true,"result":{"terminal":{"handle":"t_helper"}}}'
     }

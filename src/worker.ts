@@ -1719,6 +1719,31 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('bridge.debug', async () => bridge.stats())
 
+  /** Available models from Orca's agent catalog (per agent, as discovered on this machine):
+   *  what a proxy actually resolves — the ids a worker card's `model:` may use. */
+  let modelsCache: { at: number; models: Array<{ id: string; label: string; agent: string }> } | null = null
+  orca.panels.handle('models.list', async () => {
+    everUsed = true
+    if (modelsCache && Date.now() - modelsCache.at < 300_000) return { models: modelsCache.models }
+    const out = await bridge.run(
+      `sqlite3 ${shellQuote(`${homedir()}/Library/Application Support/orca/agent-model-catalog.db`)} "SELECT value FROM rows;"`,
+      10_000
+    )
+    const models: Array<{ id: string; label: string; agent: string }> = []
+    for (const chunk of out.split('\n')) {
+      try {
+        const doc = JSON.parse(chunk) as { agent?: string; discovered?: { models?: Array<{ id?: string; label?: string }> } }
+        for (const m of doc.discovered?.models ?? []) {
+          if (m.id) models.push({ id: m.id, label: m.label ?? m.id, agent: doc.agent ?? '' })
+        }
+      } catch {
+        // не-json строка — пропускаем
+      }
+    }
+    modelsCache = { at: Date.now(), models }
+    return { models }
+  })
+
   /** The engine has no run-delete command; the records live in the runtime's sqlite db
    *  (its schema carries DELETE triggers). One run at a time, never one with live workers. */
   orca.panels.handle('run.delete', async ({ runId }) => {

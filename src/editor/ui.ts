@@ -290,7 +290,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const slugEl = input('slug (имя файла)', editing === 'new' ? '' : editing.slug)
     slugEl.disabled = editing !== 'new' // the slug names the file; renaming would orphan references
     const agentEl = input('агент (claude, codex, zcode…)', editing === 'new' ? 'claude' : editing.agent)
-    const modelWrap = comboField('модель (опц.)', editing === 'new' || !editing ? '' : editing.model ?? '', () => [...new Set(specialists.map((sp) => sp.model).filter((m): m is string => !!m))], () => undefined)
+    void loadCatalogModels()
+    const modelWrap = comboField('модель (опц.) — из каталога Орки', editing === 'new' || !editing ? '' : editing.model ?? '', modelOptions, () => undefined)
     const modelEl = modelWrap.querySelector('input') as HTMLInputElement
     form.append(modelWrap)
     const effortWrap = comboField('effort (опц.)', editing === 'new' || !editing ? '' : editing.effort ?? '', () => effortsFor(agentEl.value), () => undefined)
@@ -816,7 +817,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         if (child.agent) child.specialist = null
         push()
       }))
-      inspector.append(comboField('Модель (опц.)', child.model ?? '', () => [...new Set(specialists.map((sp) => sp.model).filter((m): m is string => !!m))], (v) => { child.model = v.trim() === '' ? null : v.trim(); push() }))
+      void loadCatalogModels()
+      inspector.append(comboField('Модель (опц.) — каталог', child.model ?? '', modelOptions, (v) => { child.model = v.trim() === '' ? null : v.trim(); push() }))
       inspector.append(comboField('Fallback — агенты при провале', child.fallback.join(', '), () => ['claude', 'codex', 'zcode', 'kimi', 'gemini'], (v) => {
         child.fallback = v.split(',').map((a) => a.trim()).filter(Boolean)
         push()
@@ -889,7 +891,8 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       subHint.textContent = 'Подшаги задаются в YAML (sub:) — редактор сохраняет их как есть.'
       inspector.append(subHint)
     }
-    inspector.append(comboField('Модель (опц.)', step.model ?? '', () => [...new Set([...specialists.map((sp) => sp.model), ...graph.steps.map((st) => st.model)].filter((m): m is string => !!m))], (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }))
+    void loadCatalogModels()
+    inspector.append(comboField('Модель (опц.) — каталог', step.model ?? '', modelOptions, (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }))
     const stepSpecialistForEffort = specialists.find((sp) => sp.slug === step.specialist)
     inspector.append(comboField('Effort (только с моделью)', step.effort ?? '', () => effortsFor(step.agent ?? stepSpecialistForEffort?.agent), (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }))
     inspector.append(comboField('Fallback — агенты при провале (через запятую вводится вручную)', step.fallback.join(', '), () => ['claude', 'codex', 'zcode', 'kimi', 'gemini'], (v) => {
