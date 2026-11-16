@@ -627,7 +627,9 @@ export default function activate(orca: OrcaWorkerApi): void {
       .map((step, i) => {
         const who = step.specialist ? `воркер ${step.specialist}` : step.agent ? `агент ${step.agent}` : 'барьер'
         const extra = [
+          step.agent ? `агент-алиас для worker-start: ${step.agent}` : null,
           step.model ? `модель ${step.model}` : null,
+          step.model && step.effort ? `effort ${step.effort}` : null,
           step.parallel ? `ОДНОВРЕМЕННО не более ${step.parallel}` : null,
           (step.fallback ?? []).length > 0 ? `fallback: ${step.fallback.join(' → ')}` : null,
           step.gate ? `ГЕЙТ перед шагом: ${step.gate.question} — стоп для человека` : null,
