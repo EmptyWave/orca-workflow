@@ -850,9 +850,9 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       const optRow = document.createElement('div')
       optRow.className = 'row'
       const optCheck = document.createElement('input')
-      const phaseWrap = comboField('Фаза — когда относительно родителя', child.phase ?? (child.optional ? 'after' : 'before_start'), () => ['before_start — до старта родителя', 'before_end — параллельно, итог ждёт оба', 'after — после отчёта родителя'], (v) => {
+      const phaseWrap = comboField('Фаза — когда относительно воркера родителя', child.phase ?? (child.optional ? 'after_end' : 'before_start'), () => ['before_start — до старта воркера', 'parallel — параллельно с воркером', 'before_end — после работы, до отчёта', 'after_end — после отчёта'], (v) => {
         const bit = v.split(' ')[0]
-        if (bit === 'before_start' || bit === 'before_end' || bit === 'after') child.phase = bit
+        if (bit === 'before_start' || bit === 'parallel' || bit === 'before_end' || bit === 'after_end') child.phase = bit
         push()
       })
       inspector.append(phaseWrap)

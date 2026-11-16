@@ -147,12 +147,11 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
         for (const d of childDeps) {
           if (!subSeen.has(d)) throw new Error(`подшаг "${childId}": зависимость "${d}" вне блока "${stepId}"`)
         }
-        const phaseRaw = strOrNull(rawChild.phase, 'sub[].phase') ?? strOrNull(rawChild.when, 'sub[].when')
-        let phase: 'before_start' | 'before_end' | 'after'
-        if (phaseRaw === 'before_start' || phaseRaw === 'before_end' || phaseRaw === 'after') phase = phaseRaw
-        else if (phaseRaw === 'optional') phase = 'after'
-        else if (phaseRaw === null) phase = rawChild.optional === true ? 'after' : 'before_start'
-        else throw new Error(`подшаг "${childId}": phase "${phaseRaw}" — жду before_start | before_end | after`)
+        const phaseRaw = strOrNull(rawChild.phase, 'sub[].phase')
+        let phase: 'before_start' | 'parallel' | 'before_end' | 'after_end'
+        if (phaseRaw === 'before_start' || phaseRaw === 'parallel' || phaseRaw === 'before_end' || phaseRaw === 'after_end') phase = phaseRaw
+        else if (phaseRaw === null) phase = rawChild.optional === true ? 'after_end' : 'before_start'
+        else throw new Error(`подшаг "${childId}": phase "${phaseRaw}" — жду before_start | parallel | before_end | after_end`)
         sub.push({
           id: childId,
           title: strOrNull(rawChild.title, 'sub[].title'),
@@ -257,7 +256,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
     if (!step) return [id]
     if (!isBlock(id)) return [id]
     const members: string[] = []
-    for (const child of step.sub ?? []) if (!child.optional && child.phase !== 'after') members.push(child.id)
+    for (const child of step.sub ?? []) if (!child.optional && child.phase !== 'after_end') members.push(child.id)
     if (hasParentUnit.get(id)) members.push(id)
     return members
   }
@@ -270,18 +269,19 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
     const external = step.deps.flatMap((d) => expandDep(d, hasParentUnit))
     if (isBlock(step.id)) {
       for (const child of step.sub ?? []) {
-        // Phase wiring (before_start default for required, after for optional):
-        //  before_start — prepares the parent: child inherits the parent's chain position,
-        //                 the parent waits for it.
-        //  before_end   — runs WITH the parent: same start point, the parent does not wait;
+        // Phase wiring (before_start default for required, after_end for optional):
+        //  before_start — prepares the parent: inherits its chain position, the parent waits.
+        //  parallel     — runs WITH the parent: same start point, the parent does not wait;
         //                 whatever follows the parent waits for the pair (post-processing below).
-        //  after        — runs after the parent completed: deps on the parent (a parentless
-        //                 block ends with its required children, so an `after` child gates on them).
+        //  before_end   — AFTER the parent's work, BEFORE its report is consumed: gates on the
+        //                 parent, and the flow proceeds only after the sub (verification inside the step).
+        //  after_end    — post-report: gates on the parent (a parentless block ends with its
+        //                 required children), does NOT block the flow.
         let deps: string[]
-        if (child.phase === 'after') {
+        if (child.phase === 'before_end' || child.phase === 'after_end') {
           deps = hasParentUnit.get(step.id)
             ? [step.id]
-            : (step.sub ?? []).filter((c) => !c.optional && c.phase !== 'after').map((c) => c.id)
+            : (step.sub ?? []).filter((c) => !c.optional && c.phase !== 'after_end' && c.phase !== 'before_end').map((c) => c.id)
         } else {
           deps = child.deps.length > 0 ? [...child.deps] : [...external]
         }
@@ -354,23 +354,24 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
   }
   // before_end children run alongside their parent: anything waiting on the parent waits
   // on the pair, so the step's outcome (verdict included) considers both.
-  const beforeEndOf = new Map<string, string[]>()
+  // parallel и before_end закрывают шаг: кто ждёт родителя — ждёт и их.
+  const closersOf = new Map<string, string[]>()
   const afterChildrenOf = new Map<string, Set<string>>()
   for (const step of steps) {
-    const parallel = (step.sub ?? []).filter((c) => c.phase === 'before_end' && !c.optional).map((c) => c.id)
-    if (parallel.length > 0) beforeEndOf.set(step.id, parallel)
-    const after = new Set((step.sub ?? []).filter((c) => c.phase === 'after').map((c) => c.id))
+    const closers = (step.sub ?? []).filter((c) => (c.phase === 'parallel' || c.phase === 'before_end') && !c.optional).map((c) => c.id)
+    if (closers.length > 0) closersOf.set(step.id, closers)
+    const after = new Set((step.sub ?? []).filter((c) => c.phase === 'after_end').map((c) => c.id))
     if (after.size > 0) afterChildrenOf.set(step.id, after)
   }
-  if (beforeEndOf.size > 0) {
+  if (closersOf.size > 0) {
     for (const unit of units) {
       const extra: string[] = []
       for (const dep of unit.deps) {
-        // after-подшаг стартует по отчёту родителя (RUN:) и не ждёт его before_end-соседей
+        // after_end-подшаг стартует по отчёту родителя (RUN:) и не ждёт его закрывающих соседей
         if (afterChildrenOf.get(dep)?.has(unit.id)) continue
-        extra.push(...(beforeEndOf.get(dep) ?? []))
+        extra.push(...(closersOf.get(dep) ?? []))
       }
-      for (const e of extra) if (!unit.deps.includes(e)) unit.deps.push(e)
+      for (const e of extra) if (e !== unit.id && !unit.deps.includes(e)) unit.deps.push(e)
     }
   }
 

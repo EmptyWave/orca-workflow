@@ -675,15 +675,14 @@ export default function activate(orca: OrcaWorkerApi): void {
           step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
         ].filter(Boolean)
         const phaseText = (phase: string | undefined, optional: boolean, stepId: string): string => {
-          const p = phase ?? (optional ? 'after' : 'before_start')
+          const p = phase ?? (optional ? 'after_end' : 'before_start')
           if (optional) {
-            return p === 'after'
-              ? ` (optional, ПОСЛЕ отчёта шага «${stepId}»: стартуй по RUN: из его отчёта или сам, если задаче нужно; не нужен — пропусти)`
-              : ` (optional, ${p === 'before_start' ? `ДО старта шага «${stepId}»` : `ВМЕСТЕ со шагом «${stepId}»`}: реши сам по сути задачи; не нужен — пропусти)`
+            return ` (optional, ${p === 'before_start' ? `ДО старта воркера шага «${stepId}»` : p === 'parallel' ? `ПАРАЛЛЕЛЬНО воркеру шага «${stepId}»` : p === 'before_end' ? `после РАБОТЫ воркера «${stepId}», до потребления его отчёта` : `ПОСЛЕ отчёта шага «${stepId}»`}: реши сам по сути задачи; не нужен — пропусти)`
           }
-          return p === 'before_start' ? ` (готовит шаг «${stepId}»: проходит ДО его старта, шаг ждёт его)`
-            : p === 'before_end' ? ` (идёт ВМЕСТЕ СО ШАГОМ «${stepId}», не с соседними: стартуй их одновременно, когда зависимости позволяют; итог шага — ОБА отчёта; request-changes в любом — цикл доработки)`
-              : ` (после отчёта шага «${stepId}»)`
+          return p === 'before_start' ? ` (готовит шаг «${stepId}»: проходит ДО старта его воркера, шаг ждёт его)`
+            : p === 'parallel' ? ` (ПАРАЛЛЕЛЬНО воркеру шага «${stepId}», не с соседними: стартуй их одновременно, когда зависимости позволяют; итог шага — ОБА отчёта; request-changes в любом — цикл доработки)`
+              : p === 'before_end' ? ` (ПОСЛЕ работы воркера «${stepId}», ДО потребления его отчёта: сначала воркер завершает работу, затем этот подшаг проверяет/дополняет, и только потом считай отчёт шага финальным и иди дальше)`
+                : ` (после отчёта шага «${stepId}»: стартуй по RUN: из отчёта или сам)`
         }
         const subs = (step.sub ?? []).map((c) => `      • ${c.id} — ${c.specialist ?? c.agent}${phaseText(c.phase, c.optional === true, step.id)}`)
         return `${i + 1}. ${step.id} (${who}${extra.length > 0 ? '; ' + extra.join('; ') : ''})` + (subs.length > 0 ? '\n' + subs.join('\n') : '')
@@ -990,7 +989,7 @@ export default function activate(orca: OrcaWorkerApi): void {
               effort: typeof raw.effort === 'string' ? raw.effort : null,
               parallel: typeof raw.parallel === 'number' && raw.parallel > 0 ? raw.parallel : null,
               fallback: Array.isArray(raw.fallback) ? raw.fallback.map(String) : typeof raw.fallback === 'string' && raw.fallback !== '' ? [String(raw.fallback)] : [],
-              spec: typeof raw.prompt === 'string' ? raw.prompt : typeof raw.spec === 'string' ? raw.spec : null,
+              spec: typeof raw.prompt === 'string' ? raw.prompt : null,
               error: null
             })
           } catch (error) {

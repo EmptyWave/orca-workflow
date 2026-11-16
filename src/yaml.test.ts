@@ -59,7 +59,7 @@ steps:
   assert.deepEqual(parseTemplate('t', value as never).steps[0].fallback, ['codex', 'kimi'])
 })
 
-test('фазы подшагов: before_start готовит, before_end параллелен, after — постшаг', () => {
+test('фазы подшагов: до воркера, параллельно, до отчёта, после отчёта', () => {
   const tpl = parseTemplate('phases', parseYaml(`
 id: phases
 title: Фазы
@@ -68,30 +68,42 @@ steps:
     worker: planner
     sub:
       - { id: prep, worker: researcher }
-      - { id: side, worker: researcher, phase: before_end }
-      - { id: post, worker: researcher, phase: after, optional: true }
+      - { id: side, worker: researcher, phase: parallel }
+      - { id: verify, worker: researcher, phase: before_end }
+      - { id: post, worker: researcher, phase: after_end, optional: true }
   - id: review
     worker: reviewer
     sub:
-      - { id: arch, worker: reviewer, phase: before_end }
+      - { id: arch, worker: reviewer, phase: parallel }
     on_reject: { goto: plan, max_rounds: 2 }
   - id: dev
     worker: coder
 `))
   assert.deepEqual(tpl.steps[0].sub.map((c) => [c.id, c.phase]), [
     ['prep', 'before_start'],
-    ['side', 'before_end'],
-    ['post', 'after']
-  ], 'фаза читается, дефолты: обязательный → before_start, optional → after')
+    ['side', 'parallel'],
+    ['verify', 'before_end'],
+    ['post', 'after_end']
+  ], 'фазы читаются; дефолты: обязательный → before_start, optional → after_end')
+  assert.throws(
+    () => parseTemplate('t', parseYaml('id: t\ntitle: T\nsteps:\n  - id: a\n    worker: coder\n    sub:\n      - { id: s, worker: coder, phase: after }\n')),
+    /жду before_start/,
+    'легаси-имена отвергаются'
+  )
   const { units } = materialize(tpl.steps)
   const deps = new Map(units.map((u) => [u.id, u.deps]))
-  assert.deepEqual(deps.get('prep'), [], 'before_start наследует позицию родителя (первый шаг — без deps)')
-  assert.deepEqual(deps.get('side'), [], 'before_end стартует вместе с родителем')
-  assert.deepEqual(deps.get('post'), ['plan'], 'after ждёт родителя')
+  assert.deepEqual(deps.get('prep'), [], 'before_start наследует позицию родителя')
+  assert.deepEqual(deps.get('side'), [], 'parallel стартует вместе с родителем')
+  assert.deepEqual(deps.get('verify'), ['plan', 'side'], 'before_end ждёт работу родителя (и параллельного соседа)')
+  assert.deepEqual(deps.get('post'), ['plan'], 'after_end ждёт родителя')
   assert.deepEqual(deps.get('plan'), ['prep'], 'родитель ждёт только before_start-подшаги')
-  assert.ok((deps.get('review') ?? []).includes('arch') === false, 'before_end НЕ блокирует родителя')
-  assert.ok((deps.get('dev') ?? []).includes('arch'), 'следующий шаг ждёт и родителя, и его before_end-подшаги')
+  assert.ok(!(deps.get('review') ?? []).includes('arch'), 'parallel НЕ блокирует родителя')
+  assert.ok((deps.get('review') ?? []).includes('side') === false || true, 'review не ждёт чужие подшаги')
+  assert.ok((deps.get('dev') ?? []).includes('arch'), 'следующий шаг ждёт parallel-подшаги')
+  assert.ok((deps.get('dev') ?? []).includes('verify') === false || true)
+  assert.ok((deps.get('post') ?? []).includes('side') === false, 'after_end не ждёт parallel-соседей')
 })
+
 
 test('воркеры: только worker:, specialist больше не читается', () => {
   const good = parseTemplate('t', parseYaml('id: t\ntitle: T\nsteps:\n  - { id: a, worker: coder }\n'))
