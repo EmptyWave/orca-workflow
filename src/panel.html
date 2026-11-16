@@ -76,6 +76,8 @@
       .steps { display: flex; flex-direction: column; gap: 2px; }
       .step { display: flex; gap: 8px; padding: 5px 6px 5px 4px; border-radius: 7px; align-items: flex-start; }
       .step:hover { background: var(--orca-muted); }
+      .step { cursor: pointer; }
+      .step pre, .step input, .step select, .step textarea, .step button { cursor: auto; }
       .step .st { flex: 0 0 16px; height: 16px; margin-top: 1px; display: flex; align-items: center; justify-content: center; }
       .step .ag { flex: 0 0 15px; height: 15px; margin-top: 1.5px; display: flex; align-items: center; justify-content: center; }
       .step .body { flex: 1; min-width: 0; }
@@ -464,6 +466,7 @@
         document.querySelectorAll('[data-tab]').forEach((b) =>
           b.onclick = () => { remember('tab', b.dataset.tab); if (b.dataset.tab === 'templates' && !S.templates) void loadTemplates(); if (b.dataset.tab === 'settings' && !S.cfg) void loadSettings(); render() })
         document.querySelectorAll('[data-act]').forEach((b) => {
+          if (b.classList.contains('step')) return // строки-шаги проводим отдельным проводом ниже
           const [act, arg] = b.dataset.act.split(':')
           const map = {
             dismiss: () => { S.notice = null; render() },
@@ -521,7 +524,7 @@
             'save-cfg': () => void saveSettings(),
             'reset-bridge': () => void resetBridge()
           }
-          if (map[act]) b.onclick = map[act]
+          if (map[act]) b.onclick = (ev) => { ev.stopPropagation(); map[act]() }
         })
         document.querySelectorAll('[data-bind]').forEach((node) => {
           const key = node.dataset.bind
@@ -538,6 +541,12 @@
             if (key === 'tab') render()
           }
         })
+        document.querySelectorAll('.step[data-act]').forEach((row) => {
+          const [act, arg] = row.dataset.act.split(':')
+          row.onclick = () => { if (map[act]) map[act]() }
+        })
+        document.querySelectorAll('.step-drawer').forEach((d) => { d.onclick = (ev) => ev.stopPropagation() })
+
       }
 
       // ---- loading state that knows how long it has been loading
@@ -763,7 +772,7 @@
           const inBlock = child && String(t.parentTaskId || '').startsWith('step:')
             ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
             : ''
-          return `<div class="step${skipped ? ' skipped' : ''}${nest}">
+          return `<div class="step${skipped ? ' skipped' : ''}${nest}" data-act="toggle-step:${esc(t.id)}">
             <div class="st">${skippedIcon(t, maxPassedOrder) || statusIcon(e.status)}</div>
             <div class="ag">${agentIcon(t.agent)}</div>
             <div class="body">
