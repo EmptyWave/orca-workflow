@@ -1093,7 +1093,7 @@
           // оставить агента без рана (или получить отказ воркера), поэтому видно сразу.
           const live = (r.liveWorkers || 0) > 0
           const badges =
-            (mine ? ' <span class="chip" title="ран этой сессии">этой сессии</span>' : '') +
+            (mine ? ' <span class="chip" title="ран текущей сессии">текущая сессия</span>' : '') +
             (r.hasCoordinator ? ' <span class="chip" title="к рану привязана живая сессия координатора"><i style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#3fb950"></i> координатор</span>' : '') +
             (live ? ` <span class="chip" title="воркеры рана прямо работают — удаление отклоняется"><i style="display:inline-block;width:7px;height:7px;border-radius:50%;background:#e2a03f"></i> воркеры: ${r.liveWorkers}</span>` : '')
           const delBtn = live
