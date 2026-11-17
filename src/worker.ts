@@ -1008,6 +1008,12 @@ export default function activate(orca: OrcaWorkerApi): void {
       dirs.push(`${lib}/workers`)
     }
     const out: WfSpecialist[] = []
+    // Cross-directory dedup: seenSlugs lives OUTSIDE the dir loop — the project's cards win
+    // over the library demos (dirs order), earlier sort order wins within one tree. A Map
+    // built from the list keeps the LAST duplicate, so without this the library's demo card
+    // silently overwrote the project card for every colliding slug (empty spec -> task-create
+    // dies mid-instantiate).
+    const seenSlugs = new Set<string>()
     for (const dir of dirs) {
       let listing = ''
       try {
@@ -1023,28 +1029,29 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
       let current: string | null = null
       const chunks: string[] = []
-      const seenSlugs = new Set<string>()
       const flush = (): void => {
         if (current) {
-          // Nested layout: `plan/code-researcher.yaml` answers both to `code-researcher`
-          // (flat name, shallowest wins on collisions) and `plan/code-researcher`.
-          const rel = current.replace(/^\.\//, '').replace(/\.yaml$/, '')
-          const slug = rel.includes('/') ? rel.slice(rel.lastIndexOf('/') + 1) : rel
-          if (seenSlugs.has(slug)) return // a shallower file with the same name wins
-          seenSlugs.add(slug)
-          seenSlugs.add(rel)
-          try {
-            const raw = parseYaml(fromBase64(chunks.join(''))) as { [k: string]: unknown }
-            out.push({
-              slug,
-              agent: String(raw.agent ?? 'claude'),
-              model: typeof raw.model === 'string' ? raw.model : null,
-              effort: typeof raw.effort === 'string' ? raw.effort : null,
-              parallel: typeof raw.parallel === 'number' && raw.parallel > 0 ? raw.parallel : null,
-              fallback: Array.isArray(raw.fallback) ? raw.fallback.map(String) : typeof raw.fallback === 'string' && raw.fallback !== '' ? [String(raw.fallback)] : [],
-              spec: typeof raw.prompt === 'string' ? raw.prompt : null,
-              error: null
-            })
+              // Nested layout: `plan/code-researcher.yaml` answers both to `code-researcher`
+              // (flat name) and `plan/code-researcher`.
+              const rel = current.replace(/^\.\//, '').replace(/\.yaml$/, '')
+              const slug = rel.includes('/') ? rel.slice(rel.lastIndexOf('/') + 1) : rel
+              if (seenSlugs.has(slug)) return // an earlier entry with the same name wins
+              seenSlugs.add(slug)
+              seenSlugs.add(rel)
+              try {
+                const raw = parseYaml(fromBase64(chunks.join(''))) as { [k: string]: unknown }
+                out.push({
+                  slug,
+                  agent: String(raw.agent ?? 'claude'),
+                  model: typeof raw.model === 'string' ? raw.model : null,
+                  effort: typeof raw.effort === 'string' ? raw.effort : null,
+                  parallel: typeof raw.parallel === 'number' && raw.parallel > 0 ? raw.parallel : null,
+                  fallback: Array.isArray(raw.fallback) ? raw.fallback.map(String) : typeof raw.fallback === 'string' && raw.fallback !== '' ? [String(raw.fallback)] : [],
+                  // `prompt:` is the card key; `spec:` is the legacy spelling still used by
+                  // the shipped demo cards and older projects — read both.
+                  spec: typeof raw.prompt === 'string' ? raw.prompt : typeof raw.spec === 'string' && raw.spec !== '' ? raw.spec : null,
+                  error: null
+                })
           } catch (error) {
             out.push({ slug, agent: 'claude', model: null, effort: null, parallel: null, fallback: [], spec: null, error: message(error) })
           }
