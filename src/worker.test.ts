@@ -423,9 +423,13 @@ test('task.retry сбрасывает шаг и его хвост, автопи�
     const answer = await worker.request('task.retry', { runId: 'run_1', taskId: 'task_a' })
     assert.equal(answer.ok, true)
     assert.deepEqual([...answer.reset].sort(), ['task_a', 'task_b'], 'шаг и зависимый хвост')
-    const updates = spawned().filter((c) => c.includes('task-update') && c.includes('--from'))
+    const commands = spawned()
+    const updates = commands.filter((c) => c.includes('task-update') && c.includes('--from'))
     assert.equal(updates.length, 2, 'по одному сбросу на задачу')
     assert.ok(updates.every((c) => c.includes('--status pending')), 'статус pending')
+    const runUseAt = commands.findIndex((c) => c.includes('run-use'))
+    const firstUpdateAt = commands.findIndex((c) => c.includes('task-update'))
+    assert.ok(runUseAt >= 0 && runUseAt < firstUpdateAt, 'хелпер привязывается к рану до мутаций (иначе run_required)')
   }))
 
 test('run.meta.set привязывает ран к проекту, runs.list её отдаёт', () =>

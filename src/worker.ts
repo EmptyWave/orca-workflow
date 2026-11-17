@@ -1513,8 +1513,17 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
   })
 
-  orca.panels.handle('gate.resolve', async ({ gateId, resolution }) => {
+  /** Привязывает хелпер-терминал моста к рану. Мутации задач (task-update, gate-resolve,
+   *  worker-start) требуют run-bound отправителя: координатор биндит СВОЙ терминал, наш
+   *  хелпер по умолчанию не привязан — без этого ручной ретрай из панели падал с
+   *  run_required. Идемпотентно и дёшево, зовём перед каждой мутацией из панели. */
+  async function bindRun(runId: string): Promise<void> {
+    await bridge.run(`orca orchestration run-use --id ${shellQuote(runId)} --json`)
+  }
+
+  orca.panels.handle('gate.resolve', async ({ gateId, resolution, runId }) => {
     everUsed = true
+    if (runId) await bindRun(runId)
     await bridge.run(
       `orca orchestration gate-resolve --id ${shellQuote(gateId)} --resolution ${shellQuote(resolution)} --json`
     )
@@ -1522,8 +1531,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { ok: true as const }
   })
 
-  orca.panels.handle('task.start', async ({ taskId, agent, model, effort, worktree }) => {
+  orca.panels.handle('task.start', async ({ taskId, agent, model, effort, worktree, runId }) => {
     everUsed = true
+    if (runId) await bindRun(runId)
     const modelFlags = model ? ` --model ${shellQuote(model)}` : ''
     const effortFlags = model && effort ? ` --effort ${shellQuote(effort)}` : ''
     const result = await cli<{ dispatchId: string; state: string }>(
@@ -1888,6 +1898,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     const snap = await snapshot(runId)
     const byId = new Map(snap.tasks.map((t) => [t.id, t]))
     if (!byId.has(taskId)) throw new BridgeError(`задача ${taskId} не в ране ${runId}`, 'cli_error')
+    // Привязка хелпера к рану: без неё task-update падает с run_required.
+    await bindRun(runId)
     // The step itself and everything downstream of it.
     const downstream = new Set<string>([taskId])
     let grew = true

@@ -375,7 +375,7 @@
       // ------------------------------------------------------------------ actions
       async function resolveGate(gate, resolution) {
         setBusy('гейт ' + short(gate.id, 'gate_').slice(0, 10) + '…')
-        try { await req('gate.resolve', { gateId: gate.id, resolution }); S.openGate = null; await loadState() }
+        try { await req('gate.resolve', { gateId: gate.id, resolution, runId: S.runId }); S.openGate = null; await loadState() }
         catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
       }
       async function startTask(task) {
@@ -383,7 +383,7 @@
         try {
           if (!S.worktree.trim()) throw new Error('выбери ворктри для запуска воркера')
           await req('task.start', {
-            taskId: task.id, agent: S.agent,
+            taskId: task.id, agent: S.agent, runId: S.runId,
             model: S.model.trim() === '' ? null : S.model.trim(),
             effort: S.effort.trim() === '' ? null : S.effort.trim(),
             worktree: S.worktree
@@ -783,8 +783,10 @@
           let drawer = ''
           if (S.openStep[t.id]) {
             const bits = []
-            if (e.status === 'failed') {
-              bits.push(`<div class="gate-btns"><button class="btn mini" data-act="retry-step:${esc(t.id)}">↻ Ретрай с этого шага</button></div>`)
+            // Ручной реран: проваленный шаг — «ретрай», завершённый — «перезапустить»
+            // (сброс шага и его хвоста; в coordinator-ране подхватит координатор).
+            if (e.status === 'failed' || e.status === 'succeeded') {
+              bits.push(`<div class="gate-btns"><button class="btn mini" data-act="retry-step:${esc(t.id)}" title="Сбросить шаг и всё, что от него зависит, в pending">${e.status === 'failed' ? '↻ Ретрай с этого шага' : '↻ Перезапустить шаг'}</button></div>`)
             }
             // Попытки шага (GitLab-style): каждый диспетчер — свёрнутая строка, клик разворачивает отчёт.
             const attempts = (S.snap?.workers || []).filter((w) => w.taskId === t.id)
@@ -817,7 +819,6 @@
                   bits.push(`<div class="rowline" style="align-items:flex-start"><pre style="flex:1">${esc(S.reports[at.dispatchId])}</pre></div>`)
                 }
               }
-              if (e.status === 'succeeded' && (t.fallback || []).length > 0) bits.push(`<div class="gate-btns"><button class="btn mini" data-act="retry-step:${esc(t.id)}">↻ С начала шага</button></div>`)
             } else {
               bits.push(`<div class="tiny muted">Ещё не запускался${(t.fallback || []).length > 0 ? ' · fallback: ' + esc(t.fallback.join(', ')) : ''}</div>`)
             }
