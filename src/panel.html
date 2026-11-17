@@ -558,6 +558,15 @@
                 await loadRuns(); await loadState()
               } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
             },
+            'brief-refresh': async () => {
+              setBusy('пересборка брифа')
+              try {
+                const r = await req('run.brief.refresh', { runId: S.runId }, 90000)
+                setNotice(null)
+                S.notice = `Бриф пересобран из текущих шаблона и карточек: ${esc(r.briefPath ?? '')} — осведоми координатора («перечитай .orca/coordinator-brief.md»)`
+                render()
+              } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+            },
             'instantiate': () => void instantiate(),
             'copy-project': () => void copyTemplate('project'),
             'copy-library': () => void copyTemplate('library'),
@@ -625,6 +634,7 @@
         const sel = `<div class="rowline" style="align-items:center;gap:6px">` +
           `<span class="chip" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective).slice(0, 48)}</span>` +
           `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
+          `<button class="btn ghost" data-act="brief-refresh" title="Пересобрать бриф координатора из текущего шаблона и карточек (рой, промты); координатора осведоми сам — «бриф обновлён, перечитай .orca/coordinator-brief.md»">↻ бриф</button>` +
           `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button></div>`
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
