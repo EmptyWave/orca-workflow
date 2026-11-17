@@ -202,8 +202,8 @@
         ok: ring(GREEN, `<path d="M5 8.3l2 2 4-4.6" stroke="${GREEN}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`),
         fail: ring(RED, `<path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="${RED}" stroke-width="1.6" stroke-linecap="round"/>`),
         pause: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.6" stroke="rgba(139,148,158,.6)" stroke-width="1.6"/><path d="M8 5.2V8l2.1 1.4" stroke="rgba(139,148,158,.6)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
-        play: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M5 3.5v9l7.5-4.5z" fill="var(--orca-accent)"/></svg>`,
-        dot: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.6" fill="var(--orca-muted-foreground)"/></svg>`,
+        play: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M5 3.5v9l7.5-4.5z" fill="#4493f8"/></svg>`,
+        dot: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="3.2" fill="#8b949e"/></svg>`,
         pencil: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M11.3 2.1l2.6 2.6-8.3 8.3-3.1.5.5-3.1zM10 3.4l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,
         refresh: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v2.7h-2.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`
       }
@@ -306,6 +306,14 @@
 
       // ------------------------------------------------------------------ loads
       let loadingSince = {}
+      // Эпоха своей загрузки: если воркер перезапускался (dev reload) — документ панели
+      // устарел целиком (JS + состояние в памяти); перезагружаемся, а не живём зомби.
+      let bootEpoch = null
+      function checkEpoch(epoch) {
+        if (epoch == null) return false
+        if (bootEpoch === null) { bootEpoch = epoch; return false }
+        return epoch !== bootEpoch
+      }
       // Взводим красную кнопку удаления: второй клик по ней же — подтверждение.
       // Автовозврат через 5 секунд, любой другой клик — тоже снимает взвод.
       function armDelete(key) {
@@ -313,13 +321,18 @@
         render()
         setTimeout(() => { if (S.armedDel === key) { S.armedDel = null; render() } }, 5000)
       }
-      // В одном ворктри может оказаться несколько ранов (перезапуски в то же имя):
-      // сессия показывает новейший по created_at, остальное — в Run history.
+      // В одном ворктри может оказаться несколько ранов (перезапуски в то же имя).
+      // Привязка: сначала ран с ЖИВЫМ координатором (его и ведёт человек в чате),
+      // внутри — по свежести активности (updated_at), без координатора — новейший по created.
       function pickSessionRun(runs) {
         if (!S.sessionPath) return null
         const own = (runs || []).filter((r) => r.worktreePath === S.sessionPath)
         if (own.length === 0) return null
-        return own.reduce((a, b) => ((b.createdAt ?? '') > (a.createdAt ?? '') ? b : a))
+        const cmp = (a, b) =>
+          ((b.hasCoordinator ? 1 : 0) - (a.hasCoordinator ? 1 : 0)) ||
+          (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '') ||
+          (b.createdAt ?? '').localeCompare(a.createdAt ?? '')
+        return own.slice().sort(cmp)[0]
       }
       async function loadRuns() {
         try {
@@ -331,6 +344,7 @@
             S.sessionPathUnknown = false
           } catch { S.sessionPathUnknown = true }
           const answer = await req('runs.list', undefined, 60000)
+          if (checkEpoch(answer.epoch)) { location.reload(); return }
           S.runs = answer.runs
           delete loadingSince['запуски']
           // Ран привязан к сессии: показываем рана ЭТОГО воркспейса, без выбора из списка.
@@ -830,11 +844,15 @@
           }
           for (const ex of extrasByStep.get(t.id) || []) {
             emitted.add(ex.id)
-            stepRows.push(`<div class="step childrow" title="задача координатора вне шаблона"><div class="st">${ICON.dot}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⟲ ${esc(ex.title)}</div></div></div>`)
+            // Задача координатора вне шаблона — обычная иконка статуса, не точка:
+            // рераны и follow-up'ы обязаны читаться как шаги (галочка/спиннер/часы).
+            const exStatus = (eff.get(ex.id) || { status: ex.status }).status
+            stepRows.push(`<div class="step childrow" title="задача координатора вне шаблона"><div class="st">${statusIcon(exStatus)}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⟲ ${esc(ex.title)}</div></div></div>`)
           }
         }
         for (const ex of strayExtras) {
-          stepRows.push(`<div class="step" title="задача координатора вне шаблона"><div class="st">${ICON.dot}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⚙ ${esc(ex.title)}</div><div class="meta">вне шаблона (координатор)</div></div></div>`)
+          const exStatus = (eff.get(ex.id) || { status: ex.status }).status
+          stepRows.push(`<div class="step" title="задача координатора вне шаблона"><div class="st">${statusIcon(exStatus)}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⚙ ${esc(ex.title)}</div><div class="meta">вне шаблона (координатор)</div></div></div>`)
         }
         const steps = stepRows.join('')
 

@@ -81,6 +81,15 @@ export default function activate(orca: OrcaWorkerApi): void {
   activeBridge = bridge
   let everUsed = false
   let refreshing = false
+  // Эпоха панели: растёт при каждом перезапуске воркера (dev reload, вкл/выкл плагина).
+  // Открытая панель запоминает эпоху своей загрузки и при несовпадении перезагружает
+  // документ сама — иначе после dev-reload живёт «зомби» со старым JS и старым состоянием.
+  let panelEpoch = Date.now()
+  void orca.storage.get('panel.epoch').then((stored) => {
+    const next = (typeof stored === 'number' ? stored : 0) + 1
+    panelEpoch = next
+    void orca.storage.set('panel.epoch', next).catch(() => undefined)
+  }).catch(() => undefined)
   let lastSnapshot = ''
   stopTimer = null
 
@@ -114,6 +123,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     // Несколько ранов могут делить один ворктри (перезапуски в одно имя): панель привязывается
     // к новейшему. created_at в строках CLI нет — одним запросом из orchestration.db.
     const runCreatedAt = new Map<string, string>()
+    const runUpdatedAt = new Map<string, string>()
     // Живые сессии ранов: координаторский чат (handle среди живых терминалов Орки) и
     // работающие воркеры — история помечает активные, чтобы человек не снёс ран под агентом.
     // Handle в базе живёт и после смерти чата, поэтому сверяем со списком терминалов.
@@ -123,11 +133,14 @@ export default function activate(orca: OrcaWorkerApi): void {
     try {
       const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
       const created = await bridge.run(
-        `sqlite3 ${shellQuote(db)} "SELECT id, created_at FROM runs;"`
+        `sqlite3 ${shellQuote(db)} "SELECT id, created_at, updated_at FROM runs;"`
       )
       for (const line of created.split('\n')) {
-        const bar = line.indexOf('|')
-        if (bar > 0) runCreatedAt.set(line.slice(0, bar).trim(), line.slice(bar + 1).trim())
+        const parts = line.split('|')
+        if (parts.length >= 2) {
+          runCreatedAt.set(parts[0].trim(), parts[1].trim())
+          if (parts.length >= 3) runUpdatedAt.set(parts[0].trim(), parts[2].trim())
+        }
       }
       const coords = await bridge.run(
         `sqlite3 ${shellQuote(db)} "SELECT id, coordinator_handle, coordinator_orca_session_id, coordinator_orca_session_id_generation, consumer_generation FROM runs;"`
@@ -193,6 +206,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         projectPath,
         worktreePath,
         createdAt: runCreatedAt.get(runId) ?? null,
+        updatedAt: runUpdatedAt.get(runId) ?? null,
         hasCoordinator:
           (runSessionLive.get(runId) ?? false) ||
           (handle !== undefined && (liveTerminals === null || liveTerminals.has(handle))),
@@ -1554,9 +1568,9 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('runs.list', async () => {
     everUsed = true
     try {
-      return { runs: await listRuns(), error: null }
+      return { runs: await listRuns(), error: null, epoch: panelEpoch }
     } catch (error) {
-      return { runs: [], error: message(error) }
+      return { runs: [], error: message(error), epoch: panelEpoch }
     }
   })
 

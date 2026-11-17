@@ -57,8 +57,10 @@ export type WfRun = {
   /** The run's own worktree — the session the run is bound to; null for legacy runs. */
   worktreePath: string | null
   /** created_at из orchestration.db ('YYYY-MM-DD HH:MM:SS'), null при недоступной базе.
-   *  Несколько ранов могут делить один ворктри — панель привязывается к новейшему. */
+   *  Несколько ранов могут делить один ворктри — панель привязывается к живому. */
   createdAt: string | null
+  /** updated_at рана: свежесть активности (задачи/гейты менялись) — тай-брейк привязки. */
+  updatedAt: string | null
   /** У рана есть живая сессия координатора (handle или привязанный orca-сторк): удаление
    *  оставит агента без рана — в истории помечается и предупреждает. */
   hasCoordinator: boolean
