@@ -543,7 +543,6 @@
             dismiss: () => { S.notice = null; render() },
             reload: () => location.reload(),
             'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
-            'go-history': () => { S.tab = 'history'; S.history = null; render(); void loadHistory() },
             'toggle-step': () => { if (S.openStep[arg]) delete S.openStep[arg]; else S.openStep[arg] = true; render() },
             'load-report': async () => {
               const task = (S.snap?.tasks || []).find((x) => x.id === arg)
@@ -705,11 +704,6 @@
           ? 'Не удалось определить воркспейс этой сессии.<br/><span class="tiny muted">нажми «Обновить» — привязка рана восстановится</span><br/><button class="btn mini" data-act="refresh" style="margin-top:8px">${ICON.refresh} Обновить</button>'
           : 'В этой сессии нет рана.<br/><span class="tiny muted">ран живёт в воркспейсе, созданном при «Поднять Run» — открой его, чтобы следить</span><br/><button class="btn mini" data-act="go-templates" style="margin-top:8px">Поднять Run из шаблона</button>'}</div>`
         const snap = S.snap
-        // Не молчим, если в воркспейсе несколько ранов: старые видно в Run history.
-        const siblings = (S.runs || []).filter((r) => r.worktreePath === S.sessionPath).length - 1
-        const siblingNote = siblings > 0
-          ? `<div class="tiny muted" style="margin:4px 0 0">в этом воркспейсе ещё ${siblings} ${siblings === 1 ? 'ран' : 'ран(а)'} — <a data-act="go-history" style="color:var(--orca-accent);cursor:pointer">Run history</a></div>`
-          : ''
         const sel = `<div class="rowline" style="align-items:center;gap:6px">` +
           `<span class="chip" style="white-space:normal;line-height:1.35" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective)}</span>` +
           `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
@@ -718,10 +712,9 @@
             ? `<button class="btn ghost" disabled title="У рана работают воркеры — сначала останови их">✕</button>`
             : S.armedDel === `run:${sessionRun.runId}`
               ? `<button class="btn mini" data-act="delete-run" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="${sessionRun.hasCoordinator ? 'Внимание: к рану привязана сессия координатора — после удаления она останется без рана. ' : ''}Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">точно удалить?</button>`
-              : `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`) + '</div>' + siblingNote
+              : `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`) + '</div>'
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
-        const runTitle = snap.run ? `<div class="tiny muted" style="margin:6px 0 8px">${esc(snap.run.objective)}</div>` : ''
         const counts = (snap.tasks || []).reduce((acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc }, {})
         const done = counts.succeeded || 0, total = (snap.tasks || []).length
         let pilotBox = ''
@@ -979,7 +972,7 @@
         }
 
         const jobCard = S.job && S.job.status !== 'done' ? `<div class="callout ${S.job.status === 'failed' ? 'danger' : ''}">${esc(S.job.error || 'поднятие рана: ' + jobStepText(S.job.step))}</div>` : ''
-        return sel + runTitle + pilotBox + errorCallout + jobCard +
+        return sel + pilotBox + errorCallout + jobCard +
           ((snap.tasks || []).length > 0 ? `<div class="card"><h2>Шаги</h2><div class="steps">${steps}</div></div>` : `<div class="empty">В этом ране нет шагов.</div>`)
       }
 
