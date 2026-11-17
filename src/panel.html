@@ -300,8 +300,7 @@
         status === 'succeeded' ? ICON.ok
         : status === 'failed' ? ICON.fail
         : status === 'dispatched' ? `<div class="spin" title="работает"></div>`
-        : status === 'ready' ? ICON.play
-        : status === 'queued' || status === 'pending' || status === 'blocked' ? ICON.pause
+        : status === 'queued' || status === 'pending' || status === 'blocked' || status === 'ready' ? ICON.pause
         : ICON.dot
 
       // ------------------------------------------------------------------ loads
