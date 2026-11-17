@@ -384,6 +384,29 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
     const firstChild = units.find((u) => u.stepId === step.id && !u.optional)
     if (firstChild) firstChild.gate = step.gate
   }
+
+  // Gate on a workered step confirms ITS RESULT: the template declares the gate next to the
+  // step it is about, and the DAG holds the first follower's start until the human answers —
+  // the author never moves the gate by hand. Follower = a unit depending on the step (or its
+  // closers), falling back to the next step's entry in template order (parentless blocks can
+  // carry empty deps). Same limitation as barrier gates: with several followers the gate
+  // holds the first one.
+  for (const step of steps) {
+    if (!step.gate || !hasParentUnit.get(step.id)) continue
+    const mine = new Set<string>([step.id, ...(closersOf.get(step.id) ?? [])])
+    let follower = topoUnits(units).find((u) => u.stepId !== step.id && u.deps.some((d) => mine.has(d)))
+    if (!follower) {
+      const idx = steps.findIndex((s) => s.id === step.id)
+      const next = idx >= 0 ? steps[idx + 1] : undefined
+      if (next) follower = units.find((u) => u.id === next.id) ?? units.find((u) => u.stepId === next.id && !u.optional)
+    }
+    if (!follower) {
+      throw new Error(`гейт шага «${step.id}» подтверждает результат и держит следующий шаг — после «${step.id}» ничего нет`)
+    }
+    const self = units.find((u) => u.id === step.id)
+    if (self) self.gate = null
+    follower.gate = follower.gate ?? step.gate
+  }
   return { units, blockWatches }
 }
 

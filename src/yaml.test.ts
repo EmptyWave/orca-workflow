@@ -150,6 +150,44 @@ steps:
   )
 })
 
+test('гейт на шаге подтверждает результат: держит первый следующий за ним юнит', () => {
+  const tpl = parseTemplate('g', parseYaml(`
+id: g
+title: G
+steps:
+  - id: plan
+    worker: coder
+  - id: review
+    worker: reviewer
+    deps: [plan]
+    gate: { question: 'Подтверждаем?', options: [approve, request-changes] }
+    sub:
+      - { id: arch, worker: reviewer, phase: parallel }
+  - id: dev
+    worker: coder
+    deps: [review]
+`))
+  const { units } = materialize(tpl.steps)
+  const byId = new Map(units.map((u) => [u.id, u]))
+  assert.equal(byId.get('review')?.gate ?? null, null, 'сам шаг-владелец гейт больше не держит')
+  assert.equal(byId.get('dev')?.gate?.question ?? '', 'Подтверждаем?', 'гейт держит старт следующего шага')
+})
+
+test('гейт на последнем шаге отклоняется — ему нечего держать', () => {
+  const tpl = parseTemplate('g2', parseYaml(`
+id: g2
+title: G2
+steps:
+  - id: work
+    worker: coder
+  - id: commit
+    worker: committer
+    deps: [work]
+    gate: { question: 'Коммитим?', options: [approve] }
+`))
+  assert.throws(() => materialize(tpl.steps), /ничего нет/, 'гейт подтверждает результат — после последнего шага флоу нет')
+})
+
 test('rechecksDue: перепроверка после доработки — отклонившие и падавшие, не одобрившие', () => {
   const reviews = {
     r1: { devTaskId: 'dev' },

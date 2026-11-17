@@ -11,7 +11,7 @@ steps:
     worker: planner
     sub:
       - { id: research, worker: researcher, optional: true }
-  - { id: review, worker: reviewer, on_reject: { goto: plan, max_rounds: 2 } }
+  - { id: review, worker: reviewer, on_reject: { goto: plan, max_rounds: 2 }, gate: { question: 'Пускать dev?', options: [approve, request-changes] } }
   - id: tests
     sub:
       - { id: test-api, worker: tester }
@@ -19,7 +19,6 @@ steps:
   - id: commit
     worker: committer
     deps: [tests]
-    gate: { question: 'Коммитить?', options: [approve, request-changes] }
 `
 
 const b64 = (s: string): string => {

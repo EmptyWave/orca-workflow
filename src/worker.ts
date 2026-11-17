@@ -716,7 +716,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           step.model && step.effort ? `effort ${step.effort}` : null,
           step.parallel ? `ОДНОВРЕМЕННО не более ${step.parallel}` : null,
           (step.fallback ?? []).length > 0 ? `fallback: ${step.fallback.join(' → ')}` : null,
-          step.gate ? `ГЕЙТ перед шагом: ${step.gate.question} — стоп для человека` : null,
+          step.gate ? `ГЕЙТ ПОСЛЕ этого шага (подтверждает его результат): ${step.gate.question} — стоп для человека, ответ двигает флоу дальше` : null,
           step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
         ].filter(Boolean)
         const phaseText = (phase: string | undefined, optional: boolean, stepId: string, hasWorker: boolean): string => {
