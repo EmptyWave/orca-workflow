@@ -96,6 +96,10 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
     if (command.includes('dispatch_contexts')) {
       return opts.dispatchTimes ?? ''
     }
+    if (command.includes('FROM runs;')) {
+      // listRuns тянет created_at ранов одним запросом — новейший ран ворктри побеждает
+      return 'run_1|2026-11-17 10:00:00\nrun_2|2026-11-17 11:00:00'
+    }
     if (command.includes('gate-resolve') || command.includes('task-update')) {
       return '{"ok":true,"result":{}}'
     }
@@ -297,7 +301,7 @@ test('попытки шага идут в порядке создания, а н
 test('runs.list и state.get читают оркестрацию через мост', () =>
   withWorker(async (worker) => {
     const runs = await worker.request('runs.list')
-    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель', projectPath: null, worktreePath: null }])
+    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель', projectPath: null, worktreePath: null, createdAt: '2026-11-17 10:00:00' }])
     assert.equal(runs.error, null)
 
     const state = await worker.request('state.get', { runId: 'run_1' })

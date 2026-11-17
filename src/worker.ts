@@ -111,6 +111,21 @@ export default function activate(orca: OrcaWorkerApi): void {
     const rows: Record<string, unknown>[] = Array.isArray(result)
       ? (result as Record<string, unknown>[])
       : asArray<Record<string, unknown>>(result.runs)
+    // Несколько ранов могут делить один ворктри (перезапуски в одно имя): панель привязывается
+    // к новейшему. created_at в строках CLI нет — одним запросом из orchestration.db.
+    const runCreatedAt = new Map<string, string>()
+    try {
+      const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
+      const out = await bridge.run(
+        `sqlite3 ${shellQuote(db)} "SELECT id, created_at FROM runs;"`
+      )
+      for (const line of out.split('\n')) {
+        const bar = line.indexOf('|')
+        if (bar > 0) runCreatedAt.set(line.slice(0, bar).trim(), line.slice(bar + 1).trim())
+      }
+    } catch {
+      // без дат панель возьмёт первый подходящий ран ворктри, как раньше
+    }
     const out: WfRun[] = []
     for (const row of rows) {
       const runId = String(field(row, 'runId', 'id') ?? '')
@@ -139,7 +154,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       } catch {
         // metadata is an extra; the run still lists without a project
       }
-      out.push({ runId, objective: String(field(row, 'objective') ?? ''), projectPath, worktreePath })
+      out.push({ runId, objective: String(field(row, 'objective') ?? ''), projectPath, worktreePath, createdAt: runCreatedAt.get(runId) ?? null })
     }
     return out
   }
@@ -150,7 +165,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (!runId) {
       return { at, run: null, tasks: [], gates: [], workers: [], error: null, pilot: null }
     }
-    const run = runs.find((r) => r.runId === runId) ?? (runId ? { runId, objective: '', projectPath: null } : null)
+    const run = runs.find((r) => r.runId === runId) ?? (runId ? { runId, objective: '', projectPath: null, worktreePath: null, createdAt: null } : null)
     const [taskRows, readyRows, gateRows, workerRows] = await Promise.all([
       cli<{ tasks?: unknown }>(`orca orchestration task-list --run ${shellQuote(runId)} --json`),
       cli<{ tasks?: unknown }>(`orca orchestration task-list --run ${shellQuote(runId)} --ready --brief --json`),
@@ -1383,8 +1398,29 @@ export default function activate(orca: OrcaWorkerApi): void {
         // launch the coordinator session THERE — the main checkout stays untouched.
         try {
           const baseFlag = input.baseBranch ? ` --base-branch ${shellQuote(input.baseBranch)}` : ''
+          // Имя ворктри должно быть свободным: второй ран в тот же ворктри молча подсаживается
+          // на чужую ветку и перебивает привязку панели. Занято — суффиксуем -2, -3, …
+          const wantedName = input.worktreeName
+          let worktreeName = wantedName
+          try {
+            const taken = await bridge.json<{ result?: { worktrees?: Array<{ displayName?: string; path?: string }> } }>('orca worktree list --json')
+            const names = new Set<string>()
+            for (const w of taken.result?.worktrees ?? []) {
+              if (w.displayName) names.add(w.displayName)
+              const tail = (w.path ?? '').split('/').pop()
+              if (tail) names.add(tail)
+            }
+            if (names.has(worktreeName)) {
+              let n = 2
+              while (names.has(`${worktreeName}-${n}`)) n++
+              worktreeName = `${worktreeName}-${n}`
+            }
+          } catch {
+            // списка ворктри нет — создаём с именем как есть; Orca сам скажет, если занято
+          }
+          if (worktreeName !== wantedName) input.worktreeName = worktreeName
           await bridge.run(
-            `orca worktree create --repo path:${shellQuote(input.projectPath ?? '.')} --name ${shellQuote(input.worktreeName)}${baseFlag} --json || true`,
+            `orca worktree create --repo path:${shellQuote(input.projectPath ?? '.')} --name ${shellQuote(worktreeName)}${baseFlag} --json || true`,
             90_000
           )
           const list = await orca.host.call<{ workspaces: Array<{ id: string; name: string; path: string }> }>('workspace.list', undefined)
@@ -2045,9 +2081,11 @@ export default function activate(orca: OrcaWorkerApi): void {
         sleep(3_000).then(() => null)
       ])
       if (!context) return { path: null }
-      const list = await bridge.json<{ result?: { workspaces?: Array<{ path: string; name: string; branch: string | null }> } }>('orca worktree list --json')
-      const ws = (list.result?.workspaces ?? []).find((w) => w.name === context.displayName)
-        ?? (list.result?.workspaces ?? []).find((w) => w.branch === context.branch)
+      // Список воркспейсов берём у хоста, не через мост: мост бывает занят живым координатором,
+      // и привязка рана к сессии не должна зависеть от очереди команд терминала.
+      const list = await orca.host.call<{ workspaces?: Array<{ path?: string; name?: string; displayName?: string; branch?: string | null }> }>('workspace.list', undefined)
+      const ws = (list.workspaces ?? []).find((w) => (w.displayName ?? w.name) === context.displayName)
+        ?? (list.workspaces ?? []).find((w) => w.branch != null && w.branch === context.branch)
       return { path: ws?.path ?? null }
     } catch {
       return { path: null }

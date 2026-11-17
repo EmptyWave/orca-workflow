@@ -56,6 +56,9 @@ export type WfRun = {
   projectPath: string | null
   /** The run's own worktree — the session the run is bound to; null for legacy runs. */
   worktreePath: string | null
+  /** created_at из orchestration.db ('YYYY-MM-DD HH:MM:SS'), null при недоступной базе.
+   *  Несколько ранов могут делить один ворктри — панель привязывается к новейшему. */
+  createdAt: string | null
 }
 
 export type WfSnapshot = {

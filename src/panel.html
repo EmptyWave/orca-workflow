@@ -243,7 +243,7 @@
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null, openAttempt: {}, openGate: null, gateAutoOpened: null, planFiles: undefined, sessionPath: null
+        cfg: null, bridge: null, openAttempt: {}, openGate: null, gateAutoOpened: null, planFiles: undefined, sessionPath: null, sessionPathUnknown: false
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
@@ -304,16 +304,28 @@
 
       // ------------------------------------------------------------------ loads
       let loadingSince = {}
+      // В одном ворктри может оказаться несколько ранов (перезапуски в то же имя):
+      // сессия показывает новейший по created_at, остальное — в Run history.
+      function pickSessionRun(runs) {
+        if (!S.sessionPath) return null
+        const own = (runs || []).filter((r) => r.worktreePath === S.sessionPath)
+        if (own.length === 0) return null
+        return own.reduce((a, b) => ((b.createdAt ?? '') > (a.createdAt ?? '') ? b : a))
+      }
       async function loadRuns() {
         try {
-          void req('session.workspace', undefined, 20000)
-            .then((r) => { S.sessionPath = r.path ?? null })
-            .catch(() => { S.sessionPath = null })
+          // Воркспейс сессии ждём до бинда (не fire-and-forget): без пути ран не привяжется
+          // и до следующего опроса панель соврёт «нет рана». Сбой запроса прошлый путь не рвёт.
+          try {
+            const r = await req('session.workspace', undefined, 20000)
+            S.sessionPath = r.path ?? null
+            S.sessionPathUnknown = false
+          } catch { S.sessionPathUnknown = true }
           const answer = await req('runs.list', undefined, 60000)
           S.runs = answer.runs
           delete loadingSince['запуски']
           // Ран привязан к сессии: показываем рана ЭТОГО воркспейса, без выбора из списка.
-          const sessionRun = (S.sessionPath ? answer.runs.find((r) => r.worktreePath === S.sessionPath) : null) ?? null
+          const sessionRun = pickSessionRun(answer.runs)
           const wantedId = sessionRun?.runId ?? null
           if (S.runId !== wantedId) { S.runId = wantedId; S.snap = null; S.planFiles = undefined; S.openGate = null }
         } catch (e) { if (!S.runs || S.runs.length === 0) S.runs = []; setNotice('Запуски не читаются: ' + esc(e.message || e)) }
@@ -524,6 +536,7 @@
             dismiss: () => { S.notice = null; render() },
             reload: () => location.reload(),
             'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
+            'go-history': () => { S.tab = 'history'; S.history = null; render(); void loadHistory() },
             'toggle-step': () => { if (S.openStep[arg]) delete S.openStep[arg]; else S.openStep[arg] = true; render() },
             'load-report': async () => {
               const task = (S.snap?.tasks || []).find((x) => x.id === arg)
@@ -667,14 +680,21 @@
       }
       function viewRuns() {
         if (!S.runs) return stuck('запуски')
-        const sessionRun = S.runs.find((r) => r.worktreePath === S.sessionPath) ?? null
-        if (!sessionRun) return `<div class="empty">В этой сессии нет рана.<br/><span class="tiny muted">ран живёт в воркспейсе, созданном при «Поднять Run» — открой его, чтобы следить</span><br/><button class="btn mini" data-act="go-templates" style="margin-top:8px">Поднять Run из шаблона</button></div>`
+        const sessionRun = pickSessionRun(S.runs)
+        if (!sessionRun) return `<div class="empty">${S.sessionPathUnknown
+          ? 'Не удалось определить воркспейс этой сессии.<br/><span class="tiny muted">нажми «Обновить» — привязка рана восстановится</span><br/><button class="btn mini" data-act="refresh" style="margin-top:8px">${ICON.refresh} Обновить</button>'
+          : 'В этой сессии нет рана.<br/><span class="tiny muted">ран живёт в воркспейсе, созданном при «Поднять Run» — открой его, чтобы следить</span><br/><button class="btn mini" data-act="go-templates" style="margin-top:8px">Поднять Run из шаблона</button>'}</div>`
         const snap = S.snap
+        // Не молчим, если в воркспейсе несколько ранов: старые видно в Run history.
+        const siblings = (S.runs || []).filter((r) => r.worktreePath === S.sessionPath).length - 1
+        const siblingNote = siblings > 0
+          ? `<div class="tiny muted" style="margin:4px 0 0">в этом воркспейсе ещё ${siblings} ${siblings === 1 ? 'ран' : 'ран(а)'} — <a data-act="go-history" style="color:var(--orca-accent);cursor:pointer">Run history</a></div>`
+          : ''
         const sel = `<div class="rowline" style="align-items:center;gap:6px">` +
-          `<span class="chip" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective).slice(0, 60)}</span>` +
+          `<span class="chip" style="white-space:normal;line-height:1.35" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective)}</span>` +
           `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
           `<button class="btn ghost" data-act="brief-refresh" title="Пересобрать бриф координатора из текущего шаблона и карточек (рой, промты); координатора осведоми сам — «бриф обновлён, перечитай .orca/coordinator-brief.md»">↻ бриф</button>` +
-          `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button></div>`
+          `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button></div>` + siblingNote
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
         const runTitle = snap.run ? `<div class="tiny muted" style="margin:6px 0 8px">${esc(snap.run.objective)}</div>` : ''
@@ -807,9 +827,14 @@
           const pending = g.status === 'pending'
           const lock = pending ? LOCK_CLOSED : LOCK_OPEN
           const state = pending ? 'ждёт ответа' : `решён${g.resolution ? ': ' + g.resolution : ''}`
+          // Воркер отдаёт files строками-путями; старые ответы могли нести {rel} — едим оба.
           const planFiles = pending && S.planFiles && S.planFiles.change
             ? `<div class="tiny" style="margin-top:3px;color:var(--orca-muted-foreground)">план: openspec/changes/${esc(S.planFiles.change)}/ — ` +
-              S.planFiles.files.map((f) => `<a data-act="open-plan-file:${esc(f.rel)}" title="${esc(f.rel)}" style="color:var(--orca-accent);cursor:pointer">${esc(f.rel.split('/').pop())}</a>`).join(' · ') +
+              (S.planFiles.files || []).map((f) => {
+                const rel = typeof f === 'string' ? f : String(f?.rel ?? '')
+                if (rel === '') return ''
+                return `<a data-act="open-plan-file:${esc(rel)}" title="${esc(rel)}" style="color:var(--orca-accent);cursor:pointer">${esc(rel.split('/').pop())}</a>`
+              }).filter(Boolean).join(' · ') +
               `</div>`
             : ''
           const btns = pending && S.openGate === g.id
