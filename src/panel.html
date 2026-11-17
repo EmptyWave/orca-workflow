@@ -748,8 +748,14 @@
         function stepRow(t, child) {
           const skipped = isSkipped(t, maxPassedOrder)
           const e = eff.get(t.id) || { status: t.status }
+          // Ревью-шаг: verdict последней попытки важнее статуса задачи — succeeded-воркер,
+          // сказавший request-changes, это ОТКЛОНЕНИЕ, а не «готово». Иначе строка зелёная
+          // при красном кресте попытки — и непонятно, кто врёт.
+          const attempts = (S.snap?.workers || []).filter((w) => w.taskId === t.id)
+          const lastVerdict = attempts.length > 0 ? (attempts[attempts.length - 1].verdict ?? null) : null
+          const rejected = t.expectsVerdict && e.status === 'succeeded' && lastVerdict === 'request-changes'
           const meta = [
-            t.agent, skipped ? 'ПРОПУЩЕН' : STATUS_TEXT[e.status] ?? e.status,
+            t.agent, skipped ? 'ПРОПУЩЕН' : rejected ? 'отклонено (request-changes)' : STATUS_TEXT[e.status] ?? e.status,
             t.order == null ? 'вне шаблона (создана координатором)' : null,
             (t.deps || []).length > 0 ? 'после: ' + t.deps.map((d) => short(d, 'task_')).join(', ') : null,
             t.dispatchId ? 'воркер ' + short(t.dispatchId, 'ctx_') : null
@@ -826,7 +832,7 @@
             ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
             : ''
           return `<div class="step${skipped ? ' skipped' : ''}${nest}" data-act="toggle-step:${esc(t.id)}">
-            <div class="st">${skippedIcon(t, maxPassedOrder) || statusIcon(e.status)}</div>
+            <div class="st">${skippedIcon(t, maxPassedOrder) || (rejected ? ICON.fail : statusIcon(e.status))}</div>
             <div class="ag">${agentIcon(t.agent)}</div>
             <div class="body">
               <div class="title">${branch}${esc(t.title || t.id)}${startBtn}${chev}</div>
