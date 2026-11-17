@@ -234,7 +234,7 @@
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null, openAttempt: {}, openGate: null, planFiles: undefined, sessionPath: null
+        cfg: null, bridge: null, openAttempt: {}, openGate: null, gateAutoOpened: null, planFiles: undefined, sessionPath: null
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
@@ -660,6 +660,14 @@
         // whenever statuses flip); tasks without a stamp keep the arrival order.
         const orderedTasks = [...(snap.tasks || [])].sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
         const eff = effectiveStatuses(orderedTasks)
+        // Флоу достиг гейта: удерживаемая задача стоит в blocked — значит ответ нужен
+        // прямо сейчас. Разворачиваем кнопки один раз автоматически; свернул руками —
+        // уважаем, по умолчанию (гейт где-то впереди) строка свёрнута.
+        const reachedGate = (snap.gates || []).find((g) => g.status === 'pending' && eff.get(g.taskId)?.status === 'blocked')
+        if (reachedGate && S.gateAutoOpened !== reachedGate.id) {
+          S.gateAutoOpened = reachedGate.id
+          if (S.openGate === null) S.openGate = reachedGate.id
+        }
         // Group sub-step tasks under their parent (or under a block header for pure blocks).
         const kidsOf = new Map()
         for (const t of orderedTasks) {
