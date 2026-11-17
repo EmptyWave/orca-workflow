@@ -1466,8 +1466,10 @@ export default function activate(orca: OrcaWorkerApi): void {
         // launch the coordinator session THERE — the main checkout stays untouched.
         try {
           const baseFlag = input.baseBranch ? ` --base-branch ${shellQuote(input.baseBranch)}` : ''
-          // Имя ворктри должно быть свободным: второй ран в тот же ворктри молча подсаживается
-          // на чужую ветку и перебивает привязку панели. Занято — суффиксуем -2, -3, …
+          // Имя ворктри занято ЖИВЫМ раном — суффиксуем -2, -3, … (два рана в одном
+          // ворктри перебивают привязку панели). Но если ранов на нём нет — имя даём
+          // использовать повторно: продолжение работы в том же ворктри (план/openspec
+          // остаются на месте) важнее формальной уникальности имени.
           const wantedName = input.worktreeName
           let worktreeName = wantedName
           try {
@@ -1479,9 +1481,12 @@ export default function activate(orca: OrcaWorkerApi): void {
               if (tail) names.add(tail)
             }
             if (names.has(worktreeName)) {
-              let n = 2
-              while (names.has(`${worktreeName}-${n}`)) n++
-              worktreeName = `${worktreeName}-${n}`
+              const busy = (await listRuns()).some((r) => (r.worktreePath ?? '').endsWith(`/${worktreeName}`))
+              if (busy) {
+                let n = 2
+                while (names.has(`${worktreeName}-${n}`)) n++
+                worktreeName = `${worktreeName}-${n}`
+              }
             }
           } catch {
             // списка ворктри нет — создаём с именем как есть; Orca сам скажет, если занято
