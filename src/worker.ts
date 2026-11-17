@@ -154,7 +154,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const [taskRows, readyRows, gateRows, workerRows] = await Promise.all([
       cli<{ tasks?: unknown }>(`orca orchestration task-list --run ${shellQuote(runId)} --json`),
       cli<{ tasks?: unknown }>(`orca orchestration task-list --run ${shellQuote(runId)} --ready --brief --json`),
-      cli<{ gates?: unknown }>(`orca orchestration gate-list --run ${shellQuote(runId)} --json`),
+      cli<{ gates?: unknown }>(`orca orchestration gate-list --run ${shellQuote(runId)} --full --json`),
       cli<{ workers?: unknown; dispatches?: unknown }>(`orca orchestration worker-list --run ${shellQuote(runId)} --json`)
     ])
     const readyIds = new Set(
@@ -221,14 +221,16 @@ export default function activate(orca: OrcaWorkerApi): void {
       if (live) task.agent = live
     }
     const gates: WfGate[] = asArray<Record<string, unknown>>(gateRows.gates).map((row) => {
-      const taskId = String(field(row, 'taskId') ?? '')
+      const taskId = String(field(row, 'taskId', 'task_id') ?? '')
+      const rawResolution = field(row, 'resolution')
       return {
         id: String(field(row, 'id') ?? ''),
         taskId,
         taskTitle: tasks.find((t) => t.id === taskId)?.title ?? taskId,
         question: String(field(row, 'question') ?? ''),
         options: stringList(field(row, 'options')),
-        status: String(field(row, 'status') ?? 'pending') === 'resolved' ? 'resolved' : 'pending'
+        status: String(field(row, 'status') ?? 'pending') === 'resolved' ? 'resolved' : 'pending',
+        resolution: typeof rawResolution === 'string' && rawResolution !== '' ? rawResolution : null
       }
     })
     const workersRaw = asArray<Record<string, unknown>>(workerRows.workers ?? workerRows.dispatches)

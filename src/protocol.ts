@@ -32,6 +32,8 @@ export type WfGate = {
   question: string
   options: string[]
   status: 'pending' | 'resolved'
+  /** The picked option once resolved; null while pending. */
+  resolution: string | null
 }
 
 export type WfWorker = {

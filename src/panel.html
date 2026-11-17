@@ -112,6 +112,23 @@
         display: flex; gap: 8px; align-items: center; padding: 5px 6px 3px; margin-top: 4px;
         color: var(--orca-muted-foreground); font-size: 11.5px; letter-spacing: .02em;
       }
+      /* Гейт на нити флоу: строка сразу под шагом, замок сидит прямо на пунктире,
+         состояние — текстом; клик разворачивает кнопки ответа. */
+      .gaterow { position: relative; display: flex; gap: 8px; padding: 4px 6px 4px 34px; cursor: pointer; border-radius: 6px; }
+      .gaterow:hover { background: var(--orca-muted); }
+      .gaterow::before {
+        content: ''; position: absolute; left: 12px; top: -3px; bottom: -3px;
+        border-left: 2px dashed rgba(139, 148, 158, .45); z-index: 1;
+      }
+      .gaterow .lock {
+        position: absolute; left: 4.5px; top: 50%; transform: translateY(-50%); z-index: 2;
+        width: 15px; height: 15px; display: flex; align-items: center; justify-content: center;
+        background: var(--orca-background); border-radius: 50%;
+      }
+      .gaterow .gq { font-size: 11.5px; }
+      .gaterow .gs { font-size: 11px; color: var(--orca-muted-foreground); }
+      .gaterow.pending .gs { color: var(--orca-warning, #d29922); font-weight: 600; }
+      .gaterow .gate-btns { margin-top: 5px; }
       .step.sub { padding-left: 28px; }
       .step.sub .title { font-weight: 400; color: var(--orca-muted-foreground); }
       .step .start { margin: 6px 0 2px; display: flex; flex-direction: column; gap: 6px; }
@@ -142,7 +159,6 @@
       }
       .step.skipped .body .title, .step.skipped .body .meta { opacity: .45; }
       /* ---- gates ---- */
-      .gate-q { font-weight: 600; margin: 0 0 2px; }
       .gate-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
       .gate-btns .btn.primary { background: #238636; border-color: #238636; }
       .gate-btns .btn.danger { background: var(--orca-destructive); border-color: var(--orca-destructive); color: var(--orca-destructive-foreground, #fff); }
@@ -171,7 +187,6 @@
       const ICON = {
         ok: ring(GREEN, `<path d="M5 8.3l2 2 4-4.6" stroke="${GREEN}" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>`),
         fail: ring(RED, `<path d="M5.6 5.6l4.8 4.8M10.4 5.6l-4.8 4.8" stroke="${RED}" stroke-width="1.6" stroke-linecap="round"/>`),
-        flag: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M4 14.5V2m0 .8c1.7-1.1 3.4-1.1 5.1-.4 1.7.7 3.4.7 4.9-.4v6.4c-1.5 1.1-3.2 1.1-4.9.4C7.4 8.1 5.7 8.1 4 9.2" stroke="var(--orca-warning, #d29922)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
         pause: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.6" stroke="rgba(139,148,158,.6)" stroke-width="1.6"/><path d="M8 5.2V8l2.1 1.4" stroke="rgba(139,148,158,.6)" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>`,
         play: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><path d="M5 3.5v9l7.5-4.5z" fill="var(--orca-accent)"/></svg>`,
         dot: `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="2.6" fill="var(--orca-muted-foreground)"/></svg>`,
@@ -209,7 +224,7 @@
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null, openAttempt: {}, sessionPath: null
+        cfg: null, bridge: null, openAttempt: {}, openGate: null, sessionPath: null
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
@@ -244,28 +259,15 @@
       }
 
       // ------------------------------------------------------------------ effective status
-      function effectiveStatuses(tasks, gates) {
-        const gateOnTask = new Map(gates.filter((g) => g.status === 'pending').map((g) => [g.taskId, g]))
-        const byId = new Map(tasks.map((t) => [t.id, t]))
+      // Статусы честные, без распространения гейтов по deps: гейтнутый шаг сам приходит
+      // со статусом 'blocked' (часы, «ждёт гейт»), а сам гейт показан отдельной строкой
+      // на нити флоу — замок и текст состояния сразу под шагом.
+      function effectiveStatuses(tasks) {
         const memo = new Map()
-        const calc = (id, depth = 0) => {
-          if (memo.has(id)) return memo.get(id)
-          if (depth > 50) return { status: 'queued' }
-          const t = byId.get(id)
-          let out = { status: 'queued' }
-          if (!t) out = { status: 'unknown' }
-          else if (['succeeded', 'failed', 'dispatched'].includes(t.status)) out = { status: t.status }
-          else if (gateOnTask.has(id)) out = { status: 'blocked', gate: gateOnTask.get(id) }
-          else {
-            const blockers = t.deps.map((dep) => ({ dep, eff: calc(dep, depth + 1) })).filter((d) => d.eff.status === 'blocked')
-            if (blockers.length > 0) {
-              out = { status: 'blocked', gate: blockers[0].eff.gate, via: byId.get(blockers[0].dep)?.title ?? blockers[0].dep }
-            } else if (t.status === 'ready') out = { status: 'ready' }
-          }
-          memo.set(id, out)
-          return out
+        for (const t of tasks) {
+          const status = ['succeeded', 'failed', 'dispatched', 'blocked', 'ready'].includes(t.status) ? t.status : 'queued'
+          memo.set(t.id, { status })
         }
-        for (const t of tasks) calc(t.id)
         return memo
       }
       // «пропущен»: optional не запущен, а флоу уже прошёл его позицию (закрытая глава рана).
@@ -277,9 +279,8 @@
         status === 'succeeded' ? ICON.ok
         : status === 'failed' ? ICON.fail
         : status === 'dispatched' ? `<div class="spin" title="работает"></div>`
-        : status === 'blocked' ? ICON.flag
         : status === 'ready' ? ICON.play
-        : status === 'queued' || status === 'pending' ? ICON.pause
+        : status === 'queued' || status === 'pending' || status === 'blocked' ? ICON.pause
         : ICON.dot
 
       // ------------------------------------------------------------------ loads
@@ -364,7 +365,7 @@
       // ------------------------------------------------------------------ actions
       async function resolveGate(gate, resolution) {
         setBusy('гейт ' + short(gate.id, 'gate_').slice(0, 10) + '…')
-        try { await req('gate.resolve', { gateId: gate.id, resolution }); await loadState() }
+        try { await req('gate.resolve', { gateId: gate.id, resolution }); S.openGate = null; await loadState() }
         catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
       }
       async function startTask(task) {
@@ -508,6 +509,7 @@
             'refresh-tpl': () => { S.templates = null; render(); void loadTemplates() },
             'resolve-approve': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), 'approve'),
             'resolve-custom': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), b.dataset.option),
+            'toggle-gate': () => { S.openGate = S.openGate === arg ? null : arg; render() },
             'start-open': () => { S.startFor = S.startFor === arg ? null : arg; render() },
             'start-run': () => void startTask(S.snap.tasks.find((t) => t.id === arg)),
             'delete-run': async () => {
@@ -607,13 +609,12 @@
           }
         }
 
-        const gates = (snap.gates || []).filter((g) => g.status === 'pending')
-        const gateByTask = new Map(gates.map((g) => [g.taskId, g]))
+        const gateByTask = new Map((snap.gates || []).map((g) => [g.taskId, g]))
 
         // Flow order from the template beats the CLI's task-list order (it reshuffles
         // whenever statuses flip); tasks without a stamp keep the arrival order.
         const orderedTasks = [...(snap.tasks || [])].sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
-        const eff = effectiveStatuses(orderedTasks, snap.gates || [])
+        const eff = effectiveStatuses(orderedTasks)
         // Group sub-step tasks under their parent (or under a block header for pure blocks).
         const kidsOf = new Map()
         for (const t of orderedTasks) {
@@ -660,7 +661,11 @@
             const doneKids = kids.filter((k) => (eff.get(k.id) || { status: k.status }).status === 'succeeded').length
             stepRows.push(`<div class="blockhead${flowIndex < totalFlow - 1 ? ` flow conn-${agg === 'succeeded' ? 'ok' : agg === 'dispatched' ? 'run' : 'idle'}` : ''}">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
             flowIndex += 1
-            for (const k of kids) stepRows.push(stepRow(k, true))
+            for (const k of kids) {
+              stepRows.push(stepRow(k, true))
+              // gate-on-block вешается на первого ребёнка — гейт-строка сразу после него
+              if (gateByTask.has(k.id)) stepRows.push(gateRow(k.id))
+            }
             continue
           }
           if (t.parentTaskId) continue // nested under a real parent task, rendered with it
@@ -684,20 +689,45 @@
             emitted.add(ex.id)
             stepRows.push(`<div class="step childrow" title="задача координатора вне шаблона"><div class="st">${ICON.dot}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⟲ ${esc(ex.title)}</div></div></div>`)
           }
+          // Гейт шага — строкой на нити сразу после шага (и его подшагов)
+          if (gateByTask.has(t.id)) stepRows.push(gateRow(t.id))
         }
         for (const ex of strayExtras) {
           stepRows.push(`<div class="step" title="задача координатора вне шаблона"><div class="st">${ICON.dot}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⚙ ${esc(ex.title)}</div><div class="meta">вне шаблона (координатор)</div></div></div>`)
         }
         const steps = stepRows.join('')
 
+        /** Гейт на нити флоу: замок на пунктире + состояние текстом; клик — кнопки ответа. */
+        function gateRow(taskId) {
+          const g = gateByTask.get(taskId)
+          if (!g) return ''
+          const pending = g.status === 'pending'
+          const amber = 'var(--orca-warning, #d29922)'
+          const lock = pending
+            ? `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="6.8" width="9.6" height="7" rx="1.5" stroke="${amber}" stroke-width="1.5"/><path d="M5.4 6.8V5a2.6 2.6 0 0 1 5.2 0v1.8" stroke="${amber}" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="10.1" r="1" fill="${amber}"/></svg>`
+            : `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="6.8" width="9.6" height="7" rx="1.5" stroke="#3fb950" stroke-width="1.5"/><path d="M5.4 6.8V5a2.6 2.6 0 0 1 5-1" stroke="#3fb950" stroke-width="1.5" stroke-linecap="round"/></svg>`
+          const state = pending ? 'ждёт ответа' : `решён${g.resolution ? ': ' + g.resolution : ''}`
+          const btns = pending && S.openGate === g.id
+            ? `<div class="gate-btns">` +
+              (g.options && g.options.length > 0 ? g.options : ['approve', 'request-changes'])
+                .map((o) => `<button class="btn mini${o === 'approve' ? ' primary' : o === 'request-changes' ? ' danger' : ''}" data-act="resolve-custom:${esc(g.id)}" data-option="${esc(o)}">${esc(o === 'approve' ? 'approve ✓' : o === 'request-changes' ? 'request-changes ✗' : o)}</button>`).join('') +
+              `</div>`
+            : ''
+          return `<div class="gaterow${pending ? ' pending' : ''}" data-act="toggle-gate:${esc(g.id)}" title="гейт шага ${esc(short(g.taskId, 'task_'))}">
+            <span class="lock">${lock}</span>
+            <div class="body">
+              <div><span class="gq">гейт · ${esc(g.question)}</span> <span class="gs">${esc(state)}</span></div>
+              ${btns}
+            </div>
+          </div>`
+        }
+
         function stepRow(t, child) {
           const skipped = isSkipped(t, maxPassedOrder)
           const e = eff.get(t.id) || { status: t.status }
-          const gateHint = e.gate ? `гейт: «${esc(e.gate.question.slice(0, 60))}${e.gate.question.length > 60 ? '…' : ''}»` : ''
-          const via = e.via ? `(через ${esc(e.via)})` : ''
           const meta = [
             t.agent, skipped ? 'ПРОПУЩЕН' : STATUS_TEXT[e.status] ?? e.status,
-            t.order == null ? 'вне шаблона (создана координатором)' : null, gateHint, via,
+            t.order == null ? 'вне шаблона (создана координатором)' : null,
             (t.deps || []).length > 0 ? 'после: ' + t.deps.map((d) => short(d, 'task_')).join(', ') : null,
             t.dispatchId ? 'воркер ' + short(t.dispatchId, 'ctx_') : null
           ].filter(Boolean).join(' · ')
@@ -714,21 +744,13 @@
               <div><button class="btn primary mini" data-act="start-run:${esc(t.id)}">Стартовать</button></div>
             </div>` : ''
           const startBtn = e.status === 'ready' ? ` <button class="btn ghost mini" data-act="start-open:${esc(t.id)}">${S.startFor === t.id ? 'скрыть' : 'старт'}</button>` : ''
-          const gate = gateByTask.get(t.id)
-          const canOpen = gate || t.dispatchId || e.status === 'failed' || (t.fallback || []).length > 0
+          const canOpen = t.dispatchId || e.status === 'failed' || (t.fallback || []).length > 0
           const chev = canOpen || true
-            ? ` <button class="btn ghost mini" data-act="toggle-step:${esc(t.id)}" title="Подробности шага">${S.openStep === t.id ? '▾' : '▸'}</button>`
+            ? ` <button class="btn ghost mini" data-act="toggle-step:${esc(t.id)}" title="Подробности шага">${S.openStep[t.id] ? '▾' : '▸'}</button>`
             : ''
           let drawer = ''
           if (S.openStep[t.id]) {
             const bits = []
-            if (gate) {
-              const opts = gate.options && gate.options.length > 0 ? gate.options : ['approve', 'request-changes']
-              bits.push(`<div class="gate-q">${esc(gate.question)}</div>` +
-                `<div class="gate-btns">` +
-                opts.map((o) => `<button class="btn mini${o === 'approve' ? ' primary' : o === 'request-changes' ? ' danger' : ''}" data-act="resolve-custom:${esc(gate.id)}" data-option="${esc(o)}">${esc(o === 'approve' ? 'approve ✓' : o === 'request-changes' ? 'request-changes ✗' : o)}</button>`).join('') +
-                `</div>`)
-            }
             if (e.status === 'failed') {
               bits.push(`<div class="gate-btns"><button class="btn mini" data-act="retry-step:${esc(t.id)}">↻ Ретрай с этого шага</button></div>`)
             }
@@ -764,7 +786,7 @@
                 }
               }
               if (e.status === 'succeeded' && (t.fallback || []).length > 0) bits.push(`<div class="gate-btns"><button class="btn mini" data-act="retry-step:${esc(t.id)}">↻ С начала шага</button></div>`)
-            } else if (!gate) {
+            } else {
               bits.push(`<div class="tiny muted">Ещё не запускался${(t.fallback || []).length > 0 ? ' · fallback: ' + esc(t.fallback.join(', ')) : ''}</div>`)
             }
             if ((t.fallback || []).length > 0 && e.status !== 'failed') {
