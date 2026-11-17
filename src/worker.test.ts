@@ -28,7 +28,7 @@ const b64 = (s: string): string => {
   return btoa(binary)
 }
 
-function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = {}) {
+function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string } = {}) {
   let created = 0
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
@@ -38,9 +38,12 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown> } = 
       return '{"ok":true,"result":{"terminal":{"handle":"t_coord_session"}}}'
     }
     if (command.includes('worker-read')) {
-      return JSON.stringify({ ok: true, result: { dispatchId: 'ctx_x', transcript: { messages: [
+      return opts.workerRead ?? JSON.stringify({ ok: true, result: { dispatchId: 'ctx_x', transcript: { messages: [
         { role: 'assistant', blocks: [{ type: 'text', text: 'Ревью завершено.\nVERDICT: request-changes' }] }
       ] } } })
+    }
+    if (command.includes('orchestration inbox')) {
+      return opts.inbox ?? '{"ok":true,"result":{"messages":[]}}'
     }
     if (command.includes('agent-model-catalog')) {
       return '{"agent":"claude","discovered":{"models":[{"id":"glm-5.3","label":"Glm 5.3"},{"id":"glm-5.3[1m]","label":"Glm 5.3 (1M context)"}]}}\n{"agent":"codex","discovered":{"models":[{"id":"gpt-5","label":"GPT-5"}]}}'
@@ -218,7 +221,7 @@ const spawned = (): string[] => spawnedCommands
 
 async function withWorker(
   fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: MockHost) => Promise<void>,
-  opts: { focus?: string; storage?: Record<string, unknown> } = {}
+  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string } = {}
 ): Promise<void> {
   const host = makeHost(opts)
   const canned = currentCanned as (command: string) => string
@@ -237,6 +240,20 @@ async function withWorker(
     spawnHooks.exec = null
   }
 }
+
+test('вердикт без строки VERDICT берётся из сабджекта done-сообщения', () =>
+  withWorker(async (worker, host) => {
+    const r = await worker.request('task.report', { dispatchId: 'ctx_x', taskId: 'task_1' })
+    assert.ok(String(r.report).includes('пробела'), 'отчёт читается')
+    assert.equal(host.data().storage['verdict2.ctx_x'], 'request-changes', 'бейдж попытки видит реджект, а не дефолтный approve')
+  }, {
+    workerRead: JSON.stringify({ ok: true, result: { transcript: { messages: [
+      { role: 'assistant', blocks: [{ type: 'text', text: 'Два критичных пробела в плане.' }] }
+    ] } } }),
+    inbox: JSON.stringify({ ok: true, result: { messages: [
+      { type: 'worker_done', subject: 'Plan-review: request-changes (2 пробела)', payload: { taskId: 'task_1' } }
+    ] } })
+  }))
 
 test('runs.list и state.get читают оркестрацию через мост', () =>
   withWorker(async (worker) => {

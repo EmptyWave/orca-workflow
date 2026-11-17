@@ -237,7 +237,10 @@ export default function activate(orca: OrcaWorkerApi): void {
     const workers: WfWorker[] = []
     for (const row of workersRaw) {
       const dispatchId = String(field(row, 'dispatchId', 'id') ?? '')
-      const stored = await storageGet<'approve' | 'request-changes'>(`verdict.${dispatchId}`)
+      // verdict2 — вторая редакция ключа: в первой вердикт без строки VERDICT молча
+      // дефолтился в approve и не проверял сабджект done-сообщения; смена ключа
+      // самовосстанавливает бейджи живых ранов (фоновый проход перечитает отчёты).
+      const stored = await storageGet<'approve' | 'request-changes'>(`verdict2.${dispatchId}`)
       workers.push({
         dispatchId,
         taskId: String(field(row, 'taskId') ?? '') || null,
@@ -251,7 +254,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     for (const w of workers) {
       if (w.state === 'succeeded' && w.verdict === null && !verdictFilling.has(w.dispatchId)) {
         verdictFilling.add(w.dispatchId)
-        void readWorkerReport(w.dispatchId)
+        void readWorkerReport(w.dispatchId, w.taskId)
           .catch(() => undefined)
           .finally(() => { verdictFilling.delete(w.dispatchId); wakeSoon() })
       }
@@ -479,7 +482,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       if (!review || state.verdicts[task.id]) continue
       const reviewDispatch = dispatchOf(task.id)
       if (!reviewDispatch) continue
-      const report = await readWorkerReport(reviewDispatch)
+      const report = await readWorkerReport(reviewDispatch, task.id)
       let verdict = parseVerdict(report)
       if (!hasVerdictLine(report)) {
         const fromInbox = await verdictFromInbox(task.id)
@@ -644,7 +647,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       if (!parent || parent.status !== 'succeeded') continue
       const parentDispatch = dispatchOf(link.parentTaskId)
       if (!parentDispatch) continue
-      const report = await readWorkerReport(parentDispatch)
+      const report = await readWorkerReport(parentDispatch, link.parentTaskId)
       const wants = new RegExp(`RUN:\\s*${link.stepId}\\b`).test(report)
       if (!wants) continue
       state.rounds[`__opt_started_${optionalTaskId}`] = 1
@@ -665,7 +668,7 @@ export default function activate(orca: OrcaWorkerApi): void {
   /** Bounded worker report text: the assistant's spoken text from the dispatch transcript
    *  (worker-read answers {transcript:{messages:[{role,blocks:[{type,text}]}]}}); the old
    *  flat rows[] shape stays as a fallback. */
-  async function readWorkerReport(dispatchId: string): Promise<string> {
+  async function readWorkerReport(dispatchId: string, taskId?: string | null): Promise<string> {
     try {
       const out = await bridge.run(
         `orca orchestration worker-read --dispatch ${shellQuote(dispatchId)} --limit 200 --json`,
@@ -683,8 +686,15 @@ export default function activate(orca: OrcaWorkerApi): void {
         .join('\n\n')
       if (spoken.trim() !== '') {
         // Вердикт парсится один раз и хранится: попытка носит свой итог в снимке,
-        // панель не перечитывает отчёт при каждом открытии дровера.
-        void orca.storage.set(`verdict.${dispatchId}`, parseVerdict(spoken)).catch(() => undefined)
+        // панель не перечитывает отчёт при каждом открытии дровера. Ревьюеры иногда
+        // пишут вердикт только в сабджекте done-сообщения — тогда бейдж берёт его
+        // оттуда (тот же фолбэк, что у движка), иначе попытка молча зеленеет.
+        let verdict = parseVerdict(spoken)
+        if (!hasVerdictLine(spoken) && taskId) {
+          const fromInbox = await verdictFromInbox(taskId)
+          if (fromInbox) verdict = fromInbox
+        }
+        void orca.storage.set(`verdict2.${dispatchId}`, verdict).catch(() => undefined)
         return spoken.slice(-8000)
       }
       return (parsed.result?.rows ?? []).map((r) => r.text ?? '').join('\n')
@@ -1805,7 +1815,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       dispatchId = task?.dispatchId ?? snap.workers.find((w) => w.taskId === input.taskId)?.dispatchId ?? undefined
     }
     if (!dispatchId) throw new BridgeError('у шага ещё нет отчёта — воркер не запускался', 'cli_error')
-    return { report: await readWorkerReport(dispatchId) }
+    return { report: await readWorkerReport(dispatchId, input.taskId ?? null) }
   })
 
   orca.panels.handle('task.attemptVerdicts', async ({ runId, taskId }) => {
@@ -1814,7 +1824,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const dispatches = snap.workers.filter((w) => w.taskId === taskId).map((w) => w.dispatchId)
     const verdicts: Record<string, 'approve' | 'request-changes' | null> = {}
     for (const dispatchId of dispatches) {
-      const report = await readWorkerReport(dispatchId)
+      const report = await readWorkerReport(dispatchId, taskId)
       verdicts[dispatchId] = report === '' ? null : parseVerdict(report)
     }
     return { verdicts }
