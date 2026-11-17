@@ -662,9 +662,9 @@
             stepRows.push(`<div class="blockhead${flowIndex < totalFlow - 1 ? ` flow conn-${agg === 'succeeded' ? 'ok' : agg === 'dispatched' ? 'run' : 'idle'}` : ''}">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
             flowIndex += 1
             for (const k of kids) {
-              stepRows.push(stepRow(k, true))
-              // gate-on-block вешается на первого ребёнка — гейт-строка сразу после него
+              // gate-on-block вешается на первого ребёнка — замок перед ним, на входе в блок
               if (gateByTask.has(k.id)) stepRows.push(gateRow(k.id))
+              stepRows.push(stepRow(k, true))
             }
             continue
           }
@@ -679,6 +679,8 @@
           const groupStatus = ['pending', 'ready', 'queued', 'unknown'].includes(own.status)
             ? (kidsWorking ? 'dispatched' : kidsDone ? 'ready' : own.status)
             : own.status
+          // Гейт держит старт шага: замок на нити ПЕРЕД шагом, который он удерживает
+          if (gateByTask.has(t.id)) stepRows.push(gateRow(t.id))
           stepRows.push(stepRow({ ...t, status: groupStatus }, false))
           flowIndex += 1
           for (const k of kids) {
@@ -689,8 +691,6 @@
             emitted.add(ex.id)
             stepRows.push(`<div class="step childrow" title="задача координатора вне шаблона"><div class="st">${ICON.dot}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⟲ ${esc(ex.title)}</div></div></div>`)
           }
-          // Гейт шага — строкой на нити сразу после шага (и его подшагов)
-          if (gateByTask.has(t.id)) stepRows.push(gateRow(t.id))
         }
         for (const ex of strayExtras) {
           stepRows.push(`<div class="step" title="задача координатора вне шаблона"><div class="st">${ICON.dot}</div><div class="body"><div class="title" style="font-weight:400;color:var(--orca-muted-foreground)">⚙ ${esc(ex.title)}</div><div class="meta">вне шаблона (координатор)</div></div></div>`)
