@@ -690,13 +690,14 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   /** True while a field's own input handler runs: push() keeps the inspector (and focus). */
   let softEdit = false
 
-  function field(label: string, value: string, onInput: (v: string) => void): HTMLElement {
+  function field(label: string, value: string, onInput: (v: string) => void, placeholder = ''): HTMLElement {
     const wrap = document.createElement('div')
     const l = document.createElement('label')
     l.textContent = label
     const input = document.createElement('input')
     input.type = 'text'
     input.value = value
+    if (placeholder !== '') input.placeholder = placeholder
     input.addEventListener('input', () => {
       softEdit = true
       try {
@@ -711,7 +712,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
 
   /** A text input whose suggestions drop straight under it (native datalists misplace
    *  their popup in narrow frames). Keyboard: ↓/↑ moves, Enter picks, Esc closes. */
-  function comboField(label: string, value: string, options: () => string[], onInput: (v: string) => void): HTMLElement {
+  function comboField(label: string, value: string, options: () => string[], onInput: (v: string) => void, placeholder = ''): HTMLElement {
     const wrap = document.createElement('div')
     wrap.className = 'wfv-combo'
     const l = document.createElement('label')
@@ -719,6 +720,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const input = document.createElement('input')
     input.type = 'text'
     input.value = value
+    if (placeholder !== '') input.placeholder = placeholder
     const list = document.createElement('div')
     list.className = 'wfv-combo-list'
     let active = -1
@@ -834,13 +836,14 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         if (child.specialist) child.agent = null
         push()
       }))
+      const childCard = child.specialist ? specialists.find((sp) => sp.slug === child.specialist) : undefined
       inspector.append(comboField('Агент (если без воркера)', child.agent ?? '', () => ['claude', 'codex', 'zcode', 'opencode'], (v) => {
         child.agent = v.trim() === '' ? null : v.trim()
         if (child.agent) child.specialist = null
         push()
-      }))
+      }, childCard && !child.agent ? childCard.agent : ''))
       void loadCatalogModels()
-      inspector.append(comboField('Модель (опц.) — каталог', child.model ?? '', modelOptions, (v) => { child.model = v.trim() === '' ? null : v.trim(); push() }))
+      inspector.append(comboField('Модель (опц.) — каталог', child.model ?? '', modelOptions, (v) => { child.model = v.trim() === '' ? null : v.trim(); push() }, childCard && !child.model && childCard.model ? childCard.model : ''))
       inspector.append(comboField('Fallback — агенты при провале', child.fallback.join(', '), () => ['claude', 'codex', 'zcode', 'kimi', 'gemini'], (v) => {
         child.fallback = v.split(',').map((a) => a.trim()).filter(Boolean)
         push()
@@ -898,11 +901,11 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     scHint.style.cssText = 'font-size:10.5px;color:var(--orca-muted-foreground);margin:-4px 0 4px'
     scHint.textContent = sc ? `карточка: ${sc.agent}${sc.model ? ' · ' + sc.model : ''}${sc.effort ? ' · effort ' + sc.effort : ''}` : (step.specialist ? 'карточка воркера не найдена' : '')
     inspector.append(scHint)
-    inspector.append(field('Агент (пусто = барьер, если нет воркера)', step.agent ?? '', (v) => {
+    inspector.append(field('Агент (пусто = из карточки/барьер)', step.agent ?? '', (v) => {
       step.agent = v.trim() === '' ? null : v.trim()
       if (step.agent) step.specialist = null
       push()
-    }))
+    }, sc && !step.agent ? sc.agent : ''))
     if (step.sub.length > 0) {
       const subHead = document.createElement('label')
       subHead.textContent = `Подшаги (${step.sub.length}) — параллельный блок`
@@ -919,9 +922,9 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       inspector.append(subHint)
     }
     void loadCatalogModels()
-    inspector.append(comboField('Модель (опц.) — каталог', step.model ?? '', modelOptions, (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }))
+    inspector.append(comboField('Модель (опц.) — каталог', step.model ?? '', modelOptions, (v) => { step.model = v.trim() === '' ? null : v.trim(); push() }, sc && !step.model && sc.model ? sc.model : ''))
     const stepSpecialistForEffort = specialists.find((sp) => sp.slug === step.specialist)
-    inspector.append(comboField('Effort (только с моделью)', step.effort ?? '', () => effortsFor(step.agent ?? stepSpecialistForEffort?.agent), (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }))
+    inspector.append(comboField('Effort (только с моделью)', step.effort ?? '', () => effortsFor(step.agent ?? stepSpecialistForEffort?.agent), (v) => { step.effort = v.trim() === '' ? null : v.trim(); push() }, sc && !step.effort && sc.effort ? sc.effort : ''))
     inspector.append(comboField('Fallback — агенты при провале (через запятую вводится вручную)', step.fallback.join(', '), () => ['claude', 'codex', 'zcode', 'kimi', 'gemini'], (v) => {
       step.fallback = v.split(',').map((a) => a.trim()).filter(Boolean)
       push()
