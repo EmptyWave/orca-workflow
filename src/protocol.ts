@@ -21,8 +21,8 @@ export type WfTask = {
   order: number | null
   /** Optional sub-step: skippable by the coordinator; a never-started one renders as skipped. */
   optional: boolean
-  /** Max concurrent instances of this worker's step (from the worker card); null = unlimited. */
-  parallel: number | null
+  /** Swarm (from the worker card): concurrent instances of this worker allowed in a run. */
+  swarm: WfSwarm
   /** A review unit (on_reject owner): its attempts owe a VERDICT — an attempt without one
    *  renders a neutral dot instead of a green check. Non-review workers' success is the
    *  signal itself. */
@@ -86,6 +86,10 @@ export type WfJob = {
   error: string | null
 }
 
+/** Рой: разрешены ли параллельные инстансы воркера и сколько их максимум.
+ *  Отсутствие swarm в карточке = рой выключен (один живой инстанс). */
+export type WfSwarm = { enabled: boolean; limit: number | null }
+
 export type WfStep = {
   id: string
   title: string | null
@@ -107,8 +111,8 @@ export type WfStep = {
   deps: string[]
   /** "This step does not start until a human answers." On a barrier step it gates the first
    *  materialized step after it (the explicit multi-target form). */
-  gate: { question: string; options: string[]   /** Max concurrent instances (from the worker card); null = unlimited. */
-  parallel: number | null
+  gate: { question: string; options: string[]   /** Swarm (from the worker card): concurrent instances of this worker allowed in a run. */
+  swarm: WfSwarm
 } | null
   onReject: { goto: string; maxRounds: number } | null
   /** Block children (`sub:`): parallel by default; optional ones start only on RUN: request. */
@@ -137,8 +141,8 @@ export type WfSpecialist = {
   fallback: string[]
   spec: string | null
   error: string | null
-  /** Max concurrent instances of this worker inside one run; null = unlimited. */
-  parallel: number | null
+  /** Swarm: concurrent instances of this worker allowed in one run. */
+  swarm: WfSwarm
 }
 
 export type WfTemplate = {

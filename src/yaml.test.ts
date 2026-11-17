@@ -108,6 +108,15 @@ steps:
 })
 
 
+test('swarm в карточке: enable и limit читаются вложенной картой', () => {
+  const on = parseYaml('agent: claude\nswarm:\n  enable: true\n  limit: 3\n') as { [k: string]: unknown }
+  const swarmOn = on.swarm as { enable: boolean; limit: number }
+  assert.equal(swarmOn.enable, true)
+  assert.equal(swarmOn.limit, 3)
+  const off = parseYaml('agent: claude\n') as { [k: string]: unknown }
+  assert.equal(off.swarm, undefined, 'без swarm рой выключен')
+})
+
 test('воркеры: только worker:, specialist больше не читается', () => {
   const good = parseTemplate('t', parseYaml('id: t\ntitle: T\nsteps:\n  - { id: a, worker: coder }\n'))
   assert.equal(good.steps[0].specialist, 'coder')

@@ -173,7 +173,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
     steps.push({
       id: stepId,
       title: strOrNull(raw.title, 'steps[].title'),
-      parallel: null,
+      swarm: { enabled: false, limit: null },
       agent,
       specialist,
       model: strOrNull(raw.model, 'steps[].model'),

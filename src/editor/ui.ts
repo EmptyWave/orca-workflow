@@ -116,7 +116,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   }
 
   // ---- project workers: dropdown data + the manager panel -------------------------
-  type Sp = { slug: string; agent: string; model: string | null; effort: string | null; parallel: number | null; spec: string | null; error: string | null }
+  type Sp = { slug: string; agent: string; model: string | null; effort: string | null; swarm: { enabled: boolean; limit: number | null } | null; spec: string | null; error: string | null }
   let specialists: Sp[] = []
   /** Модели из каталога Орки (что реально резолвит прокси) — подсказки выпадашек model. */
   let catalogModels: string[] = []
@@ -306,14 +306,26 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const effortWrap = comboField('effort (опц.)', editing === 'new' || !editing ? '' : editing.effort ?? '', () => effortsFor(agentEl.value), () => undefined)
     const effortEl = effortWrap.querySelector('input') as HTMLInputElement
     form.append(effortWrap)
-    const parL = document.createElement('label')
-    parL.textContent = 'parallel — макс. одновременных (пусто = без лимита)'
-    form.append(parL)
-    const parEl = document.createElement('input')
-    parEl.type = 'number'
-    parEl.min = '1'
-    parEl.value = editing && editing !== 'new' && editing.parallel ? String(editing.parallel) : ''
-    form.append(parEl)
+    const swarmL = document.createElement('label')
+    swarmL.textContent = 'рой — параллельные инстансы этого воркера'
+    form.append(swarmL)
+    const swarmRow = document.createElement('div')
+    swarmRow.style.cssText = 'display:flex;gap:8px;align-items:center'
+    const swarmEnable = document.createElement('input')
+    swarmEnable.type = 'checkbox'
+    swarmEnable.checked = Boolean(editing && editing !== 'new' && editing.swarm?.enabled)
+    const swarmEnableL = document.createElement('label')
+    swarmEnableL.textContent = 'enable'
+    swarmEnableL.style.cssText = 'margin-right:6px;cursor:pointer'
+    const swarmMaxL = document.createElement('label')
+    swarmMaxL.textContent = 'limit (пусто = без лимита)'
+    const swarmMax = document.createElement('input')
+    swarmMax.type = 'number'
+    swarmMax.min = '1'
+    swarmMax.style.flex = '1'
+    swarmMax.value = editing && editing !== 'new' && editing.swarm?.limit ? String(editing.swarm.limit) : ''
+    swarmRow.append(swarmEnable, swarmEnableL, swarmMaxL, swarmMax)
+    form.append(swarmRow)
     const specL = document.createElement('label')
     specL.textContent = 'prompt — промпт воркера'
     form.append(specL)
@@ -337,7 +349,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
             agent: agentEl.value,
             model: modelEl.value.trim() === '' ? null : modelEl.value.trim(),
             effort: effortEl.value.trim() === '' ? null : effortEl.value.trim(),
-            parallel: parEl.value.trim() === '' ? null : Number(parEl.value),
+            swarm: { enable: swarmEnable.checked, limit: swarmMax.value.trim() === '' ? null : Number(swarmMax.value) },
             spec: specEl.value
           },
           60000

@@ -171,7 +171,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         deps: stringList(field(row, 'deps')),
         order: null,
         optional: false,
-        parallel: null,
+        swarm: { enabled: false, limit: null },
         expectsVerdict: false,
         dispatchId: dispatch,
         agent: null,
@@ -764,7 +764,9 @@ export default function activate(orca: OrcaWorkerApi): void {
           step.agent ? `агент-алиас для worker-start: ${step.agent}` : null,
           step.model ? `модель ${step.model}` : null,
           step.model && step.effort ? `effort ${step.effort}` : null,
-          step.parallel ? `ОДНОВРЕМЕННО не более ${step.parallel}` : null,
+          step.swarm?.enabled
+            ? `РОЙ: у воркера этого шага допустимы параллельные инстансы — одновременно до ${step.swarm.limit ?? 'скольких потребуется'}, раздавай им разные части работы`
+            : null,
           (step.fallback ?? []).length > 0 ? `fallback: ${step.fallback.join(' → ')}` : null,
           step.gate ? `ГЕЙТ ПОСЛЕ этого шага (подтверждает его результат): ${step.gate.question} — стоп для человека, ответ двигает флоу дальше` : null,
           step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
@@ -1102,7 +1104,12 @@ export default function activate(orca: OrcaWorkerApi): void {
                   agent: String(raw.agent ?? 'claude'),
                   model: typeof raw.model === 'string' ? raw.model : null,
                   effort: typeof raw.effort === 'string' ? raw.effort : null,
-                  parallel: typeof raw.parallel === 'number' && raw.parallel > 0 ? raw.parallel : null,
+                  swarm: {
+                    enabled: (raw as { swarm?: { enable?: unknown } }).swarm?.enable === true,
+                    limit: typeof (raw as { swarm?: { limit?: unknown } }).swarm?.limit === 'number' && ((raw as { swarm?: { limit?: number } }).swarm?.limit as number) > 0
+                      ? Math.floor((raw as { swarm?: { limit?: number } }).swarm?.limit as number)
+                      : null
+                  },
                   fallback: Array.isArray(raw.fallback) ? raw.fallback.map(String) : typeof raw.fallback === 'string' && raw.fallback !== '' ? [String(raw.fallback)] : [],
                   // `prompt:` is the card key; `spec:` is the legacy spelling still used by
                   // the shipped demo cards and older projects — read both.
@@ -1110,7 +1117,7 @@ export default function activate(orca: OrcaWorkerApi): void {
                   error: null
                 })
           } catch (error) {
-            out.push({ slug, agent: 'claude', model: null, effort: null, parallel: null, fallback: [], spec: null, error: message(error) })
+            out.push({ slug, agent: 'claude', model: null, effort: null, swarm: { enabled: false, limit: null }, fallback: [], spec: null, error: message(error) })
           }
         }
       }
@@ -1145,16 +1152,16 @@ export default function activate(orca: OrcaWorkerApi): void {
       specFile: string | null
     ): { agent: string | null; model: string | null; effort: string | null; fallback: string[]; spec: string | null } => {
       const specOverride = specFile ? (specs[specFile] ?? spec) : spec
-      if (!specialist) return { agent, model, effort: model ? effort : null, fallback, parallel: null, spec: specOverride ?? spec }
+      if (!specialist) return { agent, model, effort: model ? effort : null, fallback, swarm: { enabled: false, limit: null }, spec: specOverride ?? spec }
       const sp = bySlug.get(specialist)
-      if (!sp) return { agent, model, effort: model ? effort : null, fallback, parallel: null, spec: specOverride ?? spec }
+      if (!sp) return { agent, model, effort: model ? effort : null, fallback, swarm: { enabled: false, limit: null }, spec: specOverride ?? spec }
       const finalModel = model ?? sp.model
       return {
         agent: agent ?? sp.agent,
         model: finalModel,
         effort: finalModel ? (effort ?? sp.effort) : null,
         fallback: fallback.length > 0 ? fallback : sp.fallback,
-        parallel: sp.parallel,
+        swarm: sp.swarm,
         spec: specOverride ?? sp.spec
       }
     }
@@ -1832,7 +1839,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { workers: await loadSpecialists(projectPath, true) }
   })
 
-  orca.panels.handle('workers.save', async ({ projectPath, slug, agent, model, effort, parallel, spec }) => {
+  orca.panels.handle('workers.save', async ({ projectPath, slug, agent, model, effort, swarm, spec }) => {
     if (projectPath) bridge.pin(projectPath)
     everUsed = true
     const clean = slug.trim().replace(/[^a-z0-9-]/g, '-')
@@ -1842,7 +1849,9 @@ export default function activate(orca: OrcaWorkerApi): void {
       `agent: ${agent.trim() || 'claude'}`,
       model && model.trim() !== '' ? `model: ${model.trim()}` : null,
       effort && effort.trim() !== '' ? `effort: ${effort.trim()}` : null,
-      typeof parallel === 'number' && parallel > 0 ? `parallel: ${parallel}` : null,
+      swarm && swarm.enable === true
+        ? ['swarm:', '  enable: true', typeof swarm.limit === 'number' && swarm.limit > 0 ? `  limit: ${Math.floor(swarm.limit)}` : null].filter((x): x is string => x !== null).join('\n')
+        : null,
       spec.trim() !== '' ? `prompt: |\n${spec.replace(/\n$/, '').split('\n').map((l) => '  ' + l).join('\n')}` : null
     ].filter((x): x is string => x !== null).join('\n') + '\n'
     await bridge.run(
