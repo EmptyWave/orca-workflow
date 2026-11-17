@@ -1902,6 +1902,42 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { ok: true as const }
   })
 
+  /** Пересобирает .orca/coordinator-brief.md рана из ТЕКУЩИХ шаблона и карточек —
+   *  чтобы живой координатор можно было осведомить об изменениях конфигурации (рой,
+   *  правки промтов, новые воркеры). Сессию координатора трогает человек сам. */
+  orca.panels.handle('run.brief.refresh', async ({ runId }) => {
+    everUsed = true
+    const auto = await loadAuto(runId)
+    if (!auto) throw new BridgeError(`ран ${runId} без AutoState — бриф не собрать`, 'cli_error')
+    const meta = await storageGet<{ projectPath?: unknown; templateId?: unknown; objective?: unknown }>(`runmeta.${runId}`)
+    const templateId = typeof meta?.templateId === 'string' && meta.templateId !== '' ? meta.templateId : null
+    if (!templateId) throw new BridgeError(`у рана ${runId} не записан templateId — бриф не собрать`, 'cli_error')
+    const projectPath = auto.repoPath ?? (typeof meta?.projectPath === 'string' ? meta.projectPath : null)
+    // Шаблон: сначала проект, затем библиотека
+    let template: WfTemplate | null = null
+    if (projectPath) {
+      try { template = await loadTemplate('project', projectPath, templateId) } catch { template = null }
+    }
+    if (!template) {
+      try { template = await loadTemplate('library', null, templateId) } catch { template = null }
+    }
+    if (!template) throw new BridgeError(`шаблон "${templateId}" не найден ни в проекте, ни в библиотеке`, 'cli_error')
+    const specialists = await loadSpecialists(projectPath)
+    const resolved = resolveSteps(template, specialists, {})
+    const objective = typeof meta?.objective === 'string' ? meta.objective : ''
+    const brief = coordinatorBrief(runId, { ...template, steps: resolved }, objective, auto.worktreeName, projectPath)
+    let wt: string | null = auto.worktreePath ?? null
+    if (!wt && projectPath && auto.worktreeName) {
+      wt = `${homedir()}/orca/workspaces/${projectPath.split('/').filter(Boolean).pop()}/${auto.worktreeName}`
+    }
+    if (!wt) throw new BridgeError('ворктри рана неизвестен — некуда писать бриф', 'cli_error')
+    await bridge.run(
+      `mkdir -p ${shellPath(`${wt}/.orca`)} && echo ${shellQuote(toBase64(brief))} | base64 -d > ${shellPath(`${wt}/.orca/coordinator-brief.md`)}`
+    )
+    void refresh()
+    return { ok: true as const, briefPath: `${wt}/.orca/coordinator-brief.md` }
+  })
+
   orca.panels.handle('task.report', async (input) => {
     everUsed = true
     let dispatchId: string | undefined = input.dispatchId ?? undefined
