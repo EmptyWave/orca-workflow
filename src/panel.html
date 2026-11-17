@@ -748,12 +748,13 @@
         function stepRow(t, child) {
           const skipped = isSkipped(t, maxPassedOrder)
           const e = eff.get(t.id) || { status: t.status }
-          // Ревью-шаг: verdict последней попытки важнее статуса задачи — succeeded-воркер,
-          // сказавший request-changes, это ОТКЛОНЕНИЕ, а не «готово». Иначе строка зелёная
-          // при красном кресте попытки — и непонятно, кто врёт.
+          // Вердикт последней попытки важнее статуса задачи: succeeded-воркер, сказавший
+          // request-changes, это ОТКЛОНЕНИЕ, а не «готово». Флаг expectsVerdict тут не
+          // нужен — он требуется только точке «не определился», а определившийся вердикт
+          // авторитетен сам по себе (ba-review не review-юнит, но реджектит по делу).
           const attempts = (S.snap?.workers || []).filter((w) => w.taskId === t.id)
           const lastVerdict = attempts.length > 0 ? (attempts[attempts.length - 1].verdict ?? null) : null
-          const rejected = t.expectsVerdict && e.status === 'succeeded' && lastVerdict === 'request-changes'
+          const rejected = e.status === 'succeeded' && lastVerdict === 'request-changes'
           const meta = [
             t.agent, skipped ? 'ПРОПУЩЕН' : rejected ? 'отклонено (request-changes)' : STATUS_TEXT[e.status] ?? e.status,
             t.order == null ? 'вне шаблона (создана координатором)' : null,
