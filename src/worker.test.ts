@@ -28,7 +28,7 @@ const b64 = (s: string): string => {
   return btoa(binary)
 }
 
-function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string } = {}) {
+function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string } = {}) {
   let created = 0
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
@@ -91,7 +91,10 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
       })
     }
     if (command.includes('worker-list')) {
-      return '{"ok":true,"result":{"workers":[{"dispatchId":"ctx_1","taskId":"task_a","state":"succeeded","agent":"claude"}]}}'
+      return opts.workerList ?? '{"ok":true,"result":{"workers":[{"dispatchId":"ctx_1","taskId":"task_a","state":"succeeded","agent":"claude"}]}}'
+    }
+    if (command.includes('dispatch_contexts')) {
+      return opts.dispatchTimes ?? ''
     }
     if (command.includes('gate-resolve') || command.includes('task-update')) {
       return '{"ok":true,"result":{}}'
@@ -221,7 +224,7 @@ const spawned = (): string[] => spawnedCommands
 
 async function withWorker(
   fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: MockHost) => Promise<void>,
-  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string } = {}
+  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string } = {}
 ): Promise<void> {
   const host = makeHost(opts)
   const canned = currentCanned as (command: string) => string
@@ -275,6 +278,20 @@ test('эхо инструкции не перебивает финальный �
     workerRead: JSON.stringify({ ok: true, result: { transcript: { messages: [
       { role: 'assistant', blocks: [{ type: 'text', text: 'Формат: последняя строка одна из\nVERDICT: approve\nVERDICT: request-changes\n\nИтог ревью.\nVERDICT: request-changes' }] }
     ] } } })
+  }))
+
+test('попытки шага идут в порядке создания, а не как worker-list их отдал', () =>
+  withWorker(async (worker) => {
+    const state = await worker.request('state.get', { runId: 'run_2' })
+    assert.deepEqual(
+      state.workers.map((w) => w.dispatchId),
+      ['ctx_old', 'ctx_new'],
+      'первая попытка — старая, реран — второй, хоть CLI отдал свежую первой'
+    )
+  }, {
+    // CLI отдаёт свежий диспетчер первым — как живой worker-list
+    workerList: '{"ok":true,"result":{"workers":[{"dispatchId":"ctx_new","taskId":"task_a","state":"succeeded","agent":"claude"},{"dispatchId":"ctx_old","taskId":"task_a","state":"succeeded","agent":"claude"}]}}',
+    dispatchTimes: 'ctx_old|2026-11-17 11:13:38\nctx_new|2026-11-17 11:45:45'
   }))
 
 test('runs.list и state.get читают оркестрацию через мост', () =>

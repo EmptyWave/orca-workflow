@@ -263,6 +263,31 @@ export default function activate(orca: OrcaWorkerApi): void {
           .finally(() => { verdictFilling.delete(w.dispatchId); wakeSoon() })
       }
     }
+    // Попытки шага — в порядке создания. worker-list отдаёт диспетчеры свежими первыми,
+    // а панель нумерует попытки по индексу: без сортировки реран становится «попыткой №1».
+    // Времени в строках CLI нет — берём created_at из orchestration.db (один запрос на ран);
+    // неизвестные id держат относительный порядок CLI (хвост сравнения).
+    try {
+      const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
+      const out = await bridge.run(
+        `sqlite3 ${shellQuote(db)} "SELECT id, created_at FROM dispatch_contexts WHERE run_id = '${runId.replace(/'/g, '')}';"`
+      )
+      const createdAt = new Map<string, string>()
+      for (const line of out.split('\n')) {
+        const bar = line.indexOf('|')
+        if (bar > 0) createdAt.set(line.slice(0, bar).trim(), line.slice(bar + 1).trim())
+      }
+      if (createdAt.size > 0) {
+        const cliIndex = new Map(workers.map((w, i) => [w.dispatchId, i]))
+        workers.sort(
+          (a, b) =>
+            (createdAt.get(a.dispatchId) ?? '9999').localeCompare(createdAt.get(b.dispatchId) ?? '9999') ||
+            (cliIndex.get(a.dispatchId) ?? 0) - (cliIndex.get(b.dispatchId) ?? 0)
+        )
+      }
+    } catch {
+      // порядок останется как отдал CLI — попытки покажутся свежими первыми, но не сломается
+    }
     const pilotState = await loadAuto(runId)
     const autoPilotOn = true // легаси-раны (driver=autopilot) ведутся всегда; новые — координатором
     const pilot = pilotState
