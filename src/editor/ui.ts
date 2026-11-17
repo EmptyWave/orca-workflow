@@ -41,6 +41,7 @@ const STYLE = `
 .wfv-spmgr{position:fixed;top:42px;right:0;bottom:0;width:330px;background:var(--orca-card);border-left:1px solid var(--orca-border);box-shadow:-6px 0 18px rgba(0,0,0,.25);z-index:40;padding:12px;overflow:auto;box-sizing:border-box;color:var(--orca-foreground)}
 .wfv-spmgr h3{margin:0 0 8px;font-size:13px}
 .wfv-spmgr .sp-row{display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--orca-border);font-size:12px;color:var(--orca-foreground)}
+.wfv-spmgr .sp-form{margin:2px 0 10px;padding:8px 8px 10px 10px;border-left:2px solid var(--orca-accent);background:var(--orca-background);border-radius:4px}
 .wfv-spmgr .sp-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wfv-spmgr button{font:11.5px inherit;padding:2px 8px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer}
 .wfv-spmgr button.icon{padding:3px 5px;line-height:0;display:inline-flex;align-items:center;justify-content:center;color:var(--orca-muted-foreground)}
@@ -233,12 +234,12 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     ;(root.parentElement ?? root).append(spPanel)
     void renderSpManager()
   }
-  async function renderSpManager(editing: Sp | 'new' | null = null): Promise<void> {
+  async function renderSpManager(): Promise<void> {
     const panel = spPanel
     if (!panel) return
     // Перезагружаем карточки не только без проекта, но и когда прошлый заход не удался:
     // редактор, открытый до обновления плагина, живёт с мёртвым каналом и пустым списком.
-    if (!projectPath || (specialists.length === 0 && editing === null)) await loadSpecialists()
+    if (!projectPath || specialists.length === 0) await loadSpecialists()
     panel.innerHTML = ''
     // Шапка flex'ом: заголовок и крестик закрытия каждый в своей ячейке — флоат
     // наезжал на первую строку списка.
@@ -284,7 +285,14 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       edit.className = 'icon'
       edit.title = 'изменить'
       edit.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M11.3 2.1l2.6 2.6-8.3 8.3-3.1.5.5-3.1zM10 3.4l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>'
-      edit.addEventListener('click', () => void renderSpManager(sp))
+      edit.addEventListener('click', () => {
+        // Форма открывается ПОД этой строкой, а не хвостом панели
+        closeInlineForm()
+        const f = buildWorkerForm(sp)
+        f.classList.add('sp-form')
+        row.after(f)
+        inlineForm = f
+      })
       const rm = document.createElement('button')
       rm.className = 'icon danger'
       rm.title = 'удалить'
@@ -314,14 +322,28 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       row.append(info, edit, rm)
       panel.append(row)
     }
-    if (editing === null) {
-      const add = document.createElement('button')
-      add.textContent = '+ Новый воркер'
-      add.style.marginTop = '8px'
-      add.addEventListener('click', () => void renderSpManager('new'))
-      panel.append(add)
-      return
-    }
+    const add = document.createElement('button')
+    add.textContent = '+ Новый воркер'
+    add.style.marginTop = '8px'
+    add.addEventListener('click', () => {
+      closeInlineForm()
+      const f = buildWorkerForm('new')
+      f.classList.add('sp-form')
+      add.after(f)
+      inlineForm = f
+    })
+    panel.append(add)
+  }
+
+  /** Открытая инлайн-форма — одна одновременно; новая закрывает предыдущую. */
+  let inlineForm: HTMLElement | null = null
+  function closeInlineForm(): void {
+    inlineForm?.remove()
+    inlineForm = null
+  }
+
+  /** Форма карточки воркера: открывается под строкой списка, сохранение/отмена её убирают. */
+  function buildWorkerForm(editing: Sp | 'new'): HTMLElement {
     // the create/edit form
     const form = document.createElement('div')
     const input = (label: string, value: string): HTMLInputElement => {
@@ -399,12 +421,12 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     })
     const cancel = document.createElement('button')
     cancel.textContent = 'Отмена'
-    cancel.addEventListener('click', () => void renderSpManager())
+    cancel.addEventListener('click', () => closeInlineForm())
     const rowBtns = document.createElement('div')
     rowBtns.style.marginTop = '10px'
     rowBtns.append(save, cancel)
     form.append(rowBtns, errBox)
-    panel.append(form)
+    return form
   }
 
   // ---- helpers -------------------------------------------------------------------------
