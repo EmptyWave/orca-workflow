@@ -787,7 +787,7 @@
                 const isOpen = at.dispatchId === openD
                 if (isOpen && S.reports[at.dispatchId] === undefined) {
                   S.reports[at.dispatchId] = '…'
-                  void req('task.report', { dispatchId: at.dispatchId }, 60000)
+                  void req('task.report', { dispatchId: at.dispatchId, runId: S.runId, taskId: t.id }, 60000)
                     .then((r) => { S.reports[at.dispatchId] = r.report || '(пусто)' })
                     .catch((err) => { S.reports[at.dispatchId] = 'ошибка: ' + (err.message || err) })
                     .finally(() => render())

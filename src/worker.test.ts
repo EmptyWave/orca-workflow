@@ -243,9 +243,9 @@ async function withWorker(
 
 test('вердикт без строки VERDICT берётся из сабджекта done-сообщения', () =>
   withWorker(async (worker, host) => {
-    const r = await worker.request('task.report', { dispatchId: 'ctx_x', taskId: 'task_1' })
+    const r = await worker.request('task.report', { dispatchId: 'ctx_x', runId: 'run_2', taskId: 'task_1' })
     assert.ok(String(r.report).includes('пробела'), 'отчёт читается')
-    assert.equal(host.data().storage['verdict2.ctx_x'], 'request-changes', 'бейдж попытки видит реджект, а не дефолтный approve')
+    assert.equal(host.data().storage['verdict3.ctx_x'], 'request-changes', 'бейдж попытки видит реджект, а не дефолтный approve')
   }, {
     workerRead: JSON.stringify({ ok: true, result: { transcript: { messages: [
       { role: 'assistant', blocks: [{ type: 'text', text: 'Два критичных пробела в плане.' }] }
@@ -253,6 +253,28 @@ test('вердикт без строки VERDICT берётся из сабдж�
     inbox: JSON.stringify({ ok: true, result: { messages: [
       { type: 'worker_done', subject: 'Plan-review: request-changes (2 пробела)', payload: { taskId: 'task_1' } }
     ] } })
+  }))
+
+test('вердикт не определяется без строки и сабджекта — сентинел none, чтение по dispatchId не пишет ничего', () =>
+  withWorker(async (worker, host) => {
+    await worker.request('task.report', { dispatchId: 'ctx_x' })
+    assert.equal(host.data().storage['verdict3.ctx_x'], undefined, 'чтение без taskId не затирает хранилище дефолтом')
+    await worker.request('task.report', { dispatchId: 'ctx_x', runId: 'run_2', taskId: 'task_1' })
+    assert.equal(host.data().storage['verdict3.ctx_x'], 'none', 'неуверенный вердикт — сентинел, не approve')
+  }, {
+    workerRead: JSON.stringify({ ok: true, result: { transcript: { messages: [
+      { role: 'assistant', blocks: [{ type: 'text', text: 'Отчёт без вердикта вообще.' }] }
+    ] } } })
+  }))
+
+test('эхо инструкции не перебивает финальный вердикт: берётся последнее вхождение', () =>
+  withWorker(async (worker, host) => {
+    await worker.request('task.report', { dispatchId: 'ctx_x', runId: 'run_2', taskId: 'task_1' })
+    assert.equal(host.data().storage['verdict3.ctx_x'], 'request-changes', 'последняя строка отчёта — истина')
+  }, {
+    workerRead: JSON.stringify({ ok: true, result: { transcript: { messages: [
+      { role: 'assistant', blocks: [{ type: 'text', text: 'Формат: последняя строка одна из\nVERDICT: approve\nVERDICT: request-changes\n\nИтог ревью.\nVERDICT: request-changes' }] }
+    ] } } })
   }))
 
 test('runs.list и state.get читают оркестрацию через мост', () =>

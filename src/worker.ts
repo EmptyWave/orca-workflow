@@ -235,24 +235,28 @@ export default function activate(orca: OrcaWorkerApi): void {
     })
     const workersRaw = asArray<Record<string, unknown>>(workerRows.workers ?? workerRows.dispatches)
     const workers: WfWorker[] = []
+    const unresolved = new Set<string>()
     for (const row of workersRaw) {
       const dispatchId = String(field(row, 'dispatchId', 'id') ?? '')
-      // verdict2 — вторая редакция ключа: в первой вердикт без строки VERDICT молча
-      // дефолтился в approve и не проверял сабджект done-сообщения; смена ключа
-      // самовосстанавливает бейджи живых ранов (фоновый проход перечитает отчёты).
-      const stored = await storageGet<'approve' | 'request-changes'>(`verdict2.${dispatchId}`)
+      // verdict3 — третья редакция ключа: в первой вердикт без строки VERDICT молча
+      // дефолтился в approve; во вторую чтение по dispatchId без taskId затирало
+      // подтверждённое значение дефолтом. Смена ключа самовосстанавливает бейджи
+      // живых ранов (фоновый проход перечитает отчёты); 'none' = вердикт не
+      // определился — нейтральная точка, без повторных чтений.
+      const stored = await storageGet<'approve' | 'request-changes' | 'none'>(`verdict3.${dispatchId}`)
+      if (stored === 'none') unresolved.add(dispatchId)
       workers.push({
         dispatchId,
         taskId: String(field(row, 'taskId') ?? '') || null,
         taskTitle: tasks.find((t) => t.id === String(field(row, 'taskId') ?? ''))?.title ?? null,
         state: String(field(row, 'state', 'status') ?? '?'),
-        verdict: stored ?? null
+        verdict: stored && stored !== 'none' ? stored : null
       })
     }
     // Свежезавершённая попытка без вердикта: один фоновый проход — прочитать отчёт и
     // сохранить (write-through в readWorkerReport), затем панель увидит его в снимке.
     for (const w of workers) {
-      if (w.state === 'succeeded' && w.verdict === null && !verdictFilling.has(w.dispatchId)) {
+      if (w.state === 'succeeded' && w.verdict === null && !unresolved.has(w.dispatchId) && !verdictFilling.has(w.dispatchId)) {
         verdictFilling.add(w.dispatchId)
         void readWorkerReport(w.dispatchId, w.taskId)
           .catch(() => undefined)
@@ -685,16 +689,21 @@ export default function activate(orca: OrcaWorkerApi): void {
         .flatMap((m) => (m.blocks ?? []).filter((b) => b.type === 'text' && typeof b.text === 'string').map((b) => b.text as string))
         .join('\n\n')
       if (spoken.trim() !== '') {
-        // Вердикт парсится один раз и хранится: попытка носит свой итог в снимке,
-        // панель не перечитывает отчёт при каждом открытии дровера. Ревьюеры иногда
-        // пишут вердикт только в сабджекте done-сообщения — тогда бейдж берёт его
-        // оттуда (тот же фолбэк, что у движка), иначе попытка молча зеленеет.
-        let verdict = parseVerdict(spoken)
-        if (!hasVerdictLine(spoken) && taskId) {
-          const fromInbox = await verdictFromInbox(taskId)
-          if (fromInbox) verdict = fromInbox
+        // Вердикт попытки парсится один раз и хранится; панель не перечитывает отчёт.
+        // Пишем только УВЕРЕННОЕ значение: явная строка в теле, иначе сабджект done-сообщения
+        // (ревьюеры иногда оставляют вердикт только там). Ничего не нашли — сентинел 'none':
+        // бейдж покажет нейтральную точку, а не врущий зелёный; движок дефолтит approve сам.
+        // taskId === undefined (чтение по одному dispatchId) — вообще не пишем: нечем
+        // подтвердить вердикт, перезапись затёрла бы уже сохранённый.
+        if (taskId !== undefined) {
+          let verdict: 'approve' | 'request-changes' | 'none'
+          if (hasVerdictLine(spoken)) verdict = parseVerdict(spoken)
+          else if (taskId) {
+            const fromInbox = await verdictFromInbox(taskId)
+            verdict = fromInbox ?? 'none'
+          } else verdict = 'none'
+          void orca.storage.set(`verdict3.${dispatchId}`, verdict).catch(() => undefined)
         }
-        void orca.storage.set(`verdict2.${dispatchId}`, verdict).catch(() => undefined)
         return spoken.slice(-8000)
       }
       return (parsed.result?.rows ?? []).map((r) => r.text ?? '').join('\n')
@@ -791,9 +800,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     ].join('\n')
   }
 
-  /** `VERDICT: approve|request-changes` in the report tail; default approve on failure to say. */
+  /** `VERDICT: approve|request-changes` in the report tail; default approve on failure to say.
+   *  The LAST match wins: reports sometimes echo the protocol text («…одна из: VERDICT: approve
+   *  VERDICT: request-changes») before the real verdict line — the first match would green
+   *  a rejected review. */
   function parseVerdict(report: string): 'approve' | 'request-changes' {
-    const match = report.slice(-4000).match(/VERDICT:\s*(approve|request-changes)/i)
+    const matches = [...report.slice(-4000).matchAll(/VERDICT:\s*(approve|request-changes)/gi)]
+    const match = matches[matches.length - 1]
     return match && match[1].toLowerCase() === 'request-changes' ? 'request-changes' : 'approve'
   }
 
@@ -1809,13 +1822,21 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('task.report', async (input) => {
     everUsed = true
     let dispatchId: string | undefined = input.dispatchId ?? undefined
-    if (!dispatchId && input.runId && input.taskId) {
+    let taskId: string | null | undefined = input.taskId ?? undefined
+    if (input.runId && (input.taskId || dispatchId)) {
       const snap = await snapshot(input.runId)
-      const task = snap.tasks.find((t) => t.id === input.taskId)
-      dispatchId = task?.dispatchId ?? snap.workers.find((w) => w.taskId === input.taskId)?.dispatchId ?? undefined
+      if (!dispatchId && input.taskId) {
+        const task = snap.tasks.find((t) => t.id === input.taskId)
+        dispatchId = task?.dispatchId ?? snap.workers.find((w) => w.taskId === input.taskId)?.dispatchId ?? undefined
+      }
+      // dispatchId без taskId: поднимаем taskId из снимка — без него write-through не
+      // сможет проверить сабджект done-сообщения и не должен писать вердикт вообще.
+      if (dispatchId && taskId === undefined) {
+        taskId = snap.workers.find((w) => w.dispatchId === dispatchId)?.taskId ?? null
+      }
     }
     if (!dispatchId) throw new BridgeError('у шага ещё нет отчёта — воркер не запускался', 'cli_error')
-    return { report: await readWorkerReport(dispatchId, input.taskId ?? null) }
+    return { report: await readWorkerReport(dispatchId, taskId === undefined ? undefined : taskId) }
   })
 
   orca.panels.handle('task.attemptVerdicts', async ({ runId, taskId }) => {
