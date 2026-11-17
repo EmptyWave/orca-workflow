@@ -41,7 +41,12 @@ const STYLE = `
 .wfv-spmgr{position:fixed;top:42px;right:0;bottom:0;width:330px;background:var(--orca-card);border-left:1px solid var(--orca-border);box-shadow:-6px 0 18px rgba(0,0,0,.25);z-index:40;padding:12px;overflow:auto;box-sizing:border-box;color:var(--orca-foreground);font:12.5px -apple-system,system-ui,sans-serif}
 .wfv-spmgr h3{margin:0 0 8px;font-size:13px}
 .wfv-spmgr .sp-row{display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--orca-border);font-size:12px;color:var(--orca-foreground)}
+.wfv-spmgr .sp-row:hover{background:var(--orca-muted)}
 .wfv-spmgr .sp-form{margin:2px 0 10px;padding:8px 8px 10px 10px;border-left:2px solid var(--orca-accent);background:var(--orca-background);border-radius:4px}
+.wfv-spmgr .swarm-row{display:flex;align-items:center;gap:14px;margin:2px 0 8px;flex-wrap:wrap}
+.wfv-spmgr .swarm-row label{display:inline-flex;align-items:center;gap:5px;margin:0;font-size:11.5px;color:var(--orca-foreground);white-space:nowrap}
+.wfv-spmgr .swarm-row input[type='checkbox']{width:auto;margin:0}
+.wfv-spmgr .swarm-row input[type='number']{width:72px;flex:0 0 72px}
 .wfv-spmgr .sp-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wfv-spmgr button{font:11.5px inherit;padding:2px 8px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer}
 .wfv-spmgr button.icon{padding:3px 5px;line-height:0;display:inline-flex;align-items:center;justify-content:center;color:var(--orca-muted-foreground)}
@@ -281,18 +286,28 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       info.className = 'grow'
       info.textContent = `${sp.slug} — ${sp.agent}${sp.model ? ' · ' + sp.model : ''}`
       info.title = sp.spec ?? ''
-      const edit = document.createElement('button')
-      edit.className = 'icon'
-      edit.title = 'изменить'
-      edit.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M11.3 2.1l2.6 2.6-8.3 8.3-3.1.5.5-3.1zM10 3.4l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>'
-      edit.addEventListener('click', () => {
-        // Форма открывается ПОД этой строкой, а не хвостом панели
+      // Клик по пункту разворачивает/сворачивает его форму (карандаш — то же самое)
+      const toggleRowForm = (): void => {
+        if (inlineForm && row.nextElementSibling === inlineForm) {
+          closeInlineForm()
+          return
+        }
         closeInlineForm()
         const f = buildWorkerForm(sp)
         f.classList.add('sp-form')
         row.after(f)
         inlineForm = f
+      }
+      row.style.cursor = 'pointer'
+      row.addEventListener('click', (e) => {
+        if ((e.target as HTMLElement).closest('button')) return // кнопки строки — свои дела
+        toggleRowForm()
       })
+      const edit = document.createElement('button')
+      edit.className = 'icon'
+      edit.title = 'изменить'
+      edit.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M11.3 2.1l2.6 2.6-8.3 8.3-3.1.5.5-3.1zM10 3.4l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>'
+      edit.addEventListener('click', (e) => { e.stopPropagation(); toggleRowForm() })
       const rm = document.createElement('button')
       rm.className = 'icon danger'
       rm.title = 'удалить'
@@ -368,21 +383,21 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     swarmL.textContent = 'рой — параллельные инстансы этого воркера'
     form.append(swarmL)
     const swarmRow = document.createElement('div')
-    swarmRow.style.cssText = 'display:flex;gap:8px;align-items:center'
+    swarmRow.className = 'swarm-row'
+    const swarmEnableL = document.createElement('label')
     const swarmEnable = document.createElement('input')
     swarmEnable.type = 'checkbox'
     swarmEnable.checked = Boolean(editing && editing !== 'new' && editing.swarm?.enabled)
-    const swarmEnableL = document.createElement('label')
-    swarmEnableL.textContent = 'enable'
-    swarmEnableL.style.cssText = 'margin-right:6px;cursor:pointer'
+    swarmEnableL.append(swarmEnable, document.createTextNode(' enable'))
     const swarmMaxL = document.createElement('label')
-    swarmMaxL.textContent = 'limit (пусто = без лимита)'
+    swarmMaxL.append(document.createTextNode('limit '))
     const swarmMax = document.createElement('input')
     swarmMax.type = 'number'
     swarmMax.min = '1'
-    swarmMax.style.flex = '1'
+    swarmMax.title = 'пусто = без лимита'
     swarmMax.value = editing && editing !== 'new' && editing.swarm?.limit ? String(editing.swarm.limit) : ''
-    swarmRow.append(swarmEnable, swarmEnableL, swarmMaxL, swarmMax)
+    swarmMaxL.append(swarmMax)
+    swarmRow.append(swarmEnableL, swarmMaxL)
     form.append(swarmRow)
     const specL = document.createElement('label')
     specL.textContent = 'prompt — промпт воркера'
