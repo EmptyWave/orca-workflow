@@ -215,7 +215,10 @@
       }
       // Замок гейта: закрытый янтарный (ждёт ответа) / открытый зелёный (решён).
       const GATE_AMBER = 'var(--orca-warning, #d29922)'
-      const LOCK_CLOSED = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="6.8" width="9.6" height="7" rx="1.5" stroke="${GATE_AMBER}" stroke-width="1.5"/><path d="M5.4 6.8V5a2.6 2.6 0 0 1 5.2 0v1.8" stroke="${GATE_AMBER}" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="10.1" r="1" fill="${GATE_AMBER}"/></svg>`
+      const lockClosed = (color) => `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="6.8" width="9.6" height="7" rx="1.5" stroke="${color}" stroke-width="1.5"/><path d="M5.4 6.8V5a2.6 2.6 0 0 1 5.2 0v1.8" stroke="${color}" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="10.1" r="1" fill="${color}"/></svg>`
+      // Закрытый замок: янтарный — флоу дошёл и ждёт ответа; серый — гейт ещё впереди.
+      const LOCK_CLOSED = lockClosed(GATE_AMBER)
+      const LOCK_CLOSED_IDLE = lockClosed('rgba(139,148,158,.6)')
       const LOCK_OPEN = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="6.8" width="9.6" height="7" rx="1.5" stroke="#3fb950" stroke-width="1.5"/><path d="M5.4 6.8V5a2.6 2.6 0 0 1 5-1" stroke="#3fb950" stroke-width="1.5" stroke-linecap="round"/></svg>`
       const AGENT_SVG = {
         // Claude sunburst — from the Orca material-icons pack (Apache-2.0/MIT, © Google)
@@ -894,8 +897,11 @@
           const g = gateByTask.get(taskId)
           if (!g) return ''
           const pending = g.status === 'pending'
-          const lock = pending ? LOCK_CLOSED : LOCK_OPEN
-          const state = pending ? 'ждёт ответа' : `решён${g.resolution ? ': ' + g.resolution : ''}`
+          // Дошёл ли флоу до гейта: замок и сегмент трейса янтарные только в этот момент,
+          // впереди — серые, как весь непройденный пунктир.
+          const reached = gateReached(g)
+          const lock = !pending ? LOCK_OPEN : reached ? LOCK_CLOSED : LOCK_CLOSED_IDLE
+          const state = !pending ? `решён${g.resolution ? ': ' + g.resolution : ''}` : reached ? 'ждёт ответа' : 'впереди'
           // Воркер отдаёт files строками-путями; старые ответы могли нести {rel} — едим оба.
           const planFiles = pending && S.planFiles && S.planFiles.change
             ? `<div class="tiny" style="margin-top:3px;color:var(--orca-muted-foreground)">план: openspec/changes/${esc(S.planFiles.change)}/ — ` +
@@ -912,7 +918,7 @@
                 .map((o) => `<button class="btn mini${o === 'approve' ? ' primary' : o === 'request-changes' ? ' danger' : ''}" data-act="resolve-custom:${esc(g.id)}" data-option="${esc(o)}">${esc(o === 'approve' ? 'approve ✓' : o === 'request-changes' ? 'request-changes ✗' : o)}</button>`).join('') +
               `</div>`
             : ''
-          return `<div class="gaterow${pending ? ' pending conn-run' : ' conn-ok'}" data-act="toggle-gate:${esc(g.id)}" title="гейт шага ${esc(short(g.taskId, 'task_'))}">
+          return `<div class="gaterow${reached ? ' pending conn-run' : pending ? '' : ' conn-ok'}" data-act="toggle-gate:${esc(g.id)}" title="гейт шага ${esc(short(g.taskId, 'task_'))}">
             <span class="lock">${lock}</span>
             <div class="body">
               <div><span class="gq">гейт · ${esc(g.question)}</span> <span class="gs">${esc(state)}</span></div>
