@@ -390,10 +390,24 @@
           await loadState()
         } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
       }
+      /** Человеческий текст шага джобы поднятия рана (job.step из воркера). */
+      function jobStepText(step) {
+        if (!step) return 'стартуем'
+        if (step === 'run-create') return 'создаём ран'
+        if (step === 'tasks') return 'создаём шаги'
+        if (step === 'materialized') return 'шаги готовы'
+        if (step === 'coordinator') return 'поднимаем координатора'
+        if (step === 'done') return 'готово'
+        if (step.startsWith('task ')) return 'задача ' + step.slice(5)
+        return step
+      }
       async function instantiate() {
         const tpl = (S.templates || []).find((t) => t.id === S.tplId)
         if (!tpl) return
-        setBusy('поднятие ' + tpl.title)
+        setNotice(null)
+        // Оптимистичный running: кнопка гаснет и лоадер стартует сразу, не после первого опроса
+        S.job = { status: 'running', step: 'run-create', error: null, runId: null, kind: 'instantiate', label: tpl.title, id: 'current' }
+        render()
         try {
           // цель опциональна: пустая — координатор сам спросит в чате, что делаем
           if (S.worktreeName.trim() === '') throw new Error('заполни имя ворктри')
@@ -407,7 +421,7 @@
           for (let i = 0; i < 40; i++) {
             await new Promise((r) => setTimeout(r, 2000))
             const poll = await req('job.get', { jobId: answer.jobId }, 10000)
-            S.job = poll.job
+            if (poll.job) S.job = poll.job
             render()
             if (!poll.job || poll.job.status !== 'running') break
           }
@@ -415,9 +429,12 @@
             S.runId = S.job.runId
             await orca.storage.set('html.runId', S.runId).catch(() => {})
             S.tab = 'runs'
+            S.job = null
             await loadRuns(); await loadState()
           }
-        } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+        } catch (e) {
+          S.job = { status: 'failed', error: String(e.message || e), runId: null, kind: 'instantiate', label: tpl.title, id: 'current' }
+        } finally { render() }
       }
       async function copyTemplate(to) {
         setBusy('копирование шаблона')
@@ -518,6 +535,7 @@
             'resolve-approve': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), 'approve'),
             'resolve-custom': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), b.dataset.option),
             'toggle-gate': () => { S.openGate = S.openGate === arg ? null : arg; render() },
+            'dismiss-job': () => { S.job = null; render() },
             'start-open': () => { S.startFor = S.startFor === arg ? null : arg; render() },
             'start-run': () => void startTask(S.snap.tasks.find((t) => t.id === arg)),
             'delete-run': async () => {
@@ -820,7 +838,7 @@
           </div>`
         }
 
-        const jobCard = S.job && S.job.status !== 'done' ? `<div class="callout ${S.job.status === 'failed' ? 'danger' : ''}">${esc(S.job.error || 'поднятие рана: ' + (S.job.status || '…'))}</div>` : ''
+        const jobCard = S.job && S.job.status !== 'done' ? `<div class="callout ${S.job.status === 'failed' ? 'danger' : ''}">${esc(S.job.error || 'поднятие рана: ' + jobStepText(S.job.step))}</div>` : ''
         return sel + runTitle + pilotBox + errorCallout + jobCard +
           ((snap.tasks || []).length > 0 ? `<div class="card"><h2>Шаги</h2><div class="steps">${steps}</div></div>` : `<div class="empty">В этом ране нет шагов.</div>`)
       }
@@ -894,9 +912,38 @@
             </div>
             <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
             <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
-              <button class="btn primary" data-act="instantiate"${(tpl.missingWorkers ?? []).length > 0 ? ' disabled title="Сначала создай недостающих воркеров"' : ''}>Поднять Run</button>
+              ${raiseButton(tpl)}
               ${effSource === 'library' ? `<button class="btn" data-act="copy-project">↳ в проект</button>` : `<button class="btn" data-act="copy-library">↳ в библиотеку</button>`}
-            </div></div>`
+            </div>
+            ${raiseCard()}</div>`
+      }
+
+      /** Кнопка «Поднять Run»: пока джоба running — глухая, с лоадером; текст меняется. */
+      function raiseButton(tpl) {
+        const raising = S.job?.status === 'running'
+        const missing = (tpl.missingWorkers ?? []).length > 0
+        const dis = raising || missing
+        const title = missing ? 'Сначала создай недостающих воркеров' : raising ? 'Ран поднимается…' : ''
+        const label = raising
+          ? `<span style="display:inline-flex;align-items:center;gap:7px"><span class="spin"></span>Поднимаем…</span>`
+          : 'Поднять Run'
+        return `<button class="btn primary" data-act="instantiate"${dis ? ' disabled' : ''}${title ? ` title="${esc(title)}"` : ''}>${label}</button>`
+      }
+
+      /** Прогресс/ошибка поднятия рана рядом с кнопкой: живой шаг воркера или разбор провала. */
+      function raiseCard() {
+        const job = S.job
+        if (!job || job.kind !== 'instantiate') return ''
+        if (job.status === 'running') {
+          return `<div class="callout tiny" style="display:flex;align-items:center;gap:8px;margin-top:9px">
+            <span class="spin"></span><span>Поднимаем ран: ${esc(jobStepText(job.step))}…</span></div>`
+        }
+        if (job.status === 'failed') {
+          return `<div class="callout danger" style="margin-top:9px">
+            <b>Ран не поднялся.</b> ${esc(job.error || 'неизвестная ошибка')}
+            <button class="btn ghost mini" data-act="dismiss-job" style="float:right">×</button></div>`
+        }
+        return ''
       }
 
       // ---- settings view
