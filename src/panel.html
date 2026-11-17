@@ -293,7 +293,9 @@
       const isSkipped = (t, passedOrder) =>
         t.optional && ['pending', 'ready'].includes(t.status) && passedOrder > (t.order ?? 0)
       const skippedIcon = (t, passedOrder) =>
-        isSkipped(t, passedOrder) ? '<div class="skipdot" title="пропущен: optional-шаг не потребовался"></div>' : ''
+        isSkipped(t, passedOrder)
+          ? `<span title="пропущен: optional-шаг не потребовался" style="display:inline-flex;opacity:.55">${ICON.pause}</span>`
+          : ''
       const statusIcon = (status) =>
         status === 'succeeded' ? ICON.ok
         : status === 'failed' ? ICON.fail
