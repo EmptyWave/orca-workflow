@@ -243,7 +243,7 @@
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null, openAttempt: {}, openGate: null, gateAutoOpened: null, planFiles: undefined, sessionPath: null, sessionPathUnknown: false
+        cfg: null, bridge: null, openAttempt: {}, openGate: null, gateAutoOpened: null, planFiles: undefined, sessionPath: null, sessionPathUnknown: false, armedDel: null
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
@@ -304,6 +304,13 @@
 
       // ------------------------------------------------------------------ loads
       let loadingSince = {}
+      // Взводим красную кнопку удаления: второй клик по ней же — подтверждение.
+      // Автовозврат через 5 секунд, любой другой клик — тоже снимает взвод.
+      function armDelete(key) {
+        S.armedDel = key
+        render()
+        setTimeout(() => { if (S.armedDel === key) { S.armedDel = null; render() } }, 5000)
+      }
       // В одном ворктри может оказаться несколько ранов (перезапуски в то же имя):
       // сессия показывает новейший по created_at, остальное — в Run history.
       function pickSessionRun(runs) {
@@ -583,7 +590,11 @@
             'delete-run': async () => {
               const r = S.runs.find((x) => x.runId === S.runId)
               if (!r) return
-              if (!confirm(`Удалить ран «${r.objective.slice(0, 60)}» безвозвратно?`)) return
+              // confirm() во встроенной панели молча возвращает false — модалки запрещены.
+              // Подтверждение двухшаговое: первый клик взводит красную кнопку, второй удаляет.
+              const key = `run:${S.runId}`
+              if (S.armedDel !== key) { armDelete(key); return }
+              S.armedDel = null
               setBusy('удаление рана')
               try {
                 await req('run.delete', { runId: S.runId }, 60000)
@@ -603,7 +614,9 @@
             'hist-del': async () => {
               const r = (S.history?.runs || []).find((x) => x.runId === arg)
               if (!r) return
-              if (!confirm(`Удалить ран «${(r.objective || '').slice(0, 60)}» безвозвратно?`)) return
+              const key = `hist:${arg}`
+              if (S.armedDel !== key) { armDelete(key); return }
+              S.armedDel = null
               setBusy('удаление рана')
               try {
                 await req('run.delete', { runId: arg }, 60000)
@@ -626,7 +639,12 @@
             'save-cfg': () => void saveSettings(),
             'reset-bridge': () => void resetBridge()
           }
-          if (map[act]) b.onclick = (ev) => { ev.stopPropagation(); map[act]() }
+          if (map[act]) b.onclick = (ev) => {
+            ev.stopPropagation()
+            // красная «точно удалить?» взведена — любой другой клик её гасит
+            if (S.armedDel && act !== 'delete-run' && act !== 'hist-del') S.armedDel = null
+            map[act]()
+          }
         })
         document.querySelectorAll('[data-bind]').forEach((node) => {
           const key = node.dataset.bind
@@ -694,7 +712,9 @@
           `<span class="chip" style="white-space:normal;line-height:1.35" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective)}</span>` +
           `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
           `<button class="btn ghost" data-act="brief-refresh" title="Пересобрать бриф координатора из текущего шаблона и карточек (рой, промты); координатора осведоми сам — «бриф обновлён, перечитай .orca/coordinator-brief.md»">↻ бриф</button>` +
-          `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button></div>` + siblingNote
+          (S.armedDel === `run:${sessionRun.runId}`
+            ? `<button class="btn mini" data-act="delete-run" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">точно удалить?</button>`
+            : `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`) + '</div>' + siblingNote
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
         const runTitle = snap.run ? `<div class="tiny muted" style="margin:6px 0 8px">${esc(snap.run.objective)}</div>` : ''
@@ -1078,7 +1098,9 @@
               <div class="meta">${esc(project)} · ворктри ${esc(worktree)} · ${esc(short(r.runId, 'run_'))}</div>
             </div>
             <button class="btn ghost mini" data-act="hist-refresh-brief:${esc(r.runId)}" title="Пересобрать бриф координатора из текущего шаблона и карточек">↻ бриф</button>
-            <button class="btn ghost mini" data-act="hist-del:${esc(r.runId)}" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>
+            ${S.armedDel === `hist:${r.runId}`
+              ? `<button class="btn mini" data-act="hist-del:${esc(r.runId)}" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">точно удалить?</button>`
+              : `<button class="btn ghost mini" data-act="hist-del:${esc(r.runId)}" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`}
           </div>`
         }).join('')
         return scopeHint() + `<div class="card"><h2>Run history — ${h.runs.length}</h2><div class="histlist">${rows}</div></div>`
