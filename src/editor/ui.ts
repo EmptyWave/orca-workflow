@@ -38,7 +38,7 @@ const STYLE = `
 .wfv-inspector textarea{min-height:70px;resize:vertical}
 .wfv-inspector .row{display:flex;gap:6px;align-items:center}
 .wfv-inspector .del{margin-top:14px;border-color:var(--orca-destructive);color:var(--orca-destructive);background:none;padding:4px 10px;border-radius:var(--orca-radius);cursor:pointer;font:12px inherit}
-.wfv-spmgr{position:fixed;top:42px;right:0;bottom:0;width:330px;background:var(--orca-card);border-left:1px solid var(--orca-border);box-shadow:-6px 0 18px rgba(0,0,0,.25);z-index:40;padding:12px;overflow:auto;box-sizing:border-box;color:var(--orca-foreground)}
+.wfv-spmgr{position:fixed;top:42px;right:0;bottom:0;width:330px;background:var(--orca-card);border-left:1px solid var(--orca-border);box-shadow:-6px 0 18px rgba(0,0,0,.25);z-index:40;padding:12px;overflow:auto;box-sizing:border-box;color:var(--orca-foreground);font:12.5px -apple-system,system-ui,sans-serif}
 .wfv-spmgr h3{margin:0 0 8px;font-size:13px}
 .wfv-spmgr .sp-row{display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--orca-border);font-size:12px;color:var(--orca-foreground)}
 .wfv-spmgr .sp-form{margin:2px 0 10px;padding:8px 8px 10px 10px;border-left:2px solid var(--orca-accent);background:var(--orca-background);border-radius:4px}
