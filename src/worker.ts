@@ -172,6 +172,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         order: null,
         optional: false,
         parallel: null,
+        expectsVerdict: false,
         dispatchId: dispatch,
         agent: null,
         model: null,
@@ -289,6 +290,11 @@ export default function activate(orca: OrcaWorkerApi): void {
       // порядок останется как отдал CLI — попытки покажутся свежими первыми, но не сломается
     }
     const pilotState = await loadAuto(runId)
+    // Шаги-ревью юниты должны вердиктить: их успешная попытка без VERDICT — нейтральная
+    // точка, а не зелёная галочка. У остальных воркеров (планировщик, ресерчеры) успеха
+    // самого по себе достаточно — им галочка положена.
+    const reviewTasks = new Set(Object.keys(pilotState?.reviews ?? {}))
+    for (const task of tasks) if (reviewTasks.has(task.id)) task.expectsVerdict = true
     const autoPilotOn = true // легаси-раны (driver=autopilot) ведутся всегда; новые — координатором
     const pilot = pilotState
       ? {

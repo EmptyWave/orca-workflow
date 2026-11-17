@@ -796,9 +796,9 @@
                 const stIcon = at.state === 'failed' ? ICON.fail
                   : at.state === 'ready' || at.state === 'starting' ? '<div class="spin" title="работает"></div>'
                   : at.state === 'succeeded'
-                    ? (v === 'request-changes' ? ICON.fail : v === 'approve' ? ICON.ok : ICON.dot)
+                    ? (v === 'request-changes' ? ICON.fail : v === 'approve' || !t.expectsVerdict ? ICON.ok : ICON.dot)
                     : ICON.dot ?? ''
-                const vTitle = v === 'request-changes' ? ' · попытка ОТКЛОНЕНА (request-changes)' : v === 'approve' ? ' · вердикт approve' : ''
+                const vTitle = v === 'request-changes' ? ' · попытка ОТКЛОНЕНА (request-changes)' : v === 'approve' ? ' · вердикт approve' : t.expectsVerdict ? ' · вердикт не определён (нет VERDICT в отчёте и сабджекте)' : ''
                 const vLabel = v === 'request-changes' ? ' <span style="color:var(--orca-destructive, #f85149)">✗ отклонена</span>' : ''
                 bits.push(`<div class="attempt" data-act="open-attempt:${esc(t.id)}|${esc(at.dispatchId)}" title="попытка #${ai + 1}${vTitle}">
                   <span class="att-state">${stIcon}</span>

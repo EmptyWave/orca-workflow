@@ -23,6 +23,10 @@ export type WfTask = {
   optional: boolean
   /** Max concurrent instances of this worker's step (from the worker card); null = unlimited. */
   parallel: number | null
+  /** A review unit (on_reject owner): its attempts owe a VERDICT — an attempt without one
+   *  renders a neutral dot instead of a green check. Non-review workers' success is the
+   *  signal itself. */
+  expectsVerdict: boolean
 }
 
 export type WfGate = {
