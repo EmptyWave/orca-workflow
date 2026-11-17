@@ -1084,7 +1084,7 @@
               <label class="f"><span>base branch (опц.)</span><input data-bind="baseBranch" value="${esc(S.baseBranch)}" placeholder="master"/></label>
               <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>
             </div>
-            <label class="f" title="Пусто — Orca сам даст ветку <логин>/<имя-ворктри>"><span>ветка (опц.) — точное имя без логина</span><input data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"/></label>
+            <label class="f" title="Пусто — Orca сам даст ветку <логин>/<имя-ворктри>; заполнено — точное имя ветки без логина"><span>ветка (опц.)</span><input data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"/></label>
             <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
             <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
               ${raiseButton(tpl)}
