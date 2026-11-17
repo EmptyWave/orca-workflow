@@ -59,6 +59,11 @@ export type WfRun = {
   /** created_at из orchestration.db ('YYYY-MM-DD HH:MM:SS'), null при недоступной базе.
    *  Несколько ранов могут делить один ворктри — панель привязывается к новейшему. */
   createdAt: string | null
+  /** У рана есть живая сессия координатора (handle или привязанный orca-сторк): удаление
+   *  оставит агента без рана — в истории помечается и предупреждает. */
+  hasCoordinator: boolean
+  /** Сколько воркеров рана прямо работают ('starting'/'ready'): удаление такого рана отклоняется. */
+  liveWorkers: number
 }
 
 export type WfSnapshot = {

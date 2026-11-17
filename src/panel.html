@@ -590,6 +590,7 @@
             'delete-run': async () => {
               const r = S.runs.find((x) => x.runId === S.runId)
               if (!r) return
+              if ((r.liveWorkers || 0) > 0) { setNotice('У рана работают воркеры — сначала останови их'); return }
               // confirm() во встроенной панели молча возвращает false — модалки запрещены.
               // Подтверждение двухшаговое: первый клик взводит красную кнопку, второй удаляет.
               const key = `run:${S.runId}`
@@ -614,6 +615,7 @@
             'hist-del': async () => {
               const r = (S.history?.runs || []).find((x) => x.runId === arg)
               if (!r) return
+              if ((r.liveWorkers || 0) > 0) { setNotice('У рана работают воркеры — сначала останови их'); return }
               const key = `hist:${arg}`
               if (S.armedDel !== key) { armDelete(key); return }
               S.armedDel = null
@@ -712,9 +714,11 @@
           `<span class="chip" style="white-space:normal;line-height:1.35" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective)}</span>` +
           `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
           `<button class="btn ghost" data-act="brief-refresh" title="Пересобрать бриф координатора из текущего шаблона и карточек (рой, промты); координатора осведоми сам — «бриф обновлён, перечитай .orca/coordinator-brief.md»">↻ бриф</button>` +
-          (S.armedDel === `run:${sessionRun.runId}`
-            ? `<button class="btn mini" data-act="delete-run" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">точно удалить?</button>`
-            : `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`) + '</div>' + siblingNote
+          ((sessionRun.liveWorkers || 0) > 0
+            ? `<button class="btn ghost" disabled title="У рана работают воркеры — сначала останови их">✕</button>`
+            : S.armedDel === `run:${sessionRun.runId}`
+              ? `<button class="btn mini" data-act="delete-run" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="${sessionRun.hasCoordinator ? 'Внимание: к рану привязана сессия координатора — после удаления она останется без рана. ' : ''}Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">точно удалить?</button>`
+              : `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`) + '</div>' + siblingNote
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
         const runTitle = snap.run ? `<div class="tiny muted" style="margin:6px 0 8px">${esc(snap.run.objective)}</div>` : ''
@@ -1092,15 +1096,25 @@
           const project = r.projectPath ? r.projectPath.split('/').filter(Boolean).pop() : '—'
           const worktree = r.worktreePath ? r.worktreePath.split('/').filter(Boolean).pop() : '—'
           const mine = r.runId === S.runId
+          // Активность рана: живой координатор и работающие воркеры. Удалять такой —
+          // оставить агента без рана (или получить отказ воркера), поэтому видно сразу.
+          const live = (r.liveWorkers || 0) > 0
+          const badges =
+            (mine ? ' <span class="chip" title="ран этой сессии">этой сессии</span>' : '') +
+            (r.hasCoordinator ? ' <span class="chip" title="к рану привязана живая сессия координатора" style="color:var(--orca-accent)">координатор</span>' : '') +
+            (live ? ` <span class="chip" title="воркеры рана прямо работают — удаление отклоняется" style="color:var(--orca-warning,#e2a03f)">воркеры: ${r.liveWorkers}</span>` : '')
+          const delBtn = live
+            ? `<button class="btn ghost mini" disabled title="У рана работают воркеры — сначала останови их">✕</button>`
+            : S.armedDel === `hist:${r.runId}`
+              ? `<button class="btn mini" data-act="hist-del:${esc(r.runId)}" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="${r.hasCoordinator ? 'Внимание: к рану привязана сессия координатора — после удаления она останется без рана. ' : ''}Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">точно удалить?</button>`
+              : `<button class="btn ghost mini" data-act="hist-del:${esc(r.runId)}" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`
           return `<div class="histrow">
             <div class="body">
-              <div class="title">${esc(r.objective)}${mine ? ' <span class="chip" title="ран этой сессии">этой сессии</span>' : ''}</div>
+              <div class="title">${esc(r.objective)}${badges}</div>
               <div class="meta">${esc(project)} · ворктри ${esc(worktree)} · ${esc(short(r.runId, 'run_'))}</div>
             </div>
             <button class="btn ghost mini" data-act="hist-refresh-brief:${esc(r.runId)}" title="Пересобрать бриф координатора из текущего шаблона и карточек">↻ бриф</button>
-            ${S.armedDel === `hist:${r.runId}`
-              ? `<button class="btn mini" data-act="hist-del:${esc(r.runId)}" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">точно удалить?</button>`
-              : `<button class="btn ghost mini" data-act="hist-del:${esc(r.runId)}" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`}
+            ${delBtn}
           </div>`
         }).join('')
         return scopeHint() + `<div class="card"><h2>Run history — ${h.runs.length}</h2><div class="histlist">${rows}</div></div>`

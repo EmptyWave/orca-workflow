@@ -114,17 +114,49 @@ export default function activate(orca: OrcaWorkerApi): void {
     // Несколько ранов могут делить один ворктри (перезапуски в одно имя): панель привязывается
     // к новейшему. created_at в строках CLI нет — одним запросом из orchestration.db.
     const runCreatedAt = new Map<string, string>()
+    // Живые сессии ранов: координаторский чат (handle среди живых терминалов Орки) и
+    // работающие воркеры — история помечает активные, чтобы человек не снёс ран под агентом.
+    // Handle в базе живёт и после смерти чата, поэтому сверяем со списком терминалов.
+    const runHandle = new Map<string, string>()
+    const runSessionLive = new Map<string, boolean>()
+    const runLive = new Map<string, number>()
     try {
       const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
-      const out = await bridge.run(
+      const created = await bridge.run(
         `sqlite3 ${shellQuote(db)} "SELECT id, created_at FROM runs;"`
       )
-      for (const line of out.split('\n')) {
+      for (const line of created.split('\n')) {
         const bar = line.indexOf('|')
         if (bar > 0) runCreatedAt.set(line.slice(0, bar).trim(), line.slice(bar + 1).trim())
       }
+      const coords = await bridge.run(
+        `sqlite3 ${shellQuote(db)} "SELECT id, coordinator_handle, coordinator_orca_session_id, coordinator_orca_session_id_generation, consumer_generation FROM runs;"`
+      )
+      for (const line of coords.split('\n')) {
+        const parts = line.split('|')
+        if (parts.length < 5) continue
+        const [id, handle, sessionId, gen, consumer] = parts.map((x) => x.trim())
+        if (handle !== '') runHandle.set(id, handle)
+        runSessionLive.set(id, sessionId !== '' && gen !== '' && gen === consumer)
+      }
+      const live = await bridge.run(
+        `sqlite3 ${shellQuote(db)} "SELECT dc.run_id, COUNT(*) FROM worker_dispatches wd JOIN dispatch_contexts dc ON wd.dispatch_id = dc.id WHERE wd.state IN ('starting','ready') GROUP BY dc.run_id;"`
+      )
+      for (const line of live.split('\n')) {
+        const bar = line.indexOf('|')
+        if (bar > 0) runLive.set(line.slice(0, bar).trim(), Number(line.slice(bar + 1).trim()) || 0)
+      }
     } catch {
       // без дат панель возьмёт первый подходящий ран ворктри, как раньше
+    }
+    let liveTerminals: Set<string> | null = null
+    if (runHandle.size > 0) {
+      try {
+        const listing = await bridge.json<{ result?: { terminals?: Array<{ handle?: string }> } }>('orca terminal list --json')
+        liveTerminals = new Set((listing.result?.terminals ?? []).map((t) => t.handle ?? '').filter(Boolean))
+      } catch {
+        // мост занят — считаем чаты по handle как живые (лучше лишний бейдж, чем ложное «можно удалять»)
+      }
     }
     const out: WfRun[] = []
     for (const row of rows) {
@@ -154,7 +186,18 @@ export default function activate(orca: OrcaWorkerApi): void {
       } catch {
         // metadata is an extra; the run still lists without a project
       }
-      out.push({ runId, objective: String(field(row, 'objective') ?? ''), projectPath, worktreePath, createdAt: runCreatedAt.get(runId) ?? null })
+      const handle = runHandle.get(runId)
+      out.push({
+        runId,
+        objective: String(field(row, 'objective') ?? ''),
+        projectPath,
+        worktreePath,
+        createdAt: runCreatedAt.get(runId) ?? null,
+        hasCoordinator:
+          (runSessionLive.get(runId) ?? false) ||
+          (handle !== undefined && (liveTerminals === null || liveTerminals.has(handle))),
+        liveWorkers: runLive.get(runId) ?? 0
+      })
     }
     return out
   }

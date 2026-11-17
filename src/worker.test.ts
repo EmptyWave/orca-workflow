@@ -301,7 +301,7 @@ test('попытки шага идут в порядке создания, а н
 test('runs.list и state.get читают оркестрацию через мост', () =>
   withWorker(async (worker) => {
     const runs = await worker.request('runs.list')
-    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель', projectPath: null, worktreePath: null, createdAt: '2026-11-17 10:00:00' }])
+    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель', projectPath: null, worktreePath: null, createdAt: '2026-11-17 10:00:00', hasCoordinator: false, liveWorkers: 0 }])
     assert.equal(runs.error, null)
 
     const state = await worker.request('state.get', { runId: 'run_1' })
