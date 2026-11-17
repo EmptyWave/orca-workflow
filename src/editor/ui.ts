@@ -7,8 +7,9 @@ import { autoLayout, emit, NODE_H, NODE_W, SUB_GAP_X, validate, type WfGraph } f
 const STYLE = `
 .wfv{display:flex;flex-direction:column;height:100vh;color:var(--orca-foreground);background:var(--orca-background);font:13px -apple-system,system-ui,sans-serif}
 .wfv-toolbar{display:flex;gap:6px;align-items:center;padding:6px 8px;border-bottom:1px solid var(--orca-border);background:var(--orca-card)}
-.wfv-toolbar button{font:12px inherit;padding:3px 10px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer}
-.wfv-toolbar button:hover{background:var(--orca-muted)}
+.wfv-toolbar button{font:600 12px inherit;padding:4px 11px;border:1px solid var(--orca-border);border-radius:6px;background:var(--orca-muted);color:var(--orca-foreground);cursor:pointer}
+.wfv-toolbar button:hover{background:var(--orca-border)}
+.wfv-toolbar button.primary{background:var(--orca-accent);border-color:var(--orca-accent);color:var(--orca-accent-foreground,#fff)}
 .wfv-status{margin-left:auto;font-size:12px}
 .wfv-status.bad{color:var(--orca-destructive)}
 .wfv-status.good{color:var(--orca-foreground);opacity:.7}
@@ -39,7 +40,7 @@ const STYLE = `
 .wfv-inspector .del{margin-top:14px;border-color:var(--orca-destructive);color:var(--orca-destructive);background:none;padding:4px 10px;border-radius:var(--orca-radius);cursor:pointer;font:12px inherit}
 .wfv-spmgr{position:fixed;top:42px;right:0;bottom:0;width:330px;background:var(--orca-card);border-left:1px solid var(--orca-border);box-shadow:-6px 0 18px rgba(0,0,0,.25);z-index:40;padding:12px;overflow:auto;box-sizing:border-box}
 .wfv-spmgr h3{margin:0 0 8px;font-size:13px}
-.wfv-spmgr .sp-row{display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--orca-border);font-size:12px}
+.wfv-spmgr .sp-row{display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--orca-border);font-size:12px;color:var(--orca-foreground)}
 .wfv-spmgr .sp-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wfv-spmgr button{font:11.5px inherit;padding:2px 8px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer}
 .wfv-spmgr textarea{width:100%;min-height:120px;box-sizing:border-box;padding:4px 6px;border:1px solid var(--orca-input);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);font:11.5px ui-monospace,monospace;resize:vertical}
@@ -157,15 +158,16 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   }
   void loadSpecialists()
 
-  const buttons: Array<[string, () => void]> = [
-    ['+ Шаг', () => addStep(true)],
-    ['+ Барьер', () => addStep(false)],
-    ['Автораскладка', () => { graph.layout = autoLayout(graph); push() }],
-    ['YAML', () => toggleYaml()],
-    ['Воркеры', () => toggleSpecialists()]
+  const buttons: Array<[string, () => void, 'primary' | 'tool']> = [
+    ['+ Шаг', () => addStep(true), 'primary'],
+    ['+ Барьер', () => addStep(false), 'primary'],
+    ['Автораскладка', () => { graph.layout = autoLayout(graph); push() }, 'tool'],
+    ['YAML', () => toggleYaml(), 'tool'],
+    ['Воркеры', () => toggleSpecialists(), 'tool']
   ]
-  for (const [label, onClick] of buttons) {
+  for (const [label, onClick, kind] of buttons) {
     const b = document.createElement('button')
+    b.className = kind
     b.textContent = label
     b.addEventListener('click', onClick)
     toolbar.append(b)
