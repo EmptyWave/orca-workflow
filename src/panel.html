@@ -783,10 +783,21 @@
         // whenever statuses flip); tasks without a stamp keep the arrival order.
         const orderedTasks = [...(snap.tasks || [])].sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
         const eff = effectiveStatuses(orderedTasks)
-        // Флоу достиг гейта: удерживаемая задача стоит в blocked — значит ответ нужен
-        // прямо сейчас. Разворачиваем кнопки один раз автоматически; свернул руками —
-        // уважаем, по умолчанию (гейт где-то впереди) строка свёрнута.
-        const reachedGate = (snap.gates || []).find((g) => g.status === 'pending' && eff.get(g.taskId)?.status === 'blocked')
+        const byId = new Map(orderedTasks.map((t) => [t.id, t]))
+        // Ран ещё не начал работать (ничего не запускалось и не завершилось): даже формально
+        // ready-шаги выглядят спящими — серые часы вместо янтарных, никакой суеты до команд
+        // координатора.
+        const runStarted = orderedTasks.some((t) => ['dispatched', 'succeeded', 'failed'].includes(t.status))
+        // Флоу достиг гейта — подтверждение нужно ПРЯМО СЕЙЧАС: удерживаемая задача стоит
+        // в blocked И все её прочие зависимости закрыты (не «заблокирована заранее», а
+        // «дошла очередь»). Разворачиваем кнопки один раз; свернул руками — уважаем,
+        // по умолчанию (гейт где-то впереди или ран не начат) строка свёрнута.
+        const gateReached = (g) => {
+          if (g.status !== 'pending' || eff.get(g.taskId)?.status !== 'blocked') return false
+          const held = byId.get(g.taskId)
+          return !held || (held.deps || []).every((d) => byId.get(d)?.status === 'succeeded')
+        }
+        const reachedGate = (snap.gates || []).find(gateReached)
         if (reachedGate && S.gateAutoOpened !== reachedGate.id) {
           S.gateAutoOpened = reachedGate.id
           if (S.openGate === null) S.openGate = reachedGate.id
@@ -835,7 +846,7 @@
             for (const k of kids) emitted.add(k.id)
             const agg = aggregate(kids)
             const doneKids = kids.filter((k) => (eff.get(k.id) || { status: k.status }).status === 'succeeded').length
-            stepRows.push(`<div class="blockhead${flowIndex < totalFlow - 1 ? ` flow conn-${agg === 'succeeded' ? 'ok' : agg === 'dispatched' ? 'run' : 'idle'}` : ''}">${statusIcon(agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
+            stepRows.push(`<div class="blockhead${flowIndex < totalFlow - 1 ? ` flow conn-${agg === 'succeeded' ? 'ok' : agg === 'dispatched' ? 'run' : 'idle'}` : ''}">${statusIcon(agg === 'ready' && !runStarted ? 'pending' : agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
             flowIndex += 1
             for (const k of kids) {
               // gate-on-block вешается на первого ребёнка — замок перед ним, на входе в блок
@@ -914,6 +925,8 @@
         function stepRow(t, child) {
           const skipped = isSkipped(t, maxPassedOrder)
           const e = eff.get(t.id) || { status: t.status }
+          // В неначатом ране ready выглядит спящим: серые часы, не янтарные.
+          const iconStatus = e.status === 'ready' && !runStarted ? 'pending' : e.status
           // Вердикт последней попытки важнее статуса задачи: succeeded-воркер, сказавший
           // request-changes, это ОТКЛОНЕНИЕ, а не «готово». Флаг expectsVerdict тут не
           // нужен — он требуется только точке «не определился», а определившийся вердикт
@@ -1000,7 +1013,7 @@
             ? `<div class="tiny muted" style="margin-left:2px">в блоке «${esc(String(t.parentTaskId).slice(5))}»</div>`
             : ''
           return `<div class="step${skipped ? ' skipped' : ''}${nest}" data-act="toggle-step:${esc(t.id)}">
-            <div class="st">${skippedIcon(t, maxPassedOrder) || (rejected ? ICON.fail : statusIcon(e.status))}</div>
+            <div class="st">${skippedIcon(t, maxPassedOrder) || (rejected ? ICON.fail : statusIcon(iconStatus))}</div>
             <div class="ag">${agentIcon(t.agent)}</div>
             <div class="body">
               <div class="title">${branch}${esc(t.title || t.id)}${startBtn}${chev}</div>
