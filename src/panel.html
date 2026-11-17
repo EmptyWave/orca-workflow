@@ -105,6 +105,8 @@
       .step.childrow.conn-ok::after { border-left-color: #3fb950; border-top-color: #3fb950; }
       .step.flow.conn-run::before, .blockhead.flow.conn-run::before, .step.childrow.conn-run::before,
       .step.childrow.conn-run::after { border-left-color: #d29922; border-top-color: #d29922; }
+      .step.flow.conn-fail::before, .blockhead.flow.conn-fail::before, .step.childrow.conn-fail::before,
+      .step.childrow.conn-fail::after { border-left-color: #f85149; border-top-color: #f85149; }
       .step.childrow { padding-left: 34px; position: relative; }
 
       .step.childrow .title { font-weight: 500; }
@@ -824,7 +826,7 @@
             }
             drawer = `<div class="step-drawer">${bits.join('')}</div>`
           }
-          const conn = `conn-${e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}`
+          const conn = `conn-${rejected ? 'fail' : e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}`
           const nest = child
             ? ` childrow ${conn}`
             : (flowIndex < totalFlow - 1 ? ` flow ${conn}` : '')
