@@ -1296,6 +1296,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     baseBranch: string | null
     worktreeName: string
     agent: string
+    /** Точное имя git-ветки рана без префикса логина; null — пусть Orca даст <логин>/<имя>. */
+    branch?: string | null
   }): Promise<string> {
     if (input.source === 'project' && input.projectPath) bridge.pin(input.projectPath)
     const template = await loadTemplate(input.source, input.projectPath, input.templateId)
@@ -1466,6 +1468,10 @@ export default function activate(orca: OrcaWorkerApi): void {
         // launch the coordinator session THERE — the main checkout stays untouched.
         try {
           const baseFlag = input.baseBranch ? ` --base-branch ${shellQuote(input.baseBranch)}` : ''
+          // Явная ветка (--branch) подменяет сконструированное <логин>/<имя> целиком;
+          // в имя ветки разрешён ограниченный набор символов git — остальное срезаем.
+          const rawBranch = typeof input.branch === 'string' ? input.branch.trim() : ''
+          const branchFlag = rawBranch !== '' ? ` --branch ${shellQuote(rawBranch.replace(/[^A-Za-z0-9._/-]+/g, '-').replace(/^-+|-+$/g, '') || rawBranch)}` : ''
           // Имя ворктри занято ЖИВЫМ раном — суффиксуем -2, -3, … (два рана в одном
           // ворктри перебивают привязку панели). Но если ранов на нём нет — имя даём
           // использовать повторно: продолжение работы в том же ворктри (план/openspec
@@ -1493,7 +1499,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           }
           if (worktreeName !== wantedName) input.worktreeName = worktreeName
           await bridge.run(
-            `orca worktree create --repo path:${shellQuote(input.projectPath ?? '.')} --name ${shellQuote(worktreeName)}${baseFlag} --json || true`,
+            `orca worktree create --repo path:${shellQuote(input.projectPath ?? '.')} --name ${shellQuote(worktreeName)}${baseFlag}${branchFlag} --json || true`,
             90_000
           )
           const list = await orca.host.call<{ workspaces: Array<{ id: string; name: string; path: string }> }>('workspace.list', undefined)
