@@ -1354,7 +1354,7 @@ export default function activate(orca: OrcaWorkerApi): void {
             const selector = runWorktreePath ? `path:${runWorktreePath}` : `name:${input.worktreeName}`
             for (let attempt = 0; attempt < 2; attempt++) {
               const out = await bridge.run(
-                `orca agent launch --agent ${shellQuote(coordinator?.agent ?? input.agent)} --worktree ${shellQuote(selector)} --prompt ${shellQuote(brief)} --json`,
+                `orca agent launch --agent ${shellQuote(coordinator?.agent ?? input.agent)} --worktree ${shellQuote(selector)} --prompt ${shellQuote(brief)} --focus --json`,
                 60_000
               )
               let handle = ''
