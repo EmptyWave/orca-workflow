@@ -43,6 +43,9 @@ const STYLE = `
 .wfv-spmgr .sp-row{display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--orca-border);font-size:12px;color:var(--orca-foreground)}
 .wfv-spmgr .sp-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .wfv-spmgr button{font:11.5px inherit;padding:2px 8px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer}
+.wfv-spmgr button.icon{padding:3px 5px;line-height:0;display:inline-flex;align-items:center;justify-content:center;color:var(--orca-muted-foreground)}
+.wfv-spmgr button.icon:hover{color:var(--orca-foreground)}
+.wfv-spmgr button.icon.armed{color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)}
 .wfv-spmgr textarea{width:100%;min-height:120px;box-sizing:border-box;padding:4px 6px;border:1px solid var(--orca-input);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);font:11.5px ui-monospace,monospace;resize:vertical}
 .wfv-spmgr label{display:block;margin:8px 0 2px;font-size:11px;color:var(--orca-muted-foreground)}
 .wfv-spmgr input{width:100%;box-sizing:border-box;padding:4px 6px;border:1px solid var(--orca-input);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);font:12px ui-monospace,monospace}
@@ -271,16 +274,21 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       info.textContent = `${sp.slug} — ${sp.agent}${sp.model ? ' · ' + sp.model : ''}`
       info.title = sp.spec ?? ''
       const edit = document.createElement('button')
-      edit.textContent = 'изменить'
+      edit.className = 'icon'
+      edit.title = 'изменить'
+      edit.innerHTML = '<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M11.3 2.1l2.6 2.6-8.3 8.3-3.1.5.5-3.1zM10 3.4l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>'
       edit.addEventListener('click', () => void renderSpManager(sp))
       const rm = document.createElement('button')
-      rm.textContent = 'удалить'
+      rm.className = 'icon danger'
+      rm.title = 'удалить'
+      rm.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'
       let armed = false
       rm.addEventListener('click', async () => {
         if (!armed) {
           armed = true
-          rm.textContent = 'точно?'
-          setTimeout(() => { armed = false; rm.textContent = 'удалить' }, 2500)
+          rm.classList.add('armed')
+          rm.title = 'точно? нажми ещё раз'
+          setTimeout(() => { armed = false; rm.classList.remove('armed'); rm.title = 'удалить' }, 2500)
           return
         }
         panel.setAttribute('data-busy', '1')
