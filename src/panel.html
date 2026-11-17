@@ -129,6 +129,10 @@
       .gaterow .gs { font-size: 11px; color: var(--orca-muted-foreground); }
       .gaterow.pending .gs { color: var(--orca-warning, #d29922); font-weight: 600; }
       .gaterow .gate-btns { margin-top: 5px; }
+      /* Предпросмотр шаблона: замок без нити и без клика — просто маркер после шага */
+      .gaterow.static { cursor: default; }
+      .gaterow.static:hover { background: none; }
+      .gaterow.static::before { content: none; }
       .step.sub { padding-left: 28px; }
       .step.sub .title { font-weight: 400; color: var(--orca-muted-foreground); }
       .step .start { margin: 6px 0 2px; display: flex; flex-direction: column; gap: 6px; }
@@ -193,6 +197,10 @@
         pencil: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M11.3 2.1l2.6 2.6-8.3 8.3-3.1.5.5-3.1zM10 3.4l2.6 2.6" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"/></svg>`,
         refresh: `<svg width="13" height="13" viewBox="0 0 16 16" fill="none"><path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v2.7h-2.7" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/></svg>`
       }
+      // Замок гейта: закрытый янтарный (ждёт ответа) / открытый зелёный (решён).
+      const GATE_AMBER = 'var(--orca-warning, #d29922)'
+      const LOCK_CLOSED = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="6.8" width="9.6" height="7" rx="1.5" stroke="${GATE_AMBER}" stroke-width="1.5"/><path d="M5.4 6.8V5a2.6 2.6 0 0 1 5.2 0v1.8" stroke="${GATE_AMBER}" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="10.1" r="1" fill="${GATE_AMBER}"/></svg>`
+      const LOCK_OPEN = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="6.8" width="9.6" height="7" rx="1.5" stroke="#3fb950" stroke-width="1.5"/><path d="M5.4 6.8V5a2.6 2.6 0 0 1 5-1" stroke="#3fb950" stroke-width="1.5" stroke-linecap="round"/></svg>`
       const AGENT_SVG = {
         // Claude sunburst — from the Orca material-icons pack (Apache-2.0/MIT, © Google)
         claude: `<svg width="14" height="14" viewBox="0 0 16 16"><g fill="#e8703f"><path d="m14.375 6.48.49.28v.209l-.14.489-5.937 1.397-.558-1.387zm0 0"/><path d="m12.155 2.373.683.143.182.224.173.535-.072.342-3.983 5.447L7.81 7.737l3.673-4.82z"/><path d="m8.719 1.522.419-.28.349.14.349.49-.957 5.748-.65-.441-.279-.769.49-4.33z"/><path d="m4.239 1.614.43-.55L4.95 1l.558.081.275.216 2.004 4.442.724 2.11-.848.471-3.231-5.864z"/><path d="m2.154 4.665-.14-.56.42-.488.488.07h.14l2.933 2.165.908.698 1.257.978-.698 1.187-.629-.489-.419-.419-4.05-2.863z"/><path d="M1.316 8.296 1 7.946v-.31l.316-.108 3.562.21 3.491.279-.113.695-6.66-.346z"/><path d="M3.411 11.931h-.698l-.278-.32v-.382l1.186-.838 4.82-3.068.487.833z"/><path d="m4.738 13.883-.28.07-.418-.21.07-.35 4.12-5.446.558.768-3.072 4.05z"/><path d="m8.23 14.581-.21.28-.419.14-.349-.28-.21-.42L8.09 8.646l.629.07z"/><path d="M11.791 13.045v.558l-.07.21-.279.14-.489-.066-3.356-4.996 1.331-1.014 1.117 2.025.105.733z"/><path d="m13.398 12.207.07.349-.21.279-.21-.07-1.187-.838-1.815-1.606-1.397-.978.419-1.326.698.419.42.768z"/><path d="m12.49 8.645 1.746.14.419.28.279.418v.302l-.768.327-3.911-.978-1.606-.07.419-1.466 1.117.838z"/></g></svg>`,
@@ -702,10 +710,7 @@
           const g = gateByTask.get(taskId)
           if (!g) return ''
           const pending = g.status === 'pending'
-          const amber = 'var(--orca-warning, #d29922)'
-          const lock = pending
-            ? `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="6.8" width="9.6" height="7" rx="1.5" stroke="${amber}" stroke-width="1.5"/><path d="M5.4 6.8V5a2.6 2.6 0 0 1 5.2 0v1.8" stroke="${amber}" stroke-width="1.5" stroke-linecap="round"/><circle cx="8" cy="10.1" r="1" fill="${amber}"/></svg>`
-            : `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><rect x="3.2" y="6.8" width="9.6" height="7" rx="1.5" stroke="#3fb950" stroke-width="1.5"/><path d="M5.4 6.8V5a2.6 2.6 0 0 1 5-1" stroke="#3fb950" stroke-width="1.5" stroke-linecap="round"/></svg>`
+          const lock = pending ? LOCK_CLOSED : LOCK_OPEN
           const state = pending ? 'ждёт ответа' : `решён${g.resolution ? ': ' + g.resolution : ''}`
           const btns = pending && S.openGate === g.id
             ? `<div class="gate-btns">` +
@@ -857,7 +862,6 @@
               step.specialist ? 'воркер ' + step.specialist : null,
               step.parallel ? `≤${step.parallel} паралл.` : null,
               (step.deps || []).length > 0 ? 'deps: ' + step.deps.join(', ') : null,
-              step.gate ? 'гейт: ' + step.gate.question : null,
               step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
             ].filter(Boolean).join(' · ')
             const main = `<div class="step">
@@ -869,7 +873,11 @@
               <div class="body"><div class="title">↳ ${esc(child.id)}${child.title ? ' · ' + esc(child.title) : ''}</div>
               <div class="meta">${child.optional ? 'опциональный: ' : ''}${child.phase === 'before_start' ? 'до старта воркера' : child.phase === 'parallel' ? 'параллельно с воркером' : child.phase === 'before_end' ? 'после работы, до отчёта' : 'после отчёта'}</div></div>
             </div>`).join('')
-            return [main, subs]
+            // Гейт шага — замок после шага, как в ране: подтверждает результат, спросит человека
+            const gate = step.gate
+              ? `<div class="gaterow static pending"><span class="lock">${LOCK_CLOSED}</span><div class="body"><div><span class="gq">гейт · ${esc(step.gate.question)}</span> <span class="gs">спросит после шага</span></div></div></div>`
+              : ''
+            return [main, subs, gate]
           }).join('')
           preview = `<div class="steps">${rows}</div>`
         }
