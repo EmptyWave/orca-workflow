@@ -130,9 +130,12 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     }
   }
   let projectPath: string | null = null
+  /** Ошибка последней загрузки карточек — показываем её в менеджере, а не пустоту. */
+  let spError: string | null = null
   const request = <T>(name: string, input: unknown, timeoutMs = 30000): Promise<T> =>
     orca.plugin.request(name, input as never, { timeoutMs }) as Promise<T>
   async function loadSpecialists(): Promise<void> {
+    spError = null
     try {
       const current = await request<{ project: { path: string } | null }>('project.current', undefined)
       projectPath = current?.project?.path ?? null
@@ -144,8 +147,11 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       const answer = await request<{ workers: Sp[]; projectPath: string | null }>('workers.listSmart', { slugs }, 60000)
       specialists = answer.workers ?? []
       if (answer.projectPath) projectPath = answer.projectPath
-    } catch {
+      if (specialists.length === 0) spError = `карточки не нашлись по слагам шаблона (${slugs.join(', ') || 'шаблон без воркеров'})`
+    } catch (e) {
       specialists = []
+      spError = 'воркеры не загрузились: ' + (e instanceof Error ? e.message : String(e)) +
+        ' — если редактор был открыт до обновления плагина, закрой вкладку и открой файл заново'
     }
     renderInspector()
   }
@@ -225,7 +231,9 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
   async function renderSpManager(editing: Sp | 'new' | null = null): Promise<void> {
     const panel = spPanel
     if (!panel) return
-    if (!projectPath) await loadSpecialists()
+    // Перезагружаем карточки не только без проекта, но и когда прошлый заход не удался:
+    // редактор, открытый до обновления плагина, живёт с мёртвым каналом и пустым списком.
+    if (!projectPath || (specialists.length === 0 && editing === null)) await loadSpecialists()
     panel.innerHTML = ''
     const h = document.createElement('h3')
     h.textContent = `Воркеры — ${projectPath ? projectPath.split('/').pop() : 'проект не определён'}`
@@ -235,6 +243,17 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     close.style.cssText = 'float:right'
     close.addEventListener('click', () => { if (spPanel) { spPanel.remove(); spPanel = null } })
     panel.append(close)
+    if (spError) {
+      const err = document.createElement('div')
+      err.className = 'err'
+      err.textContent = spError
+      panel.append(err)
+      const retry = document.createElement('button')
+      retry.textContent = 'повторить загрузку'
+      retry.style.margin = '6px 0'
+      retry.addEventListener('click', () => { void loadSpecialists().then(() => void renderSpManager()) })
+      panel.append(retry)
+    }
     if (!projectPath) {
       const note = document.createElement('div')
       note.className = 'err'
