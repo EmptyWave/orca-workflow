@@ -417,7 +417,18 @@ export default function activate(orca: OrcaWorkerApi): void {
     refreshing = true
     try {
       const storedRun = (await orca.storage.get('html.runId')) ?? (await orca.storage.get('state.selectedRunId'))
-      const runId = typeof storedRun === 'string' && storedRun !== '' ? storedRun : null
+      let runId = typeof storedRun === 'string' && storedRun !== '' ? storedRun : null
+      // Ран удалили, а html.runId ещё смотрит на него: не снапшотим труп и не затираем
+      // кэш пустотой — отвязываемся, панель перепривяжется к живому рану сессии.
+      if (runId) {
+        const known = await cli<{ runs?: unknown } | unknown[]>('orca orchestration run-list --limit 20 --json')
+        const rows: Record<string, unknown>[] = Array.isArray(known) ? (known as Record<string, unknown>[]) : asArray<Record<string, unknown>>(known.runs)
+        const alive = rows.some((row) => String(field(row, 'runId', 'id') ?? '') === runId)
+        if (!alive) {
+          await orca.storage.delete('html.runId').catch(() => undefined)
+          runId = null
+        }
+      }
       let snap: WfSnapshot
       try {
         snap = await snapshot(runId)
@@ -427,7 +438,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       // `at` changes every snapshot; compare the payload so quiet runs stay quiet
       // (otherwise panel and worker ping-pong state.changed forever).
       const serialized = JSON.stringify({ ...snap, at: 0 })
-      if (serialized !== lastSnapshot) {
+      if (serialized !== lastSnapshot && (runId !== null || snap.run !== null)) {
         lastSnapshot = serialized
         await orca.storage.set('state.snapshot', snap)
         orca.panels.post('state.changed', {
@@ -2203,6 +2214,11 @@ export default function activate(orca: OrcaWorkerApi): void {
     await orca.storage.delete(`runmeta.${id}`).catch(() => undefined)
     await orca.storage.delete(`auto.${id}`).catch(() => undefined)
     await orca.storage.delete(`agents.${id}`).catch(() => undefined)
+    // удалили ран, за которым следил цикл опроса — отвязываем, чтобы в кэш
+    // не писалась пустая оболочка удалённого (панель перепривяжется сама)
+    if ((await orca.storage.get('html.runId').catch(() => null)) === id) {
+      await orca.storage.delete('html.runId').catch(() => undefined)
+    }
     void refresh()
     return { ok: true }
   })

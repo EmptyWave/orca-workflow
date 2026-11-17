@@ -149,8 +149,8 @@
       }
       .spin {
         width: 13px; height: 13px; border-radius: 50%;
-        border: 2px solid #6e5a1f;
-        border-top-color: var(--orca-warning, #d29922);
+        border: 2px solid rgba(210, 153, 34, .38);
+        border-top-color: #d29922;
         animation: wf-spin .8s linear infinite;
       }
       @keyframes wf-spin { to { transform: rotate(360deg); } }
@@ -322,17 +322,24 @@
         setTimeout(() => { if (S.armedDel === key) { S.armedDel = null; render() } }, 5000)
       }
       // В одном ворктри может оказаться несколько ранов (перезапуски в то же имя).
-      // Привязка: сначала ран с ЖИВЫМ координатором (его и ведёт человек в чате),
-      // внутри — по свежести активности (updated_at), без координатора — новейший по created.
+      // Привязка: самый АКТИВНЫЙ ран (updated_at — задачи/гейты менялись) — чат
+      // координатора мог быть закрыт у работающего рана и открытие у мёртвого,
+      // реальную жизнь рана показывает активность. Тай-брейки: координатор, created.
       function pickSessionRun(runs) {
         if (!S.sessionPath) return null
         const own = (runs || []).filter((r) => r.worktreePath === S.sessionPath)
         if (own.length === 0) return null
         const cmp = (a, b) =>
-          ((b.hasCoordinator ? 1 : 0) - (a.hasCoordinator ? 1 : 0)) ||
           (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '') ||
+          ((b.hasCoordinator ? 1 : 0) - (a.hasCoordinator ? 1 : 0)) ||
           (b.createdAt ?? '').localeCompare(a.createdAt ?? '')
         return own.slice().sort(cmp)[0]
+      }
+      // Ран «свежий», если активность была в последние 3 часа: удаление такого
+      // предупреждаем даже без бейджей — по ним не видно (чат бывает закрыт).
+      function isFreshRun(r) {
+        if (!r || !r.updatedAt) return false
+        return Date.now() - new Date(r.updatedAt + 'Z').getTime() < 3 * 60 * 60 * 1000
       }
       async function loadRuns() {
         try {
@@ -350,7 +357,12 @@
           // Ран привязан к сессии: показываем рана ЭТОГО воркспейса, без выбора из списка.
           const sessionRun = pickSessionRun(answer.runs)
           const wantedId = sessionRun?.runId ?? null
-          if (S.runId !== wantedId) { S.runId = wantedId; S.snap = null; S.planFiles = undefined; S.openGate = null }
+          if (S.runId !== wantedId) {
+            S.runId = wantedId; S.snap = null; S.planFiles = undefined; S.openGate = null
+            // воркер снапшотит ран из html.runId — ведём его за собой при перепривязке,
+            // иначе после удаления/смены рана в кэш пишется чужой/пустой снапшот
+            remember('runId', wantedId)
+          }
         } catch (e) { if (!S.runs || S.runs.length === 0) S.runs = []; setNotice('Запуски не читаются: ' + esc(e.message || e)) }
         render()
       }
@@ -359,7 +371,9 @@
           // The worker refreshes the snapshot on its own cadence and keeps it in storage:
           // reading it costs nothing. Only an explicit refresh pays for a live bridge call.
           const cached = force ? null : await orca.storage.get('state.snapshot').catch(() => null)
-          if (cached && typeof cached === 'object' && cached.tasks) {
+          // Кэш годится только для ТЕКУЩЕГО рана: воркер мог записать пустой снапшот
+          // удалённого рана или чужой ран — тогда идём живым запросом.
+          if (cached && typeof cached === 'object' && cached.tasks && cached.run && cached.run.runId === S.runId) {
             S.snap = cached
           } else {
             S.snap = await req('state.get', { runId: S.runId }, 60000)
@@ -1119,7 +1133,7 @@
           const delBtn = live
             ? `<button class="btn ghost mini" disabled title="У рана работают воркеры — сначала останови их">✕</button>`
             : S.armedDel === `hist:${r.runId}`
-              ? `<button class="btn mini" data-act="hist-del:${esc(r.runId)}" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="${r.hasCoordinator ? 'Внимание: к рану привязана сессия координатора — после удаления она останется без рана. ' : ''}Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">точно удалить?</button>`
+              ? `<button class="btn mini" data-act="hist-del:${esc(r.runId)}" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="${r.hasCoordinator ? 'Внимание: к рану привязана сессия координатора — после удаления она останется без рана. ' : ''}${isFreshRun(r) ? 'ВНИМАНИЕ: ран был активен недавно — возможно, это рабочий ран. ' : ''}Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">${isFreshRun(r) ? 'ран активен — точно удалить?' : 'точно удалить?'}</button>`
               : `<button class="btn ghost mini" data-act="hist-del:${esc(r.runId)}" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`
           return `<div class="histrow">
             <div class="body">
