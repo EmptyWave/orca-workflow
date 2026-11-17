@@ -234,7 +234,7 @@
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null, openAttempt: {}, openGate: null, sessionPath: null
+        cfg: null, bridge: null, openAttempt: {}, openGate: null, planFiles: undefined, sessionPath: null
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
@@ -306,7 +306,7 @@
           // Ран привязан к сессии: показываем рана ЭТОГО воркспейса, без выбора из списка.
           const sessionRun = (S.sessionPath ? answer.runs.find((r) => r.worktreePath === S.sessionPath) : null) ?? null
           const wantedId = sessionRun?.runId ?? null
-          if (S.runId !== wantedId) { S.runId = wantedId; S.snap = null }
+          if (S.runId !== wantedId) { S.runId = wantedId; S.snap = null; S.planFiles = undefined; S.openGate = null }
         } catch (e) { if (!S.runs || S.runs.length === 0) S.runs = []; setNotice('Запуски не читаются: ' + esc(e.message || e)) }
         render()
       }
@@ -538,6 +538,13 @@
             'resolve-custom': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), b.dataset.option),
             'toggle-gate': () => { S.openGate = S.openGate === arg ? null : arg; render() },
             'dismiss-job': () => { S.job = null; render() },
+            'open-plan-file': () => {
+              void (async () => {
+                try {
+                  await req('file.open', { worktreePath: S.planFiles?.worktreePath, rel: arg }, 30000)
+                } catch (e) { setNotice('файл не открылся: ' + esc(e.message || e)) }
+              })()
+            },
             'start-open': () => { S.startFor = S.startFor === arg ? null : arg; render() },
             'start-run': () => void startTask(S.snap.tasks.find((t) => t.id === arg)),
             'delete-run': async () => {
@@ -639,6 +646,16 @@
 
         const gateByTask = new Map((snap.gates || []).map((g) => [g.taskId, g]))
 
+        // Файлы плана для подтверждения гейта: человек апрувит конкретные спеки — тянем
+        // новейший openspec-change из ворктри рана один раз на ран (пока гейт ждёт).
+        if ((snap.gates || []).some((g) => g.status === 'pending') && S.planFiles === undefined) {
+          S.planFiles = null
+          void req('plan.files', { runId: S.runId }, 30000)
+            .then((r) => { S.planFiles = r })
+            .catch(() => { S.planFiles = null })
+            .finally(() => render())
+        }
+
         // Flow order from the template beats the CLI's task-list order (it reshuffles
         // whenever statuses flip); tasks without a stamp keep the arrival order.
         const orderedTasks = [...(snap.tasks || [])].sort((a, b) => (a.order ?? 999) - (b.order ?? 999))
@@ -725,13 +742,19 @@
         }
         const steps = stepRows.join('')
 
-        /** Гейт на нити флоу: замок на пунктире + состояние текстом; клик — кнопки ответа. */
+        /** Гейт на нити флоу: замок на пунктире + состояние текстом; клик — кнопки ответа.
+         *  В pending — ссылки на файлы плана: видно, что именно апрувишь. */
         function gateRow(taskId) {
           const g = gateByTask.get(taskId)
           if (!g) return ''
           const pending = g.status === 'pending'
           const lock = pending ? LOCK_CLOSED : LOCK_OPEN
           const state = pending ? 'ждёт ответа' : `решён${g.resolution ? ': ' + g.resolution : ''}`
+          const planFiles = pending && S.planFiles && S.planFiles.change
+            ? `<div class="tiny" style="margin-top:3px;color:var(--orca-muted-foreground)">план: openspec/changes/${esc(S.planFiles.change)}/ — ` +
+              S.planFiles.files.map((f) => `<a data-act="open-plan-file:${esc(f.rel)}" title="${esc(f.rel)}" style="color:var(--orca-accent);cursor:pointer">${esc(f.rel.split('/').pop())}</a>`).join(' · ') +
+              `</div>`
+            : ''
           const btns = pending && S.openGate === g.id
             ? `<div class="gate-btns">` +
               (g.options && g.options.length > 0 ? g.options : ['approve', 'request-changes'])
@@ -742,6 +765,7 @@
             <span class="lock">${lock}</span>
             <div class="body">
               <div><span class="gq">гейт · ${esc(g.question)}</span> <span class="gs">${esc(state)}</span></div>
+              ${planFiles}
               ${btns}
             </div>
           </div>`

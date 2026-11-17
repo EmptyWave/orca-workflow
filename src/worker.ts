@@ -1688,6 +1688,38 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { opened: true as const }
   })
 
+  /** Файлы плана для подтверждения: новейший openspec-change в ворктри рана. Человек
+   *  апрувит гейт — должен видеть, ЧТО апрувит, по ссылкам на файлы, а не по памяти. */
+  orca.panels.handle('plan.files', async ({ runId }) => {
+    everUsed = true
+    const run = (await listRuns()).find((r) => r.runId === runId)
+    const wt = run?.worktreePath ?? null
+    if (!wt) return { change: null, worktreePath: null, files: [] }
+    const out = await bridge.run(
+      `cd ${shellPath(`${wt}/openspec/changes`)} 2>/dev/null && c=$(ls -t | grep -v '^archive$' | head -1) && ` +
+        `echo "__CHG__$c" && cd "$c" && find . -type f -name '*.md' | sed 's|^\\./||' | sort; true`
+    )
+    let change: string | null = null
+    const files: string[] = []
+    for (const line of out.split('\n')) {
+      if (line.startsWith('__CHG__')) change = line.slice('__CHG__'.length).trim()
+      else if (line.trim() !== '' && change) files.push(line.trim())
+    }
+    return { change, worktreePath: wt, files }
+  })
+
+  orca.panels.handle('file.open', async ({ worktreePath, rel }) => {
+    everUsed = true
+    const list = await orca.host.call<{ workspaces: Array<{ id: string; path: string }> }>('workspace.list', undefined)
+    const ws = list.workspaces.find((w) => w.path === worktreePath)
+    if (!ws) {
+      throw new BridgeError(`воркспейс рана не открыт в Orca — файл: ${worktreePath}/${rel}`, 'no_terminal')
+    }
+    await orca.host.call('workspace.open', { workspaceId: ws.id }).catch(() => undefined)
+    await orca.host.call('editor.open', { workspaceId: ws.id, path: rel })
+    return { opened: true as const }
+  })
+
   orca.panels.handle('job.get', async ({ jobId }) => {
     const stored = await orca.storage.get('jobs')
     const jobs = (typeof stored === 'object' && stored !== null ? stored : {}) as Record<string, WfJob>
