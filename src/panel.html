@@ -166,6 +166,14 @@
       .step.skipped .body .title, .step.skipped .body .meta { opacity: .45; }
       /* ---- gates ---- */
       .gate-btns { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 7px; }
+      /* ---- run history ---- */
+      .histlist { display: flex; flex-direction: column; }
+      .histrow { display: flex; align-items: center; gap: 8px; padding: 7px 4px; border-bottom: 1px solid var(--orca-border); }
+      .histrow:last-child { border-bottom: 0; }
+      .histrow:hover { background: var(--orca-muted); }
+      .histrow .body { flex: 1; min-width: 0; }
+      .histrow .title { font-weight: 600; overflow-wrap: anywhere; }
+      .histrow .meta { font-size: 11px; color: var(--orca-muted-foreground); margin-top: 1px; }
       .gate-btns .btn.primary { background: #238636; border-color: #238636; }
       .gate-btns .btn.danger { background: var(--orca-destructive); border-color: var(--orca-destructive); color: var(--orca-destructive-foreground, #fff); }
 
@@ -228,6 +236,7 @@
         runs: null, runId: null, snap: null,
         project: null,
         tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
+        history: null,             // все раны для вкладки Run history
         objective: '', baseBranch: '', worktreeName: '',
         agent: 'claude', model: '', effort: '', worktree: '',
         startFor: null,           // task id with the start form open
@@ -249,7 +258,7 @@
 
       // persistence (the plugin's own storage, shared with the worker)
       const PERSIST = {
-        tab: (v) => ['runs', 'templates', 'settings'].includes(v),
+        tab: (v) => ['runs', 'templates', 'history', 'settings'].includes(v),
         runId: () => true, tplSource: (v) => ['library', 'project'].includes(v),
         tplId: () => true, objective: () => true, baseBranch: () => true, worktreeName: () => true,
         agent: () => true, model: () => true, effort: () => true, worktree: () => true
@@ -341,6 +350,17 @@
         if (S.tab === 'templates' && (S.templates === null || S.templates.length === 0)) void loadTemplates()
         render()
       }
+      /** Все раны для вкладки Run history: чистка старья и навигация по памяти. */
+      async function loadHistory() {
+        try {
+          const answer = await req('runs.list', undefined, 60000)
+          S.history = { runs: answer.runs ?? [], error: null }
+        } catch (e) {
+          S.history = { runs: [], error: String(e.message || e) }
+        }
+        render()
+      }
+
       let tplInFlight = false
       async function loadTemplates() {
         if (tplInFlight) return
@@ -477,7 +497,7 @@
       function render() {
         try {
           // tabs
-          const tabs = [['runs', 'Запуски'], ['templates', 'Шаблоны'], ['settings', 'Настройки']]
+          const tabs = [['runs', 'Run'], ['templates', 'Шаблоны'], ['history', 'Run history'], ['settings', 'Настройки']]
           document.getElementById('tabs').innerHTML = tabs.map(([id, label]) =>
             `<button class="tab${S.tab === id ? ' active' : ''}" data-tab="${id}">${label}</button>`).join('')
           // notice / busy
@@ -485,7 +505,7 @@
           nb.innerHTML = S.notice
             ? `<div class="callout danger">${S.notice}<button class="btn ghost mini" data-act="dismiss" style="float:right">×</button></div>`
             : S.busy ? `<div class="callout tiny">${esc(S.busy)}…</div>` : ''
-          el().innerHTML = S.tab === 'runs' ? viewRuns() : S.tab === 'templates' ? viewTemplates() : viewSettings()
+          el().innerHTML = S.tab === 'runs' ? viewRuns() : S.tab === 'templates' ? viewTemplates() : S.tab === 'history' ? viewHistory() : viewSettings()
           wire()
         } catch (e) {
           // A render crash must not freeze the frame forever: say so and offer a reload.
@@ -495,8 +515,8 @@
         }
       }
       function wire() {
-        document.querySelectorAll('[data-tab]').forEach((b) =>
-          b.onclick = () => { remember('tab', b.dataset.tab); if (b.dataset.tab === 'templates' && !S.templates) void loadTemplates(); if (b.dataset.tab === 'settings' && !S.cfg) void loadSettings(); render() })
+          document.querySelectorAll('[data-tab]').forEach((b) =>
+          b.onclick = () => { remember('tab', b.dataset.tab); if (b.dataset.tab === 'templates' && !S.templates) void loadTemplates(); if (b.dataset.tab === 'history' && !S.history) void loadHistory(); if (b.dataset.tab === 'settings' && !S.cfg) void loadSettings(); render() })
         document.querySelectorAll('[data-act]').forEach((b) => {
           if (b.classList.contains('step')) return // строки-шаги проводим отдельным проводом ниже
           const [act, arg] = b.dataset.act.split(':')
@@ -567,6 +587,25 @@
                 render()
               } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
             },
+            'hist-del': async () => {
+              const r = (S.history?.runs || []).find((x) => x.runId === arg)
+              if (!r) return
+              if (!confirm(`Удалить ран «${(r.objective || '').slice(0, 60)}» безвозвратно?`)) return
+              setBusy('удаление рана')
+              try {
+                await req('run.delete', { runId: arg }, 60000)
+                if (S.runId === arg) S.runId = null
+                await loadHistory()
+                await loadRuns()
+              } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+            },
+            'hist-refresh-brief': async () => {
+              setBusy('пересборка брифа')
+              try {
+                const r = await req('run.brief.refresh', { runId: arg }, 90000)
+                setNotice(`Бриф пересобран: ${esc(r.briefPath ?? '')}`)
+              } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+            },
             'instantiate': () => void instantiate(),
             'copy-project': () => void copyTemplate('project'),
             'copy-library': () => void copyTemplate('library'),
@@ -632,7 +671,7 @@
         if (!sessionRun) return `<div class="empty">В этой сессии нет рана.<br/><span class="tiny muted">ран живёт в воркспейсе, созданном при «Поднять Run» — открой его, чтобы следить</span><br/><button class="btn mini" data-act="go-templates" style="margin-top:8px">Поднять Run из шаблона</button></div>`
         const snap = S.snap
         const sel = `<div class="rowline" style="align-items:center;gap:6px">` +
-          `<span class="chip" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective).slice(0, 48)}</span>` +
+          `<span class="chip" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective).slice(0, 60)}</span>` +
           `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
           `<button class="btn ghost" data-act="brief-refresh" title="Пересобрать бриф координатора из текущего шаблона и карточек (рой, промты); координатора осведоми сам — «бриф обновлён, перечитай .orca/coordinator-brief.md»">↻ бриф</button>` +
           `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button></div>`
@@ -996,6 +1035,28 @@
             <button class="btn ghost mini" data-act="dismiss-job" style="float:right">×</button></div>`
         }
         return ''
+      }
+
+      // ---- run history view
+      function viewHistory() {
+        if (!S.history) { void loadHistory(); return `<div class="skeleton" style="width:70%"></div><div class="skeleton" style="width:50%"></div>` }
+        const h = S.history
+        if (h.error) return `<div class="callout danger">Раны не читаются: ${esc(h.error)}</div>`
+        if (h.runs.length === 0) return `<div class="empty">Ранов пока нет.</div>`
+        const rows = h.runs.map((r) => {
+          const project = r.projectPath ? r.projectPath.split('/').filter(Boolean).pop() : '—'
+          const worktree = r.worktreePath ? r.worktreePath.split('/').filter(Boolean).pop() : '—'
+          const mine = r.runId === S.runId
+          return `<div class="histrow">
+            <div class="body">
+              <div class="title">${esc(r.objective)}${mine ? ' <span class="chip" title="ран этой сессии">этой сессии</span>' : ''}</div>
+              <div class="meta">${esc(project)} · ворктри ${esc(worktree)} · ${esc(short(r.runId, 'run_'))}</div>
+            </div>
+            <button class="btn ghost mini" data-act="hist-refresh-brief:${esc(r.runId)}" title="Пересобрать бриф координатора из текущего шаблона и карточек">↻ бриф</button>
+            <button class="btn ghost mini" data-act="hist-del:${esc(r.runId)}" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>
+          </div>`
+        }).join('')
+        return scopeHint() + `<div class="card"><h2>Run history — ${h.runs.length}</h2><div class="histlist">${rows}</div></div>`
       }
 
       // ---- settings view

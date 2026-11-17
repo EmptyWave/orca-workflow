@@ -1235,8 +1235,11 @@ export default function activate(orca: OrcaWorkerApi): void {
           base_branch: input.baseBranch ?? '',
           worktree: input.worktreeName
         }
+        // Название рана — ровно то, что ввёл человек (первая строка, до 120 символов);
+        // префикс титула шаблона убран — «development — …» не имел отношения к вводу.
+        // Пустой заголовок — fallback на титул шаблона.
         const run = await cli<{ runId: string }>(
-          `orca orchestration run-create --objective ${shellQuote(objectiveSeed === '' ? template.title : `${template.title} — ${objectiveSeed.split('\n')[0].slice(0, 80)}`)} --json`
+          `orca orchestration run-create --objective ${shellQuote(objectiveSeed === '' ? template.title : objectiveSeed.split('\n')[0].slice(0, 120))} --json`
         )
         // Which project this Run belongs to, so the panel can scope its Runs list.
         await orca.storage.set(`runmeta.${run.runId}`, {
