@@ -38,7 +38,7 @@ const STYLE = `
 .wfv-inspector textarea{min-height:70px;resize:vertical}
 .wfv-inspector .row{display:flex;gap:6px;align-items:center}
 .wfv-inspector .del{margin-top:14px;border-color:var(--orca-destructive);color:var(--orca-destructive);background:none;padding:4px 10px;border-radius:var(--orca-radius);cursor:pointer;font:12px inherit}
-.wfv-spmgr{position:fixed;top:42px;right:0;bottom:0;width:330px;background:var(--orca-card);border-left:1px solid var(--orca-border);box-shadow:-6px 0 18px rgba(0,0,0,.25);z-index:40;padding:12px;overflow:auto;box-sizing:border-box}
+.wfv-spmgr{position:fixed;top:42px;right:0;bottom:0;width:330px;background:var(--orca-card);border-left:1px solid var(--orca-border);box-shadow:-6px 0 18px rgba(0,0,0,.25);z-index:40;padding:12px;overflow:auto;box-sizing:border-box;color:var(--orca-foreground)}
 .wfv-spmgr h3{margin:0 0 8px;font-size:13px}
 .wfv-spmgr .sp-row{display:flex;align-items:center;gap:6px;padding:6px 4px;border-bottom:1px solid var(--orca-border);font-size:12px;color:var(--orca-foreground)}
 .wfv-spmgr .sp-row .grow{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -240,14 +240,21 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     // редактор, открытый до обновления плагина, живёт с мёртвым каналом и пустым списком.
     if (!projectPath || (specialists.length === 0 && editing === null)) await loadSpecialists()
     panel.innerHTML = ''
+    // Шапка flex'ом: заголовок и крестик закрытия каждый в своей ячейке — флоат
+    // наезжал на первую строку списка.
+    const head = document.createElement('div')
+    head.style.cssText = 'display:flex;align-items:center;gap:8px;margin:0 0 10px'
     const h = document.createElement('h3')
+    h.style.cssText = 'margin:0;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap'
     h.textContent = `Воркеры — ${projectPath ? projectPath.split('/').pop() : 'проект не определён'}`
-    panel.append(h)
+    head.append(h)
     const close = document.createElement('button')
-    close.textContent = '×'
-    close.style.cssText = 'float:right'
+    close.className = 'icon'
+    close.title = 'закрыть панель'
+    close.innerHTML = '<svg width="12" height="12" viewBox="0 0 16 16" fill="none"><path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'
     close.addEventListener('click', () => { if (spPanel) { spPanel.remove(); spPanel = null } })
-    panel.append(close)
+    head.append(close)
+    panel.append(head)
     if (spError) {
       const err = document.createElement('div')
       err.className = 'err'
