@@ -371,7 +371,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     const pilot = pilotState
       ? {
           on: pilotState.driver === 'coordinator' ? true : autoPilotOn && !pilotState.stopped,
-          stopped: pilotState.stopped ?? null,
+          // stopped пишет только автопилот; у coordinator-рана это всегда мусор
+          // (например, от чужого окна ручного запуска) — не показываем
+          stopped: pilotState.driver === 'coordinator' ? null : pilotState.stopped ?? null,
           actions: pilotState.actions,
           driver: pilotState.driver ?? 'autopilot',
           coordinatorTerminal: pilotState.coordinatorTerminal ?? null
