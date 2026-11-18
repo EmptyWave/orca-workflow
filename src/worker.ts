@@ -1646,13 +1646,31 @@ export default function activate(orca: OrcaWorkerApi): void {
     await bridge.run(`orca orchestration run-use --id ${shellQuote(runId)} --json`)
   }
 
-  /** Адрес координатора рана для сообщений из панели: сначала AutoState (терминал,
-   *  записанный при поднятии), затем coordinator_handle из orchestration.db (его ставит
-   *  run-use, когда координатор привязался сам), крайний случай — ящик рана. */
-  async function coordinatorTarget(runId: string): Promise<string> {
-    const auto = await storageGet<{ coordinatorTerminal?: unknown }>(`auto.${runId}`)
-    if (typeof auto?.coordinatorTerminal === 'string' && auto.coordinatorTerminal !== '') {
-      return auto.coordinatorTerminal
+  /** Хендл НАСТОЯЩЕГО координатора рана. run-use от моста перезаписывает
+   *  coordinator_handle рана на мост — так мы теряли адресата уведомлений, — поэтому
+   *  мост больше не биндится: мутации панели идут --from хендла координатора.
+   *  Поиск: AutoState (если это не мост) → живой агент-терминал в ворктри рана →
+   *  coordinator_handle из базы (если не мост). */
+  async function coordHandle(runId: string): Promise<string | null> {
+    const own = bridge.bridgeHandle
+    const auto = await storageGet<{ coordinatorTerminal?: unknown; worktreeName?: unknown; worktreePath?: unknown }>(`auto.${runId}`)
+    const fromAuto = typeof auto?.coordinatorTerminal === 'string' ? auto.coordinatorTerminal : ''
+    if (fromAuto.startsWith('term_') && fromAuto !== own) return fromAuto
+    const wtName = typeof auto?.worktreeName === 'string' && auto.worktreeName !== ''
+      ? auto.worktreeName
+      : typeof auto?.worktreePath === 'string' ? (auto.worktreePath.split('/').pop() ?? '') : ''
+    if (wtName !== '') {
+      try {
+        const listing = await bridge.json<{ result?: { terminals?: Array<{ handle?: string; title?: string; worktreeId?: string }> } }>('orca terminal list --json')
+        const inWt = (listing.result?.terminals ?? []).filter(
+          (t) => (t.worktreeId ?? '').endsWith(`/${wtName}`) && (t.handle ?? '') !== '' && t.handle !== own
+        )
+        const agent = inWt.find((t) => /claude|codex|agent|zcode|opencode|glm/i.test(t.title ?? ''))
+          ?? inWt[0]
+        if (agent?.handle) return agent.handle
+      } catch {
+        // списка терминалов нет — дальше база
+      }
     }
     try {
       const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
@@ -1660,25 +1678,35 @@ export default function activate(orca: OrcaWorkerApi): void {
         `sqlite3 ${shellQuote(db)} "SELECT coordinator_handle FROM runs WHERE id = '${runId.replace(/'/g, '')}';"`
       )
       const handle = (out.split('\n')[0] ?? '').trim()
-      if (handle.startsWith('term_')) return handle
+      if (handle.startsWith('term_') && handle !== own) return handle
     } catch {
-      // нет базы — ящик рана
+      // нет базы — координатора не нашли
     }
-    return `run:${runId}`
+    return null
+  }
+
+  /** Флаг --from для мутаций панели: от имени координатора рана; если он не нашёлся —
+   *  старый путь (мост сам биндится run-use, со всеми побочками). */
+  async function runFromFlag(runId: string | null | undefined): Promise<string> {
+    if (!runId) return ''
+    const h = await coordHandle(runId)
+    if (h) return ` --from ${shellQuote(h)}`
+    await bindRun(runId)
+    return ''
   }
 
   orca.panels.handle('gate.resolve', async ({ gateId, resolution, runId, question }) => {
     everUsed = true
-    if (runId) await bindRun(runId)
+    const from = await runFromFlag(runId)
     await bridge.run(
-      `orca orchestration gate-resolve --id ${shellQuote(gateId)} --resolution ${shellQuote(resolution)} --json`
+      `orca orchestration gate-resolve --id ${shellQuote(gateId)} --resolution ${shellQuote(resolution)}${from} --json`
     )
     // Ответ из панели должен дойти до того, кто его ждёт: закрытый гейт не будит сессию
     // координатора (она могла закончить ход в ожидании ответа человека). Шлём сообщение
     // в чат координатора; неудача не ломает resolve — статус он всё равно увидит.
     if (runId) {
       try {
-        const target = await coordinatorTarget(runId)
+        const target = (await coordHandle(runId)) ?? `run:${runId}`
         const q = typeof question === 'string' && question !== '' ? `«${question}»` : 'гейт'
         await bridge.run(
           `orca orchestration send --to ${shellQuote(target)} --subject ${shellQuote(`Гейт решён из панели: ${resolution}`)} --body ${shellQuote(`Человек ответил на гейт ${q} → ${resolution}. Удерживаемый шаг разблокирован — продолжай флоу.`)} --json`
@@ -1693,13 +1721,13 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('task.start', async ({ taskId, agent, model, effort, worktree, runId }) => {
     everUsed = true
-    if (runId) await bindRun(runId)
+    const from = await runFromFlag(runId)
     const modelFlags = model ? ` --model ${shellQuote(model)}` : ''
     const effortFlags = model && effort ? ` --effort ${shellQuote(effort)}` : ''
     const result = await cli<{ dispatchId: string; state: string }>(
       `orca orchestration worker-start --task ${shellQuote(taskId)} --agent ${shellQuote(agent)} --worktree ${shellQuote(
         worktree
-      )}${modelFlags}${effortFlags} --json`,
+      )}${modelFlags}${effortFlags}${from} --json`,
       90_000
     )
     void refresh()
@@ -2128,8 +2156,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     const snap = await snapshot(runId)
     const byId = new Map(snap.tasks.map((t) => [t.id, t]))
     if (!byId.has(taskId)) throw new BridgeError(`задача ${taskId} не в ране ${runId}`, 'cli_error')
-    // Привязка хелпера к рану: без неё task-update падает с run_required.
-    await bindRun(runId)
+    // Мутации — от имени координатора рана (мост больше не биндится: run-use с моста
+    // перезаписывал coordinator_handle рана на мост).
+    const from = await runFromFlag(runId)
     // The step itself and everything downstream of it.
     const downstream = new Set<string>([taskId])
     let grew = true
@@ -2144,7 +2173,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     }
     for (const id of downstream) {
-      await bridge.run(`orca orchestration task-update --id ${shellQuote(id)} --status pending --json`)
+      await bridge.run(`orca orchestration task-update --id ${shellQuote(id)} --status pending${from} --json`)
     }
     // Resume the autopilot and forget failover history for the reset tail.
     const state = await loadAuto(runId)

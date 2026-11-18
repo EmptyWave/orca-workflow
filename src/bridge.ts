@@ -106,6 +106,12 @@ export class Bridge {
     }
   }
 
+  /** The bridge helper's own terminal handle, once created (to exclude it when looking
+   *  for the run's real coordinator among live terminals). */
+  get bridgeHandle(): string | null {
+    return this.fromHandle
+  }
+
   /** A long-sleeping terminal whose handle serves as the mutation sender identity.
    *  Created through the HOST api so it stays a background terminal — no visible tab pops
    *  open in the user's workspace (a CLI `orca terminal create` would show one); the CLI
