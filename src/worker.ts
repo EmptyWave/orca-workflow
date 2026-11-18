@@ -1651,56 +1651,6 @@ export default function activate(orca: OrcaWorkerApi): void {
    *  мост больше не биндится: мутации панели идут --from хендла координатора.
    *  Поиск: AutoState (если это не мост) → живой агент-терминал в ворктри рана →
    *  coordinator_handle из базы (если не мост). */
-  async function coordHandle(runId: string): Promise<string | null> {
-    const own = bridge.bridgeHandle
-    const auto = await storageGet<{ coordinatorTerminal?: unknown; worktreeName?: unknown; worktreePath?: unknown }>(`auto.${runId}`)
-    const fromAuto = typeof auto?.coordinatorTerminal === 'string' ? auto.coordinatorTerminal : ''
-    if (fromAuto.startsWith('term_') && fromAuto !== own) return fromAuto
-    // История привязок рана: сюда попадает каждый, кто делал run-use. Чат-сессия
-    // координатора адресуется как orca_session_id:<id> — это тот, с кем говорит человек;
-    // терминалы биндились и на этапе запуска. Мост исключаем всегда.
-    try {
-      const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
-      const rows = await bridge.run(
-        `sqlite3 ${shellQuote(db)} "SELECT terminal_handle FROM run_coordinator_handles WHERE run_id = '${runId.replace(/'/g, '')}' ORDER BY first_bound_at DESC;"`
-      )
-      const handles = rows.split('\n').map((x) => x.trim()).filter(Boolean)
-      const chat = handles.find((h) => h.startsWith('orca_session_id:') && h !== own)
-      if (chat) return chat
-      const term = handles.find((h) => h.startsWith('term_') && h !== own)
-      if (term) return term
-    } catch {
-      // нет базы — дальше по терминалам
-    }
-    const wtName = typeof auto?.worktreeName === 'string' && auto.worktreeName !== ''
-      ? auto.worktreeName
-      : typeof auto?.worktreePath === 'string' ? (auto.worktreePath.split('/').pop() ?? '') : ''
-    if (wtName !== '') {
-      try {
-        const listing = await bridge.json<{ result?: { terminals?: Array<{ handle?: string; title?: string; worktreeId?: string }> } }>('orca terminal list --json')
-        const inWt = (listing.result?.terminals ?? []).filter(
-          (t) => (t.worktreeId ?? '').endsWith(`/${wtName}`) && (t.handle ?? '') !== '' && t.handle !== own
-        )
-        const agent = inWt.find((t) => /claude|codex|agent|zcode|opencode|glm/i.test(t.title ?? ''))
-          ?? inWt[0]
-        if (agent?.handle) return agent.handle
-      } catch {
-        // списка терминалов нет — дальше база
-      }
-    }
-    try {
-      const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
-      const out = await bridge.run(
-        `sqlite3 ${shellQuote(db)} "SELECT coordinator_handle FROM runs WHERE id = '${runId.replace(/'/g, '')}';"`
-      )
-      const handle = (out.split('\n')[0] ?? '').trim()
-      if (handle.startsWith('term_') && handle !== own) return handle
-    } catch {
-      // нет базы — координатора не нашли
-    }
-    return null
-  }
-
   orca.panels.handle('gate.resolve', async ({ gateId, resolution, runId, question }) => {
     everUsed = true
     // Мутация — от терминала моста (run-use): чат-сессию нельзя заявить как --from
@@ -1713,21 +1663,16 @@ export default function activate(orca: OrcaWorkerApi): void {
     // координатора (она могла закончить ход в ожидании ответа человека). Шлём сообщение
     // в чат координатора; неудача не ломает resolve — статус он всё равно увидит.
     if (runId) {
+      const q = typeof question === 'string' && question !== '' ? `«${question}»` : 'гейт'
+      // Будящего канала в чат у движка нет (уснувшую сессию будит только сообщение
+      // человека), поэтому — в ящик рана: координатор прочитает его командой check
+      // на следующем ходу, а панель подскажет человеку, что сказать координатору.
       try {
-        const target = (await coordHandle(runId)) ?? `run:${runId}`
-        const q = typeof question === 'string' && question !== '' ? `«${question}»` : 'гейт'
         await bridge.run(
-          `orca orchestration send --to ${shellQuote(target)} --subject ${shellQuote(`Гейт решён из панели: ${resolution}`)} --body ${shellQuote(`Человек ответил на гейт ${q} → ${resolution}. Удерживаемый шаг разблокирован — продолжай флоу.`)} --json`
+          `orca orchestration send --to ${shellQuote(`run:${runId}`)} --subject ${shellQuote(`Гейт решён из панели: ${resolution}`)} --body ${shellQuote(`Человек ответил на гейт ${q} → ${resolution}. Удерживаемый шаг разблокирован — продолжай флоу.`)} --json`
         )
       } catch {
-        // прямая доставка не прошла — хотя бы в ящик рана (координатор читает check)
-        try {
-          await bridge.run(
-            `orca orchestration send --to ${shellQuote(`run:${runId}`)} --subject ${shellQuote(`Гейт решён из панели: ${resolution}`)} --body ${shellQuote(`Гейт ${q} → ${resolution}, шаг разблокирован — продолжай флоу.`)} --json`
-          )
-        } catch {
-          // координатор узнает из статусов при следующем ходе
-        }
+        // координатор узнает из статусов при следующем ходе
       }
     }
     void refresh()
