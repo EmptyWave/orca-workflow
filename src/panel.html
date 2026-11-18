@@ -843,8 +843,9 @@
           if (st.includes('failed')) return 'failed'
           if (st.includes('dispatched')) return 'dispatched'
           if (st.every((x) => x === 'succeeded')) return 'succeeded'
-          if (st.includes('blocked')) return 'blocked'
-          if (st.includes('ready')) return 'ready'
+          // Блок — контейнер, его не «запускают»: частичная готовность детей это не
+          // «готов к запуску», а «ещё идёт» — серые часы. Гейтнутых детей тоже
+          // показывает как ожидание.
           return 'queued'
         }
         for (const t of orderedTasks) {
