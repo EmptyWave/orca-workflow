@@ -412,6 +412,45 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   // ---- refresh + status bar --------------------------------------------------------------------
 
+
+  /** Рабочий гейт: решение человека не должно зависеть от того, бодрствует ли чат
+   *  координатора. Мост сам запускает шаг, который держал закрывшийся гейт (approve):
+   *  цикл опроса замечает resolved → worker-start удерживаемой задачи. Бодрый
+   *  координатор-чат здесь не помеха: повторный старт получит task_not_startable. */
+  async function pumpResolvedGates(runId: string, snap: WfSnapshot): Promise<void> {
+    const gates = snap.gates ?? []
+    if (gates.length === 0) return
+    const stored = await storageGet<unknown>('gates.pumped')
+    const pumped = new Set(Array.isArray(stored) ? stored.map(String) : [])
+    for (const g of gates) {
+      if (g.status !== 'resolved' || pumped.has(g.id)) continue
+      pumped.add(g.id)
+      if (pumped.size > 100) {
+        const keep = [...pumped].slice(-50)
+        pumped.clear()
+        for (const k of keep) pumped.add(k)
+      }
+      await orca.storage.set('gates.pumped', [...pumped]).catch(() => undefined)
+      if (g.resolution !== 'approve') continue // reject ведёт on_reject-логика, не насос
+      const task = (snap.tasks ?? []).find((t) => t.id === g.taskId)
+      if (!task || task.status !== 'ready') continue
+      const auto = await loadAuto(runId)
+      const worktreeName = auto?.worktreeName
+      if (!worktreeName) continue
+      const agent = task.agent && task.agent !== '' ? task.agent : 'claude'
+      try {
+        await bindRun(runId)
+        await bridge.run(
+          `orca orchestration worker-start --task ${shellQuote(task.id)} --worktree name:${shellQuote(worktreeName)} --agent ${shellQuote(agent)} --json`,
+          90_000
+        )
+        void orca.log(`gate pump: гейт ${g.id} закрыт (${g.resolution}) — шаг ${task.id} запущен мостом`)
+      } catch (error) {
+        void orca.log(`gate pump: старт ${task.id} не удался: ${message(error)}`)
+      }
+    }
+  }
+
   async function refresh(): Promise<void> {
     if (refreshing || !everUsed) return
     refreshing = true
@@ -450,6 +489,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       await updateStatusBar(snap)
       // Auto-pilot: drive the pipeline forward off the same snapshot.
       if (runId) void autopilot(runId, snap).catch((error) => orca.log(`autopilot: ${message(error)}`))
+      if (runId) void pumpResolvedGates(runId, snap).catch((error) => orca.log(`gate pump: ${message(error)}`))
     } finally {
       refreshing = false
     }
