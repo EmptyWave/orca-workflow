@@ -1646,12 +1646,28 @@ export default function activate(orca: OrcaWorkerApi): void {
     await bridge.run(`orca orchestration run-use --id ${shellQuote(runId)} --json`)
   }
 
-  orca.panels.handle('gate.resolve', async ({ gateId, resolution, runId }) => {
+  orca.panels.handle('gate.resolve', async ({ gateId, resolution, runId, question }) => {
     everUsed = true
     if (runId) await bindRun(runId)
     await bridge.run(
       `orca orchestration gate-resolve --id ${shellQuote(gateId)} --resolution ${shellQuote(resolution)} --json`
     )
+    // Ответ из панели должен дойти до того, кто его ждёт: закрытый гейт не будит сессию
+    // координатора (она могла закончить ход в ожидании ответа человека). Шлём сообщение
+    // в чат координатора; неудача не ломает resolve — статус он всё равно увидит.
+    if (runId) {
+      try {
+        const auto = await storageGet<{ coordinatorTerminal?: unknown }>(`auto.${runId}`)
+        const handle = typeof auto?.coordinatorTerminal === 'string' ? auto.coordinatorTerminal : ''
+        const target = handle !== '' ? handle : `run:${runId}`
+        const q = typeof question === 'string' && question !== '' ? `«${question}»` : 'гейт'
+        await bridge.run(
+          `orca orchestration send --to ${shellQuote(target)} --subject ${shellQuote(`Гейт решён из панели: ${resolution}`)} --body ${shellQuote(`Человек ответил на гейт ${q} → ${resolution}. Удерживаемый шаг разблокирован — продолжай флоу.`)} --json`
+        )
+      } catch {
+        // координатор узнает из статусов при следующем ходе
+      }
+    }
     void refresh()
     return { ok: true as const }
   })

@@ -453,7 +453,7 @@
       // ------------------------------------------------------------------ actions
       async function resolveGate(gate, resolution) {
         setBusy('гейт ' + short(gate.id, 'gate_').slice(0, 10) + '…')
-        try { await req('gate.resolve', { gateId: gate.id, resolution, runId: S.runId }); S.openGate = null; await loadState() }
+        try { await req('gate.resolve', { gateId: gate.id, resolution, runId: S.runId, question: gate.question }); S.openGate = null; await loadState() }
         catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
       }
       async function startTask(task) {
