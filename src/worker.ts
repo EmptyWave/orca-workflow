@@ -1720,7 +1720,14 @@ export default function activate(orca: OrcaWorkerApi): void {
           `orca orchestration send --to ${shellQuote(target)} --subject ${shellQuote(`Гейт решён из панели: ${resolution}`)} --body ${shellQuote(`Человек ответил на гейт ${q} → ${resolution}. Удерживаемый шаг разблокирован — продолжай флоу.`)} --json`
         )
       } catch {
-        // координатор узнает из статусов при следующем ходе
+        // прямая доставка не прошла — хотя бы в ящик рана (координатор читает check)
+        try {
+          await bridge.run(
+            `orca orchestration send --to ${shellQuote(`run:${runId}`)} --subject ${shellQuote(`Гейт решён из панели: ${resolution}`)} --body ${shellQuote(`Гейт ${q} → ${resolution}, шаг разблокирован — продолжай флоу.`)} --json`
+          )
+        } catch {
+          // координатор узнает из статусов при следующем ходе
+        }
       }
     }
     void refresh()
