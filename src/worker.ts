@@ -1646,6 +1646,27 @@ export default function activate(orca: OrcaWorkerApi): void {
     await bridge.run(`orca orchestration run-use --id ${shellQuote(runId)} --json`)
   }
 
+  /** Адрес координатора рана для сообщений из панели: сначала AutoState (терминал,
+   *  записанный при поднятии), затем coordinator_handle из orchestration.db (его ставит
+   *  run-use, когда координатор привязался сам), крайний случай — ящик рана. */
+  async function coordinatorTarget(runId: string): Promise<string> {
+    const auto = await storageGet<{ coordinatorTerminal?: unknown }>(`auto.${runId}`)
+    if (typeof auto?.coordinatorTerminal === 'string' && auto.coordinatorTerminal !== '') {
+      return auto.coordinatorTerminal
+    }
+    try {
+      const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
+      const out = await bridge.run(
+        `sqlite3 ${shellQuote(db)} "SELECT coordinator_handle FROM runs WHERE id = '${runId.replace(/'/g, '')}';"`
+      )
+      const handle = (out.split('\n')[0] ?? '').trim()
+      if (handle.startsWith('term_')) return handle
+    } catch {
+      // нет базы — ящик рана
+    }
+    return `run:${runId}`
+  }
+
   orca.panels.handle('gate.resolve', async ({ gateId, resolution, runId, question }) => {
     everUsed = true
     if (runId) await bindRun(runId)
@@ -1657,9 +1678,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     // в чат координатора; неудача не ломает resolve — статус он всё равно увидит.
     if (runId) {
       try {
-        const auto = await storageGet<{ coordinatorTerminal?: unknown }>(`auto.${runId}`)
-        const handle = typeof auto?.coordinatorTerminal === 'string' ? auto.coordinatorTerminal : ''
-        const target = handle !== '' ? handle : `run:${runId}`
+        const target = await coordinatorTarget(runId)
         const q = typeof question === 'string' && question !== '' ? `«${question}»` : 'гейт'
         await bridge.run(
           `orca orchestration send --to ${shellQuote(target)} --subject ${shellQuote(`Гейт решён из панели: ${resolution}`)} --body ${shellQuote(`Человек ответил на гейт ${q} → ${resolution}. Удерживаемый шаг разблокирован — продолжай флоу.`)} --json`
