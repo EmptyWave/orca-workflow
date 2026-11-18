@@ -1656,6 +1656,22 @@ export default function activate(orca: OrcaWorkerApi): void {
     const auto = await storageGet<{ coordinatorTerminal?: unknown; worktreeName?: unknown; worktreePath?: unknown }>(`auto.${runId}`)
     const fromAuto = typeof auto?.coordinatorTerminal === 'string' ? auto.coordinatorTerminal : ''
     if (fromAuto.startsWith('term_') && fromAuto !== own) return fromAuto
+    // История привязок рана: сюда попадает каждый, кто делал run-use. Чат-сессия
+    // координатора адресуется как orca_session_id:<id> — это тот, с кем говорит человек;
+    // терминалы биндились и на этапе запуска. Мост исключаем всегда.
+    try {
+      const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
+      const rows = await bridge.run(
+        `sqlite3 ${shellQuote(db)} "SELECT terminal_handle FROM run_coordinator_handles WHERE run_id = '${runId.replace(/'/g, '')}' ORDER BY first_bound_at DESC;"`
+      )
+      const handles = rows.split('\n').map((x) => x.trim()).filter(Boolean)
+      const chat = handles.find((h) => h.startsWith('orca_session_id:') && h !== own)
+      if (chat) return chat
+      const term = handles.find((h) => h.startsWith('term_') && h !== own)
+      if (term) return term
+    } catch {
+      // нет базы — дальше по терминалам
+    }
     const wtName = typeof auto?.worktreeName === 'string' && auto.worktreeName !== ''
       ? auto.worktreeName
       : typeof auto?.worktreePath === 'string' ? (auto.worktreePath.split('/').pop() ?? '') : ''
