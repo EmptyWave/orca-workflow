@@ -298,9 +298,13 @@
         }
         return memo
       }
-      // «пропущен»: optional не запущен, а флоу уже прошёл его позицию (закрытая глава рана).
+      // «пропущен»: ни одной попытки, флоу уже прошёл его позицию — координатор не
+      // счёл нужным. Optional-подшаги и проверки блоков условны по своей природе
+      // (бриф: «не нужен — пропусти»); обязательный шаг с попытками сюда не попадёт.
       const isSkipped = (t, passedOrder) =>
-        t.optional && ['pending', 'ready'].includes(t.status) && passedOrder > (t.order ?? 0)
+        ['pending', 'ready'].includes(t.status) && passedOrder > (t.order ?? 0) &&
+        !(S.snap?.workers || []).some((w) => w.taskId === t.id) &&
+        (t.optional || String(t.parentTaskId || '').startsWith('step:'))
       const skippedIcon = (t, passedOrder) =>
         isSkipped(t, passedOrder)
           ? `<span title="пропущен: optional-шаг не потребовался" style="display:inline-flex;opacity:.55">${ICON.pause}</span>`
@@ -839,7 +843,8 @@
         // самый дальний пройденный порядок: незапущенные optional позади него — пропущены
         const maxPassedOrder = orderedTasks.reduce((m, t) => ((eff.get(t.id) || { status: t.status }).status === 'succeeded' ? Math.max(m, t.order ?? 0) : m), -1)
         const aggregate = (kids) => {
-          const st = kids.map((k) => (eff.get(k.id) || { status: k.status }).status)
+          // пропущенные проверки — не участники блока: блок закрыт, когда сдали все запущенные
+          const st = kids.filter((k) => !isSkipped(k, maxPassedOrder)).map((k) => (eff.get(k.id) || { status: k.status }).status)
           if (st.includes('failed')) return 'failed'
           if (st.includes('dispatched')) return 'dispatched'
           if (st.every((x) => x === 'succeeded')) return 'succeeded'
@@ -854,8 +859,10 @@
             const kids = kidsOf.get(t.parentTaskId) || []
             for (const k of kids) emitted.add(k.id)
             const agg = aggregate(kids)
-            const doneKids = kids.filter((k) => (eff.get(k.id) || { status: k.status }).status === 'succeeded').length
-            stepRows.push(`<div class="blockhead${flowIndex < totalFlow - 1 ? ` flow conn-${agg === 'succeeded' ? 'ok' : agg === 'dispatched' ? 'run' : 'idle'}` : ''}">${statusIcon(agg === 'ready' && !runStarted ? 'pending' : agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${kids.length}</div>`)
+            const activeKids = kids.filter((k) => !isSkipped(k, maxPassedOrder))
+            const doneKids = activeKids.filter((k) => (eff.get(k.id) || { status: k.status }).status === 'succeeded').length
+            const skippedKids = kids.length - activeKids.length
+            stepRows.push(`<div class="blockhead${flowIndex < totalFlow - 1 ? ` flow conn-${agg === 'succeeded' ? 'ok' : agg === 'dispatched' ? 'run' : 'idle'}` : ''}">${statusIcon(agg === 'ready' && !runStarted ? 'pending' : agg)} Блок «${esc(t.parentTaskId.slice(5))}» — подшаги ${doneKids}/${activeKids.length}${skippedKids > 0 ? ` (+${skippedKids} пропущено)` : ''}</div>`)
             flowIndex += 1
             for (const k of kids) {
               // gate-on-block вешается на первого ребёнка — замок перед ним, на входе в блок
