@@ -307,7 +307,7 @@
         (t.optional || String(t.parentTaskId || '').startsWith('step:'))
       const skippedIcon = (t, passedOrder) =>
         isSkipped(t, passedOrder)
-          ? `<span title="пропущен: optional-шаг не потребовался" style="display:inline-flex;opacity:.55">${ICON.pause}</span>`
+          ? `<span title="пропущен: не запускался, флоу уже прошёл его позицию" style="display:inline-flex;opacity:.55">${ICON.pause}</span>`
           : ''
       const statusIcon = (status) =>
         status === 'succeeded' ? ICON.ok
