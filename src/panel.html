@@ -456,7 +456,7 @@
         try {
           await req('gate.resolve', { gateId: gate.id, resolution, runId: S.runId, question: gate.question })
           S.openGate = null
-          setNotice(`Гейт закрыт: ${esc(resolution)} — удерживаемый шаг стартует автоматически (насос воркера, ~10 сек).`)
+          setNotice(`Гейт закрыт: ${esc(resolution)}. Координатор держит ход и опрашивает гейт — продолжит сам в течение ~20 секунд. Прошла пара минут тишины — напиши ему в чат: «гейт подтверждён (${esc(resolution)}), продолжай».`)
           await loadState()
         }
         catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
