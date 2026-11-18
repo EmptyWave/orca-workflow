@@ -1701,21 +1701,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     return null
   }
 
-  /** Флаг --from для мутаций панели: от имени координатора рана; если он не нашёлся —
-   *  старый путь (мост сам биндится run-use, со всеми побочками). */
-  async function runFromFlag(runId: string | null | undefined): Promise<string> {
-    if (!runId) return ''
-    const h = await coordHandle(runId)
-    if (h) return ` --from ${shellQuote(h)}`
-    await bindRun(runId)
-    return ''
-  }
-
   orca.panels.handle('gate.resolve', async ({ gateId, resolution, runId, question }) => {
     everUsed = true
-    const from = await runFromFlag(runId)
+    // Мутация — от терминала моста (run-use): чат-сессию нельзя заявить как --from
+    // (session_caller_chat_not_declarable), а терминал — объявляемая идентичность.
+    if (runId) await bindRun(runId)
     await bridge.run(
-      `orca orchestration gate-resolve --id ${shellQuote(gateId)} --resolution ${shellQuote(resolution)}${from} --json`
+      `orca orchestration gate-resolve --id ${shellQuote(gateId)} --resolution ${shellQuote(resolution)} --json`
     )
     // Ответ из панели должен дойти до того, кто его ждёт: закрытый гейт не будит сессию
     // координатора (она могла закончить ход в ожидании ответа человека). Шлём сообщение
@@ -1737,13 +1729,13 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   orca.panels.handle('task.start', async ({ taskId, agent, model, effort, worktree, runId }) => {
     everUsed = true
-    const from = await runFromFlag(runId)
+    if (runId) await bindRun(runId)
     const modelFlags = model ? ` --model ${shellQuote(model)}` : ''
     const effortFlags = model && effort ? ` --effort ${shellQuote(effort)}` : ''
     const result = await cli<{ dispatchId: string; state: string }>(
       `orca orchestration worker-start --task ${shellQuote(taskId)} --agent ${shellQuote(agent)} --worktree ${shellQuote(
         worktree
-      )}${modelFlags}${effortFlags}${from} --json`,
+      )}${modelFlags}${effortFlags} --json`,
       90_000
     )
     void refresh()
@@ -2172,9 +2164,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     const snap = await snapshot(runId)
     const byId = new Map(snap.tasks.map((t) => [t.id, t]))
     if (!byId.has(taskId)) throw new BridgeError(`задача ${taskId} не в ране ${runId}`, 'cli_error')
-    // Мутации — от имени координатора рана (мост больше не биндится: run-use с моста
-    // перезаписывал coordinator_handle рана на мост).
-    const from = await runFromFlag(runId)
+    // Мутации — от терминала моста (chat-сессия не объявляема через --from).
+    await bindRun(runId)
     // The step itself and everything downstream of it.
     const downstream = new Set<string>([taskId])
     let grew = true
@@ -2189,7 +2180,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     }
     for (const id of downstream) {
-      await bridge.run(`orca orchestration task-update --id ${shellQuote(id)} --status pending${from} --json`)
+      await bridge.run(`orca orchestration task-update --id ${shellQuote(id)} --status pending --json`)
     }
     // Resume the autopilot and forget failover history for the reset tail.
     const state = await loadAuto(runId)
