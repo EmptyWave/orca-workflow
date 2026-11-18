@@ -253,7 +253,14 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
     })
     // Template config from instantiate: agent and model per task, when we raised the run.
-    const autoStored = await orca.storage.get(`auto.${runId}`)
+    // Одно пустое чтение storage (сбой цикла) обнуляет ВСЕ штампы — порядок флоу и метки
+    // деградируют («вне шаблона» под каждым шагом). Повторяем чтение: одиночный сбой
+    // не должен доходить до снапшота.
+    let autoStored = await orca.storage.get(`auto.${runId}`).catch(() => null)
+    if (!autoStored) {
+      await sleep(300)
+      autoStored = await orca.storage.get(`auto.${runId}`).catch(() => null)
+    }
     if (autoStored && typeof autoStored === 'object') {
       const autoData = (autoStored as {
         tasks?: Record<string, { agent?: string; model?: string | null; fallback?: string[] }>
