@@ -257,7 +257,7 @@
         tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
         history: null,             // все раны для вкладки Run history
         objective: '', baseBranch: '', worktreeName: '', branch: '', context: '', ctxSessions: undefined, ctxPicked: [], ctxCustom: false,
-        agent: 'claude', model: '', effort: '', worktree: '',
+        agent: 'claude', model: '', effort: '', worktree: '', raiseModel: '', models: undefined, modelOpen: false,
         startFor: null,           // task id with the start form open
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
@@ -279,7 +279,7 @@
       const PERSIST = {
         tab: (v) => ['runs', 'templates', 'history', 'settings'].includes(v),
         runId: () => true, tplSource: (v) => ['library', 'project'].includes(v),
-        tplId: () => true, objective: () => true, baseBranch: () => true, worktreeName: () => true, branch: () => true, context: () => true, ctxPicked: () => true,
+        tplId: () => true, objective: () => true, baseBranch: () => true, worktreeName: () => true, branch: () => true, context: () => true, ctxPicked: () => true, raiseModel: () => true,
         agent: () => true, model: () => true, effort: () => true, worktree: () => true
       }
       const remember = async (key, value) => {
@@ -517,6 +517,7 @@
             baseBranch: S.baseBranch.trim() === '' ? null : S.baseBranch.trim(),
             branch: S.branch.trim() === '' ? null : S.branch.trim(),
             context: ctxValue(),
+            raiseModel: S.raiseModel.trim() === '' ? null : S.raiseModel.trim(),
             worktreeName: S.worktreeName.trim(), agent: S.agent
           })
           for (let i = 0; i < 40; i++) {
@@ -604,6 +605,8 @@
             reload: () => location.reload(),
             'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
             'ctx-open': () => { S.ctxOpen = !S.ctxOpen; render() },
+            'model-open': () => { S.modelOpen = !S.modelOpen; render() },
+            'model-pick': () => { S.raiseModel = arg; void remember('raiseModel', arg); render() },
             'ctx-toggle': () => {
               if (arg === 'custom') { S.ctxCustom = !S.ctxCustom; render(); return }
               const i = Number(arg)
@@ -1084,6 +1087,12 @@
         const joined = donors.join('\n')
         return joined === '' ? null : joined
       }
+      function agentModels() {
+        return (S.models || []).filter((m) => (m.agent || '').toLowerCase().startsWith((S.agent || '').toLowerCase().split(/[ \/]/)[0]))
+      }
+      async function loadModels() {
+        try { S.models = (await req('models.list', undefined, 30000)).models || [] } catch { S.models = [] }
+      }
       async function loadCtxSessions() {
         try {
           const r = await req('context.sessions', { projectPath: S.project ? S.project.path : null }, 30000)
@@ -1093,6 +1102,7 @@
       }
       function viewTemplates() {
         if (S.ctxSessions === undefined) { S.ctxSessions = null; void loadCtxSessions() }
+        if (S.models === undefined) { S.models = null; void loadModels().then(() => render()) }
         const effSource = S.tplFellBack ? 'library' : S.tplSource
         const header = `<div class="rowline" style="margin-bottom:8px">
           <select data-bind-select="tplSource" style="flex:1">
@@ -1171,6 +1181,13 @@ ${S.ctxCustom
   ? `<label class="f" title="Дополнение к выбранным донорам — файлы/пути/пояснения"><span>контекст — своё указание</span><input data-bind="context" value="${esc(S.context)}" placeholder="openspec/changes/momento-release-backend-prep, .orca/plan.md"/></label>`
   : ''}
             <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
+            <div class="f ctxfield" title="Модель переопределяет карточную только для шагов без явной model в карточке/шаблоне">
+              <div class="ctxtrigger" data-act="model-open">модель (опц.)${S.raiseModel !== '' ? ` — ${esc(S.raiseModel)}` : ''} ${S.modelOpen ? '▾' : '▸'}</div>
+${S.modelOpen ? `              <div class="ctxlist">
+                <div class="ctxrow${S.raiseModel === '' ? ' on' : ''}" data-act="model-pick:"><span class="cb">${S.raiseModel === '' ? '●' : '○'}</span> по умолчанию агента</div>
+                ${(agentModels() || []).map((m) => `<div class="ctxrow${S.raiseModel === m.id ? ' on' : ''}" data-act="model-pick:${esc(m.id)}"><span class="cb">${S.raiseModel === m.id ? '●' : '○'}</span> ${esc(m.label || m.id)}</div>`).join('') || '<div class="ctxrow" style="cursor:default">нет данных каталога для агента</div>'}
+              </div>` : ''}
+            </div>
             <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
               ${raiseButton(tpl)}
               ${effSource === 'library' ? `<button class="btn" data-act="copy-project">↳ в проект</button>` : `<button class="btn" data-act="copy-library">↳ в библиотеку</button>`}

@@ -1326,6 +1326,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     branch?: string | null
     /** Контекст от предыдущей работы (ворктри/ран/файлы) — уходит в бриф координатора. */
     context?: string | null
+    /** Модель рана: дефолт для шагов БЕЗ явной model в карточке/шаблоне. */
+    raiseModel?: string | null
   }): Promise<string> {
     if (input.source === 'project' && input.projectPath) bridge.pin(input.projectPath)
     const template = await loadTemplate(input.source, input.projectPath, input.templateId)
@@ -1419,7 +1421,8 @@ export default function activate(orca: OrcaWorkerApi): void {
           autoTasks[taskId] = {
             stepId: unit.id,
             agent: unit.agent,
-            model: unit.model,
+            // карточная модель приоритетна; модель рана — дефолт для карточек без model
+            model: unit.model ?? (input.raiseModel && input.raiseModel !== '' ? input.raiseModel : null),
             effort: unit.model ? unit.effort : null,
             fallback: unit.fallback ?? [],
             // Flow position of the unit: the CLI reorders task-list freely (status flips,
