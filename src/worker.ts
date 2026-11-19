@@ -1845,7 +1845,11 @@ export default function activate(orca: OrcaWorkerApi): void {
           // один зонд не прошёл — второй может
         }
       }
+      // Воркер-сессии ранов (cwd = ворктри рана) не показываем: их артефакты
+      // уже покрывает донор-ран того же ворктри, в списке они только шумят.
+      const runWorktrees = new Set(runs.map((r) => (r.worktreePath ?? '').split('/').pop() ?? ''))
       const recent = [...bySid.values()]
+        .filter((h) => !runWorktrees.has(h.cwd?.split('/').pop() ?? '\u0000'))
         .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
         .slice(0, 50)
       for (const h of recent) {
