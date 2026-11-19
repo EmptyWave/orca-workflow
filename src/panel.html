@@ -257,7 +257,7 @@
         tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
         history: null,             // все раны для вкладки Run history
         objective: '', baseBranch: '', worktreeName: '', branch: '', context: '', ctxSessions: undefined, ctxPicked: [], ctxCustom: false,
-        agent: 'claude', model: '', effort: '', worktree: '', raiseModel: '', models: undefined, modelOpen: false,
+        agent: 'claude', model: '', effort: '', worktree: '', raiseModel: '', models: undefined, modelOpen: false, agentOpen: false,
         startFor: null,           // task id with the start form open
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
@@ -606,6 +606,8 @@
             'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
             'ctx-open': () => { S.ctxOpen = !S.ctxOpen; render() },
             'model-open': () => { S.modelOpen = !S.modelOpen; render() },
+            'agent-open': () => { S.agentOpen = !S.agentOpen; render() },
+            'agent-pick': () => { S.agent = arg; void remember('agent', arg); render() },
             'model-pick': () => { S.raiseModel = arg; void remember('raiseModel', arg); render() },
             'ctx-toggle': () => {
               if (arg === 'custom') { S.ctxCustom = !S.ctxCustom; render(); return }
@@ -1087,6 +1089,12 @@
         const joined = donors.join('\n')
         return joined === '' ? null : joined
       }
+      function agentList() {
+        const set = new Set((S.models || []).map((m) => (m.agent || '').trim()).filter(Boolean))
+        if (set.size === 0) return ['claude', 'codex', 'zcode']
+        if (S.agent) set.add(S.agent)
+        return [...set].sort()
+      }
       function agentModels() {
         return (S.models || []).filter((m) => (m.agent || '').toLowerCase().startsWith((S.agent || '').toLowerCase().split(/[ \/]/)[0]))
       }
@@ -1180,7 +1188,12 @@ ${S.ctxOpen ? `              <div class="ctxlist">
 ${S.ctxCustom
   ? `<label class="f" title="Дополнение к выбранным донорам — файлы/пути/пояснения"><span>контекст — своё указание</span><input data-bind="context" value="${esc(S.context)}" placeholder="openspec/changes/momento-release-backend-prep, .orca/plan.md"/></label>`
   : ''}
-            <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
+            <div class="f ctxfield" title="Агент по умолчанию для шагов без явного agent в карточке">
+              <div class="ctxtrigger" data-act="agent-open">агент по умолчанию — ${esc(S.agent || 'claude')} ${S.agentOpen ? '▾' : '▸'}</div>
+${S.agentOpen ? `              <div class="ctxlist">
+                ${agentList().map((a) => `<div class="ctxrow${S.agent === a ? ' on' : ''}" data-act="agent-pick:${esc(a)}"><span class="cb">${S.agent === a ? '●' : '○'}</span> ${esc(a)}</div>`).join('')}
+              </div>` : ''}
+            </div>
             <div class="f ctxfield" title="Модель переопределяет карточную только для шагов без явной model в карточке/шаблоне">
               <div class="ctxtrigger" data-act="model-open">модель (опц.)${S.raiseModel !== '' ? ` — ${esc(S.raiseModel)}` : ''} ${S.modelOpen ? '▾' : '▸'}</div>
 ${S.modelOpen ? `              <div class="ctxlist">
