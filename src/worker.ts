@@ -612,7 +612,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       const report = await readWorkerReport(reviewDispatch, task.id)
       let verdict = parseVerdict(report)
       if (!hasVerdictLine(report)) {
-        const fromInbox = await verdictFromInbox(task.id)
+        const fromInbox = await verdictFromInbox(task.id, reviewDispatch)
         if (fromInbox) verdict = fromInbox
       }
       state.verdicts[task.id] = verdict
@@ -822,7 +822,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           let verdict: 'approve' | 'request-changes' | 'none'
           if (hasVerdictLine(spoken)) verdict = parseVerdict(spoken)
           else if (taskId) {
-            const fromInbox = await verdictFromInbox(taskId)
+            const fromInbox = await verdictFromInbox(taskId, dispatchId)
             verdict = fromInbox ?? 'none'
           } else verdict = 'none'
           void orca.storage.set(`verdict3.${dispatchId}`, verdict).catch(() => undefined)
@@ -951,16 +951,29 @@ export default function activate(orca: OrcaWorkerApi): void {
 
   /** Reviewers sometimes put the verdict only in their done-message subject; the run inbox
    *  keeps it. One extra bridge call, only when the report is silent. */
-  async function verdictFromInbox(taskId: string): Promise<'approve' | 'request-changes' | null> {
+  /** Вердикт попытки из её done-сообщения. Скоуп — ДИСПЕТЧЕР, не задача: у задачи
+   *  бывает несколько попыток, и task-скоупинг брал свежий worker_done рерана для
+   *  старой попытки (раскрыл попытку №1 — её вердикт «поправился» на чужой approve).
+   *  Старые сообщения без payload.dispatchId сверяются по taskId. */
+  async function verdictFromInbox(taskId: string, dispatchId?: string): Promise<'approve' | 'request-changes' | null> {
     try {
       const raw = await bridge.run('orca orchestration inbox --json')
-      const parsed = parseJsonSafe<{ result?: { messages?: Array<{ type?: string; subject?: string; payload?: { taskId?: string } }> } }>(raw)
-      for (const m of parsed?.result?.messages ?? []) {
-        if (m.type !== 'worker_done' || m.payload?.taskId !== taskId) continue
-        if (/request-changes/i.test(m.subject ?? '')) return 'request-changes'
-        if (/\bapprove\b/i.test(m.subject ?? '')) return 'approve'
+      const parsed = parseJsonSafe<{ result?: { messages?: Array<{ type?: string; subject?: string; payload?: { taskId?: string; dispatchId?: string } }> } }>(raw)
+      const read = (m: { subject?: string }): 'approve' | 'request-changes' | null =>
+        /request-changes/i.test(m.subject ?? '') ? 'request-changes'
+          : /\bapprove\b/i.test(m.subject ?? '') ? 'approve'
+          : null
+      const done = (parsed?.result?.messages ?? []).filter((m) => m.type === 'worker_done')
+      // первый проход — строго по диспетчеру попытки; старые сообщения без
+      // payload.dispatchId — второй проход по taskId (может взять чужой реран,
+      // но лучше так, чем терять вердикт совсем)
+      if (dispatchId) {
+        const hit = done.find((m) => (m.payload ?? {}).dispatchId === dispatchId)
+        const v = hit ? read(hit) : null
+        if (v) return v
       }
-      return null
+      const legacy = done.find((m) => (m.payload ?? {}).taskId === taskId)
+      return legacy ? read(legacy) : null
     } catch {
       return null
     }
