@@ -841,7 +841,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     template: WfTemplate,
     objective: string,
     worktreeName: string,
-    projectPath: string | null
+    projectPath: string | null,
+    context: string | null = null
   ): string {
     const flow = template.steps
       .map((step, i) => {
@@ -903,6 +904,9 @@ export default function activate(orca: OrcaWorkerApi): void {
       'ПОЛНОЕ описание задачи (из затравки + интервью) пересылай планировщику при старте: сразу после worker-start отправь его в его диспетчер — orca orchestration send --to dispatch:<dispatch_id> --body <полное описание> --json. Воркеры получают затравку в своей задаче; полный текст идёт от тебя.',
       'Бриф сохранён в .orca/coordinator-brief.md ворктри рана — потерял контекст, перечитай его.',
       `Репозиторий: ${projectPath ?? 'см. воркспейс'}. Ворктри воркеров: name:${worktreeName}.`,
+      ...(context && context.trim() !== ''
+        ? [`КОНТЕКСТ ОТ ПРЕДЫДУЩЕЙ РАБОТЫ (передал человек): ${context.trim()}. Первым делом прочитай перечисленные артефакты (отчёты, план, openspec-изменение, файлы) и используй их факты как данность; то, что в них зафиксировано, не переспрашивай — уточняй только пробелы, которых там нет.`]
+        : []),
       '',
       'Флоу (веди строго по порядку):',
       flow,
@@ -1320,6 +1324,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     agent: string
     /** Точное имя git-ветки рана без префикса логина; null — пусть Orca даст <логин>/<имя>. */
     branch?: string | null
+    /** Контекст от предыдущей работы (ворктри/ран/файлы) — уходит в бриф координатора. */
+    context?: string | null
   }): Promise<string> {
     if (input.source === 'project' && input.projectPath) bridge.pin(input.projectPath)
     const template = await loadTemplate(input.source, input.projectPath, input.templateId)
@@ -1353,6 +1359,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           projectPath: input.projectPath,
           templateId: template.id,
           objective: input.objective,
+          context: input.context ?? null,
           at: Date.now()
         })
         job.step = 'tasks'
@@ -1529,7 +1536,7 @@ export default function activate(orca: OrcaWorkerApi): void {
             ?? list.workspaces.find((w) => w.path.endsWith(`/${input.worktreeName}`))
           const home = runWorktree ?? list.workspaces.find((w) => w.path === input.projectPath) ?? list.workspaces[0]
           const coordinator = specialists.find((sp) => sp.slug === 'coordinator')
-          const brief = coordinatorBrief(run.runId, template, objectiveSeed, input.worktreeName, input.projectPath)
+          const brief = coordinatorBrief(run.runId, template, objectiveSeed, input.worktreeName, input.projectPath, input.context ?? null)
           // The brief lives as a file too: any session in the run's worktree can pick up the
           // coordinator role (run-use + read the brief) — the role is portable, not nailed
           // to the one session the plugin launched.
@@ -2088,7 +2095,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     const specialists = await loadSpecialists(projectPath)
     const resolved = resolveSteps(template, specialists, {})
     const objective = typeof meta?.objective === 'string' ? meta.objective : ''
-    const brief = coordinatorBrief(runId, { ...template, steps: resolved }, objective, auto.worktreeName, projectPath)
+    const brief = coordinatorBrief(runId, { ...template, steps: resolved }, objective, auto.worktreeName, projectPath, typeof meta?.context === 'string' ? meta.context : null)
     let wt: string | null = auto.worktreePath ?? null
     if (!wt && projectPath && auto.worktreeName) {
       wt = `${homedir()}/orca/workspaces/${projectPath.split('/').filter(Boolean).pop()}/${auto.worktreeName}`

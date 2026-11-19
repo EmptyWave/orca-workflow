@@ -246,7 +246,7 @@
         project: null,
         tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
         history: null,             // все раны для вкладки Run history
-        objective: '', baseBranch: '', worktreeName: '', branch: '',
+        objective: '', baseBranch: '', worktreeName: '', branch: '', context: '',
         agent: 'claude', model: '', effort: '', worktree: '',
         startFor: null,           // task id with the start form open
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
@@ -269,7 +269,7 @@
       const PERSIST = {
         tab: (v) => ['runs', 'templates', 'history', 'settings'].includes(v),
         runId: () => true, tplSource: (v) => ['library', 'project'].includes(v),
-        tplId: () => true, objective: () => true, baseBranch: () => true, worktreeName: () => true, branch: () => true,
+        tplId: () => true, objective: () => true, baseBranch: () => true, worktreeName: () => true, branch: () => true, context: () => true,
         agent: () => true, model: () => true, effort: () => true, worktree: () => true
       }
       const remember = async (key, value) => {
@@ -506,6 +506,7 @@
             templateId: tpl.id, objective: S.objective.trim(),
             baseBranch: S.baseBranch.trim() === '' ? null : S.baseBranch.trim(),
             branch: S.branch.trim() === '' ? null : S.branch.trim(),
+            context: S.context.trim() === '' ? null : S.context.trim(),
             worktreeName: S.worktreeName.trim(), agent: S.agent
           })
           for (let i = 0; i < 40; i++) {
@@ -1121,6 +1122,7 @@
               <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>
             </div>
             <label class="f" title="Пусто — Orca сам даст ветку <логин>/<имя-ворктри>; заполнено — точное имя ветки без логина"><span>ветка (опц.)</span><input data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"/></label>
+            <label class="f" title="Живая сессия/ран/ворктри с контекстом по теме — координатор прочитает указанное первым делом"><span>контекст (опц.) — унаследовать из прошлой работы</span><input data-bind="context" value="${esc(S.context)}" placeholder="ворктри momento-re, .orca/*-report.md, openspec/changes/momento-release-backend-prep"/></label>
             <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
             <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
               ${raiseButton(tpl)}
