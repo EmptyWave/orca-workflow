@@ -45,7 +45,13 @@
       .tiny { font-size: 11px; }
       .rowline { display: flex; align-items: center; gap: 8px; }
       .spread { justify-content: space-between; }
-      .ctxlist { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; }
+      .ctxfield { margin-top: 10px; }
+      .ctxchips { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 5px; }
+      .ctxchip { cursor: pointer; }
+      .ctxchip:hover { border: 1px solid var(--orca-destructive, #f85149); }
+      .ctxtrigger { display: flex; gap: 6px; align-items: center; padding: 5px 8px; border: 1px solid var(--orca-border); border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--orca-muted-foreground); background: var(--orca-card); }
+      .ctxtrigger:hover { color: var(--orca-foreground); }
+      .ctxlist { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; border: 1px solid var(--orca-border); border-radius: 6px; padding: 3px; }
       .ctxrow { display: flex; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--orca-muted-foreground); }
       .ctxrow:hover { background: var(--orca-muted); }
       .ctxrow.on { color: var(--orca-foreground); }
@@ -597,6 +603,7 @@
             dismiss: () => { S.notice = null; render() },
             reload: () => location.reload(),
             'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
+            'ctx-open': () => { S.ctxOpen = !S.ctxOpen; render() },
             'ctx-toggle': () => {
               if (arg === 'custom') { S.ctxCustom = !S.ctxCustom; render(); return }
               const i = Number(arg)
@@ -1152,12 +1159,13 @@
               <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>
             </div>
             <label class="f" title="Пусто — Orca сам даст ветку <логин>/<имя-ворктри>; заполнено — точное имя ветки без логина"><span>ветка (опц.)</span><input data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"/></label>
-            <div class="f" title="Отметь прошлые раны и живые сессии — их артефакты координатор прочитает первым делом">
-              <span>сессии-доноры контекста (опц.)${S.ctxPicked.length > 0 ? ` — выбрано ${S.ctxPicked.length}` : ''}</span>
-              <div class="ctxlist">
+            <div class="f ctxfield" title="Отметь прошлые раны и живые сессии — их артефакты координатор прочитает первым делом">
+              <div class="ctxtrigger" data-act="ctx-open" title="Показать/скрыть список доноров">сессии-доноры контекста (опц.)${S.ctxPicked.length > 0 ? ` — выбрано ${S.ctxPicked.length}` : ''} ${S.ctxOpen ? '▾' : '▸'}</div>
+${!S.ctxOpen && S.ctxPicked.length > 0 ? `              <div class="ctxchips">${S.ctxPicked.map((i) => (S.ctxSessions || [])[i]).filter(Boolean).map((o) => `<span class="chip ctxchip" data-act="ctx-toggle:${S.ctxSessions.indexOf(o)}" title="клик — убрать">${o.kind === 'run' ? '📁' : '💬'} ${esc(o.label.split('·')[0].trim())} ✕</span>`).join('')}</div>` : ''}
+${S.ctxOpen ? `              <div class="ctxlist">
                 ${(S.ctxSessions || []).map((o, i) => `<div class="ctxrow${S.ctxPicked.includes(i) ? ' on' : ''}" data-act="ctx-toggle:${i}"><span class="cb">${S.ctxPicked.includes(i) ? '☑' : '☐'}</span> ${o.kind === 'run' ? '📁' : '💬'} ${esc(o.label)}</div>`).join('')}
                 <div class="ctxrow${S.ctxCustom ? ' on' : ''}" data-act="ctx-toggle:custom"><span class="cb">${S.ctxCustom ? '☑' : '☐'}</span> ✏️ своё указание…</div>
-              </div>
+              </div>` : ''}
             </div>
 ${S.ctxCustom
   ? `<label class="f" title="Дополнение к выбранным донорам — файлы/пути/пояснения"><span>контекст — своё указание</span><input data-bind="context" value="${esc(S.context)}" placeholder="openspec/changes/momento-release-backend-prep, .orca/plan.md"/></label>`
