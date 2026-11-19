@@ -1805,6 +1805,50 @@ export default function activate(orca: OrcaWorkerApi): void {
     return { templates: await listTemplates(source, projectPath ?? null) }
   })
 
+  /** Сессии-доноры контекста для формы «Поднять Run»: прошлые раны плагина и живые
+   *  агент-сессии в ворктри проекта. Выбор превращается в строку контекста. */
+  orca.panels.handle('context.sessions', async ({ projectPath }) => {
+    everUsed = true
+    const out: Array<{ kind: 'run' | 'session'; label: string; value: string }> = []
+    try {
+      const runs = await listRuns()
+      for (const r of runs) {
+        if (projectPath && r.projectPath && r.projectPath !== projectPath) continue
+        const wtName = (r.worktreePath ?? '').split('/').pop() ?? ''
+        if (wtName === '') continue
+        out.push({
+          kind: 'run',
+          label: `ран: ${(r.objective || '(без заголовка)').slice(0, 44)} · ${wtName}`,
+          value: `ран ${r.runId}, ворктри ${wtName}: артефакты .orca/ (план, отчёты шагов, бриф координатора) и openspec/changes/* в этом ворктри`
+        })
+      }
+    } catch {
+      // ранов нет — не страшно
+    }
+    try {
+      const listing = await bridge.json<{ result?: { terminals?: Array<{ handle?: string; title?: string; worktreeId?: string }> } }>('orca terminal list --json')
+      const seen = new Set<string>()
+      for (const t of listing.result?.terminals ?? []) {
+        const wt = t.worktreeId ?? ''
+        if (wt === '' || wt.endsWith('/projects/chat')) continue
+        if (!/claude|codex|agent|zcode|opencode|glm/i.test(t.title ?? '')) continue
+        const wtName = wt.split('/').pop() ?? ''
+        if (wtName === '' || seen.has(wtName)) continue
+        // собственный терминал-помощник моста — не сессия-донор
+        if ((t.handle ?? '') === bridge.bridgeHandle) continue
+        seen.add(wtName)
+        out.push({
+          kind: 'session',
+          label: `сессия: ${(t.title ?? 'агент').slice(0, 30)} · ${wtName}`,
+          value: `живая сессия «${t.title ?? 'агент'}» работает в ворктри ${wtName} — прочитай её артефакты .orca/* и итоговые файлы в этом ворктри`
+        })
+      }
+    } catch {
+      // списка терминалов нет — только раны
+    }
+    return { sessions: out }
+  })
+
   orca.panels.handle('template.instantiate', async (input) => ({
     jobId: await runInstantiate(input)
   }))

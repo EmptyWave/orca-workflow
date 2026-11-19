@@ -246,7 +246,7 @@
         project: null,
         tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
         history: null,             // все раны для вкладки Run history
-        objective: '', baseBranch: '', worktreeName: '', branch: '', context: '',
+        objective: '', baseBranch: '', worktreeName: '', branch: '', context: '', ctxSessions: undefined,
         agent: 'claude', model: '', effort: '', worktree: '',
         startFor: null,           // task id with the start form open
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
@@ -703,6 +703,14 @@
           node.oninput = handler
           node.onchange = handler
         })
+        const picker = document.getElementById('ctx-session-picker')
+        if (picker) picker.onchange = () => {
+          if (picker.value === '') return
+          S.context = picker.value
+          const input = document.querySelector('[data-bind="context"]')
+          if (input) input.value = picker.value
+          void remember('context', picker.value)
+        }
         document.querySelectorAll('[data-bind-select]').forEach((node) => {
           node.onchange = async () => {
             const key = node.dataset.bindSelect
@@ -1055,7 +1063,15 @@
       }
 
       // ---- templates view
+      async function loadCtxSessions() {
+        try {
+          const r = await req('context.sessions', { projectPath: S.project ? S.project.path : null }, 30000)
+          S.ctxSessions = r.sessions || []
+        } catch { S.ctxSessions = [] }
+        render()
+      }
       function viewTemplates() {
+        if (S.ctxSessions === undefined) { S.ctxSessions = null; void loadCtxSessions() }
         const effSource = S.tplFellBack ? 'library' : S.tplSource
         const header = `<div class="rowline" style="margin-bottom:8px">
           <select data-bind-select="tplSource" style="flex:1">
@@ -1122,6 +1138,10 @@
               <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>
             </div>
             <label class="f" title="Пусто — Orca сам даст ветку <логин>/<имя-ворктри>; заполнено — точное имя ветки без логина"><span>ветка (опц.)</span><input data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"/></label>
+            <label class="f" title="Выбери прошлый ран или живую сессию — поле контекста заполнится, можно править"><span>сессия-донор контекста (опц.)</span><select id="ctx-session-picker" style="width:100%">
+              <option value="">— выбрать —</option>
+              ${(S.ctxSessions || []).map((o) => `<option value="${esc(o.value)}">${o.kind === 'run' ? '📁 ' : '💬 '}${esc(o.label)}</option>`).join('')}
+            </select></label>
             <label class="f" title="Живая сессия/ран/ворктри с контекстом по теме — координатор прочитает указанное первым делом"><span>контекст (опц.) — унаследовать из прошлой работы</span><input data-bind="context" value="${esc(S.context)}" placeholder="ворктри momento-re, .orca/*-report.md, openspec/changes/momento-release-backend-prep"/></label>
             <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
             <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
