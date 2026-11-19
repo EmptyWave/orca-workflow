@@ -705,11 +705,11 @@
         })
         const picker = document.getElementById('ctx-session-picker')
         if (picker) picker.onchange = () => {
-          if (picker.value === '') return
+          if (picker.value === '__custom__') { S.ctxCustom = true; render(); return }
           S.context = picker.value
-          const input = document.querySelector('[data-bind="context"]')
-          if (input) input.value = picker.value
+          S.ctxCustom = picker.value !== '' && false
           void remember('context', picker.value)
+          if (picker.value === '') { render(); return }
         }
         document.querySelectorAll('[data-bind-select]').forEach((node) => {
           node.onchange = async () => {
@@ -1139,10 +1139,13 @@
             </div>
             <label class="f" title="Пусто — Orca сам даст ветку <логин>/<имя-ворктри>; заполнено — точное имя ветки без логина"><span>ветка (опц.)</span><input data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"/></label>
             <label class="f" title="Выбери прошлый ран или живую сессию — поле контекста заполнится, можно править"><span>сессия-донор контекста (опц.)</span><select id="ctx-session-picker" style="width:100%">
-              <option value="">— выбрать —</option>
+              <option value="">— без контекста —</option>
+              <option value="__custom__">✏️ своё указание…</option>
               ${(S.ctxSessions || []).map((o) => `<option value="${esc(o.value)}">${o.kind === 'run' ? '📁 ' : '💬 '}${esc(o.label)}</option>`).join('')}
             </select></label>
-            <label class="f" title="Живая сессия/ран/ворктри с контекстом по теме — координатор прочитает указанное первым делом"><span>контекст (опц.) — унаследовать из прошлой работы</span><input data-bind="context" value="${esc(S.context)}" placeholder="ворктри momento-re, .orca/*-report.md, openspec/changes/momento-release-backend-prep"/></label>
+${(S.ctxCustom || (S.context !== '' && !(S.ctxSessions || []).some((o) => o.value === S.context)))
+  ? `<label class="f" title="Что координатор прочитает первым делом — ворктри/ран/файлы"><span>контекст — своё указание</span><input data-bind="context" value="${esc(S.context)}" placeholder="ворктри momento-re, .orca/*-report.md, openspec/changes/momento-release-backend-prep"/></label>`
+  : ''}
             <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
             <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
               ${raiseButton(tpl)}
