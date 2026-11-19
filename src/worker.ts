@@ -1833,7 +1833,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     try {
       type Hit = { agent?: string; sessionId?: string; title?: string; cwd?: string; branch?: string | null; updatedAt?: string }
       const bySid = new Map<string, Hit>()
-      for (const q of ['задача', 'the']) {
+      for (const q of ['это', 'не', 'код', 'the', 'and']) {
         try {
           const raw = await bridge.run(`orca search ${shellQuote(q)} --sort newest --limit 100 --json`, 20_000)
           const doc = parseJsonSafe<{ result?: { hits?: Hit[] } }>(raw)
@@ -1847,7 +1847,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       }
       const recent = [...bySid.values()]
         .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
-        .slice(0, 15)
+        .slice(0, 50)
       for (const h of recent) {
         const dir = h.cwd.split('/').pop() ?? h.cwd
         out.push({
