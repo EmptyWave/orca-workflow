@@ -51,6 +51,7 @@
       .ctxchip:hover { border: 1px solid var(--orca-destructive, #f85149); }
       .ctxtrigger { display: flex; gap: 6px; align-items: center; padding: 5px 8px; border: 1px solid var(--orca-border); border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--orca-muted-foreground); background: var(--orca-card); }
       .ctxtrigger:hover { color: var(--orca-foreground); }
+      .ctxsearch { width: calc(100% - 12px); margin: 2px 6px 4px; padding: 4px 8px; font: inherit; font-size: 12px; color: var(--orca-foreground); background: var(--orca-background); border: 1px solid var(--orca-border); border-radius: 6px; }
       .ctxlist { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; border: 1px solid var(--orca-border); border-radius: 6px; padding: 3px; max-height: 240px; overflow-y: auto; }
       .ctxrow { display: flex; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--orca-muted-foreground); }
       .ctxrow:hover { background: var(--orca-muted); }
@@ -256,7 +257,7 @@
         project: null,
         tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
         history: null,             // все раны для вкладки Run history
-        objective: '', baseBranch: '', worktreeName: '', branch: '', context: '', ctxSessions: undefined, ctxPicked: [], ctxCustom: false,
+        objective: '', baseBranch: '', worktreeName: '', branch: '', context: '', ctxSessions: undefined, ctxPicked: [], ctxCustom: false, ctxFilter: '',
         agent: 'claude', model: '', effort: '', worktree: '', raiseModel: '', models: undefined, modelOpen: false, agentOpen: false,
         startFor: null,           // task id with the start form open
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
@@ -604,7 +605,7 @@
             dismiss: () => { S.notice = null; render() },
             reload: () => location.reload(),
             'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
-            'ctx-open': () => { S.ctxOpen = !S.ctxOpen; render() },
+            'ctx-open': () => { S.ctxOpen = !S.ctxOpen; S.ctxFilter = ''; render() },
             'model-open': () => { S.modelOpen = !S.modelOpen; render() },
             'agent-open': () => { S.agentOpen = !S.agentOpen; render() },
             'agent-pick': () => { S.agent = arg; void remember('agent', arg); render() },
@@ -728,6 +729,14 @@
           node.onchange = handler
         })
 
+        const search = document.querySelector('.ctxsearch')
+        if (search) search.oninput = () => {
+          S.ctxFilter = search.value
+          const q = search.value.trim().toLowerCase()
+          document.querySelectorAll('.ctxlist .ctxrow[data-act^="ctx-toggle:"]').forEach((row) => {
+            row.style.display = q === '' || (row.textContent || '').toLowerCase().includes(q) ? '' : 'none'
+          })
+        }
         document.querySelectorAll('[data-bind-select]').forEach((node) => {
           node.onchange = async () => {
             const key = node.dataset.bindSelect
@@ -1181,6 +1190,7 @@
               <div class="ctxtrigger" data-act="ctx-open" title="Показать/скрыть список доноров">сессии-доноры контекста (опц.)${S.ctxPicked.length > 0 ? ` — выбрано ${S.ctxPicked.length}` : ''} ${S.ctxOpen ? '▾' : '▸'}</div>
 ${!S.ctxOpen && S.ctxPicked.length > 0 ? `              <div class="ctxchips">${S.ctxPicked.map((i) => (S.ctxSessions || [])[i]).filter(Boolean).map((o) => `<span class="chip ctxchip" data-act="ctx-toggle:${S.ctxSessions.indexOf(o)}" title="клик — убрать">${o.kind === 'run' ? '📁' : '💬'} ${esc(o.label.split('·')[0].trim())} ✕</span>`).join('')}</div>` : ''}
 ${S.ctxOpen ? `              <div class="ctxlist">
+                <input class="ctxsearch" placeholder="поиск по сессиям…" value="${esc(S.ctxFilter || '')}"/>
                 ${(S.ctxSessions || []).map((o, i) => `<div class="ctxrow${S.ctxPicked.includes(i) ? ' on' : ''}" data-act="ctx-toggle:${i}"><span class="cb">${S.ctxPicked.includes(i) ? '☑' : '☐'}</span> ${o.kind === 'run' ? '📁' : '💬'} ${esc(o.label)}</div>`).join('')}
                 <div class="ctxrow${S.ctxCustom ? ' on' : ''}" data-act="ctx-toggle:custom"><span class="cb">${S.ctxCustom ? '☑' : '☐'}</span> ✏️ своё указание…</div>
               </div>` : ''}
