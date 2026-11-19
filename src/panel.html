@@ -705,8 +705,12 @@
         document.querySelectorAll('[data-bind-select]').forEach((node) => {
           node.onchange = async () => {
             const key = node.dataset.bindSelect
+            // сам выбранный элемент обязан влиять на текущий рендер сразу,
+            // а не только после перезагрузки панели (помнили в storage, но S не трогали)
+            if (key in S) S[key] = node.value
             await remember(key, node.value)
             if (key === 'tplSource') { S.templates = null; S.tplId = null; S.tplFellBack = false; render(); void loadTemplates() }
+            else if (key === 'tplId') render()
             if (key === 'runId') void loadState()
             if (key === 'tab') render()
           }
