@@ -1902,6 +1902,41 @@ export default function activate(orca: OrcaWorkerApi): void {
     if (!template) throw new BridgeError(`шаблон "${templateId}" не найден`, 'cli_error')
     const fromDir = template.sourcePath as string
     const toDir = await workflowsDir(to, toProjectPath ?? null)
+    // Библиотечный шаблон должен быть самодостаточным: карточки воркеров флоу
+    // (по всем шагам и подшагам) копируются в <lib>/workers, если их там ещё нет.
+    let copiedCards = 0
+    if (to === 'library') {
+      const slugs = new Set<string>()
+      for (const step of template.steps) {
+        if (step.worker) slugs.add(step.worker)
+        for (const sub of step.sub ?? []) if (sub.worker) slugs.add(sub.worker)
+      }
+      slugs.delete('')
+      if (slugs.size > 0) {
+        const projWorkers = `${(fromProjectPath ?? '').replace(/\/+$/, '')}/.orca/workers`
+        const libWorkers = (await libraryDir()).replace(/\/workflows$/, '/workers')
+        const names = [...slugs].map((x) => `-name ${shellQuote(`${x}.yaml`)}`).join(' -o ')
+        try {
+          const found = await bridge.run(`find ${shellQuote(projWorkers)} \( ${names} \) 2>/dev/null`)
+          const files = found.split('\n').map((x) => x.trim()).filter((x) => x.endsWith('.yaml'))
+          const missing = files.filter((f) => {
+            const slug = f.split('/').pop()?.replace(/\.yaml$/, '') ?? ''
+            return slug !== ''
+          })
+          if (files.length > 0) {
+            await bridge.run(`mkdir -p ${shellPath(libWorkers)}`)
+            for (const f of files) {
+              const slug = f.split('/').pop() ?? ''
+              await bridge.run(`[ -e ${shellQuote(`${libWorkers}/${slug}`)} ] || cp ${shellQuote(f)} ${shellPath(libWorkers)}/ && true`)
+              copiedCards += 1
+            }
+          }
+          void missing
+        } catch {
+          // карточки не скопировались — шаблон останется, но поднимется только в исходном проекте
+        }
+      }
+    }
     await bridge.run(
       `mkdir -p ${shellPath(toDir)} && cp ${shellQuote(`${fromDir}/${template.file}`)} ${shellPath(
         toDir
@@ -1909,6 +1944,17 @@ export default function activate(orca: OrcaWorkerApi): void {
         toDir
       )}/; true; }`
     )
+    return { ok: true as const }
+  })
+
+  /** Удаление шаблона из библиотеки (файл флоу; карточки не трогаем — общие).
+   *  Проектные шаблоны удаляются руками/редактором — тут только library. */
+  orca.panels.handle('template.delete', async ({ file }) => {
+    everUsed = true
+    const libDir = await libraryDir()
+    const name = String(file ?? '').split('/').pop() ?? ''
+    if (!/^[-a-zA-Z0-9_.]+\.workflow\.yaml$/.test(name)) throw new BridgeError('это не файл шаблона библиотеки', 'cli_error')
+    await bridge.run(`rm ${shellQuote(`${libDir}/${name}`)}`)
     return { ok: true as const }
   })
 

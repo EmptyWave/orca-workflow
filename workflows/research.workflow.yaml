@@ -1,0 +1,16 @@
+# Ресёрч новой фичи: три источника параллельно, затем сводный отчёт для человека.
+id: research
+title: 'Ресёрч фичи'
+steps:
+  - id: research
+    title: 'Ресёрч'
+    deps: []
+    sub:
+      - { id: docs-research, title: 'Документация и требования', worker: docs-researcher, phase: parallel }
+      - { id: code-research, title: 'Ресерч по коду', worker: code-researcher, phase: parallel }
+      - { id: web-search, title: 'Внешние доки и версии', worker: web-searcher, phase: parallel, optional: true }
+      - { id: ba-review, title: 'Ревью бизнес дизайна', worker: ba-reviewer, phase: before_start }
+  - id: synthesis
+    title: 'Сводный отчёт'
+    worker: research-synthesizer
+    deps: [research]

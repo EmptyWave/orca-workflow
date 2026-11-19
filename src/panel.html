@@ -607,6 +607,18 @@
             'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
             'ctx-open': () => { S.ctxOpen = !S.ctxOpen; S.ctxFilter = ''; render() },
             'model-open': () => { S.modelOpen = !S.modelOpen; render() },
+            'tpl-del': async () => {
+              const key = `tpl:${arg}`
+              if (S.armedDel !== key) { armDelete(key); return }
+              S.armedDel = null
+              setBusy('удаление шаблона')
+              try {
+                await req('template.delete', { file: arg }, 30000)
+                S.templates = null
+                render()
+                void loadTemplates()
+              } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
+            },
             'agent-open': () => { S.agentOpen = !S.agentOpen; render() },
             'agent-pick': () => { S.agent = arg; void remember('agent', arg); render() },
             'model-pick': () => { S.raiseModel = arg; void remember('raiseModel', arg); render() },
@@ -1177,7 +1189,14 @@
 
         return header + project + tplSelect +
           `<div class="card"><h2>${esc(tpl.title || tpl.id)}</h2>
-            <div class="tiny muted" style="margin-bottom:6px">${esc(tpl.id)} · ${esc(tpl.file)}</div>
+            <div class="rowline" style="align-items:center;gap:6px;margin-bottom:6px">
+              <div class="tiny muted">${esc(tpl.id)} · ${esc(tpl.file)}</div>
+              ${effSource === 'library'
+                ? (S.armedDel === `tpl:${tpl.file}`
+                    ? `<button class="btn mini" data-act="tpl-del:${esc(tpl.file)}" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)">удалить из библиотеки?</button>`
+                    : `<button class="btn ghost mini" data-act="tpl-del:${esc(tpl.file)}" title="Удалить файл шаблона из библиотеки">✕</button>`)
+                : ''}
+            </div>
             ${preview}</div>` +
           `<div class="card"><h2>Поднять Run</h2>
             <label class="f"><span>заголовок (опц.) — координатор всегда уточнит цель, описание и скоуп в чате</span><input data-bind="objective" value="${esc(S.objective)}" placeholder="имя задачи, например «Momento: партнёрская авторизация»"/></label>
