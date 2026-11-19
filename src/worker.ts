@@ -6,6 +6,7 @@ import type { WfGate, WfJob, WfRun, WfSnapshot, WfSpecialist, WfStep, WfTask, Wf
 import { applyPlaceholders, materialize, parseTemplate, rechecksDue, topoUnits } from './workflow'
 import { parseYaml, type YamlValue } from './yaml'
 import { homedir } from 'node:os'
+import { existsSync } from 'node:fs'
 import type { OrcaWorkerApi } from 'orca/worker'
 
 const DEFAULT_LIBRARY = '~/orca-plugins/workflow-view/workflows'
@@ -1813,8 +1814,11 @@ export default function activate(orca: OrcaWorkerApi): void {
   orca.panels.handle('context.sessions', async ({ projectPath }) => {
     everUsed = true
     const out: Array<{ kind: 'run' | 'session'; label: string; value: string }> = []
+    const runs = await listRuns().catch(() => [])
+    // Воркер-сессии ранов (cwd = ворктри рана) не показываем: их артефакты
+    // уже покрывает донор-ран того же ворктри, в списке они только шумят.
+    const runWorktrees = new Set(runs.map((r) => (r.worktreePath ?? '').split('/').pop() ?? ''))
     try {
-      const runs = await listRuns()
       for (const r of runs) {
         if (projectPath && r.projectPath && r.projectPath !== projectPath) continue
         const wtName = (r.worktreePath ?? '').split('/').pop() ?? ''
@@ -1845,10 +1849,10 @@ export default function activate(orca: OrcaWorkerApi): void {
           // один зонд не прошёл — второй может
         }
       }
-      // Воркер-сессии ранов (cwd = ворктри рана) не показываем: их артефакты
-      // уже покрывает донор-ран того же ворктри, в списке они только шумят.
-      const runWorktrees = new Set(runs.map((r) => (r.worktreePath ?? '').split('/').pop() ?? ''))
       const recent = [...bySid.values()]
+        // воркер-сессии живых ранов закрывают их доноры-раны; сессии из удалённых
+        // ворктри бесполезны — папки нет, артефакты нечитаемы
+        .filter((h) => Boolean(h.cwd) && existsSync(h.cwd as string))
         .filter((h) => !runWorktrees.has(h.cwd?.split('/').pop() ?? '\u0000'))
         .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
         .slice(0, 50)
