@@ -1828,6 +1828,37 @@ export default function activate(orca: OrcaWorkerApi): void {
     } catch {
       // ранов нет — не страшно
     }
+    // Агент-сессии из поискового индекса Орки (вкладка «Агенты»): заголовок, папка,
+    // ветка. Широкие запросы + дедуп по сессии, свежие сверху.
+    try {
+      type Hit = { agent?: string; sessionId?: string; title?: string; cwd?: string; branch?: string | null; updatedAt?: string }
+      const bySid = new Map<string, Hit>()
+      for (const q of ['задача', 'the']) {
+        try {
+          const raw = await bridge.run(`orca search ${shellQuote(q)} --sort newest --limit 100 --json`, 20_000)
+          const doc = parseJsonSafe<{ result?: { hits?: Hit[] } }>(raw)
+          for (const h of doc?.result?.hits ?? []) {
+            if (!h.sessionId || !h.cwd || h.cwd.endsWith('/projects/chat')) continue
+            if (!bySid.has(h.sessionId)) bySid.set(h.sessionId, h)
+          }
+        } catch {
+          // один зонд не прошёл — второй может
+        }
+      }
+      const recent = [...bySid.values()]
+        .sort((a, b) => (b.updatedAt ?? '').localeCompare(a.updatedAt ?? ''))
+        .slice(0, 15)
+      for (const h of recent) {
+        const dir = h.cwd.split('/').pop() ?? h.cwd
+        out.push({
+          kind: 'session',
+          label: `${h.agent ?? 'агент'}: ${(h.title ?? 'без заголовка').slice(0, 40)} · ${dir}`,
+          value: `сессия ${h.agent ?? 'агента'} «${h.title ?? 'без заголовка'}» — рабочая папка ${h.cwd}${h.branch ? `, ветка ${h.branch}` : ''}: прочитай артефакты .orca/* и итоговые файлы в ней; детали — индекс сессий Орки (orca search), id ${h.sessionId}`
+        })
+      }
+    } catch {
+      // индекс недоступен — раны и терминалы остаются
+    }
     try {
       const listing = await bridge.json<{ result?: { terminals?: Array<{ handle?: string; title?: string; worktreeId?: string }> } }>('orca terminal list --json')
       const seen = new Set<string>()
