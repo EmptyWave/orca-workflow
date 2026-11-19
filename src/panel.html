@@ -45,6 +45,10 @@
       .tiny { font-size: 11px; }
       .rowline { display: flex; align-items: center; gap: 8px; }
       .spread { justify-content: space-between; }
+      .ctxlist { display: flex; flex-direction: column; gap: 2px; margin-top: 3px; }
+      .ctxrow { display: flex; gap: 6px; align-items: center; padding: 3px 6px; border-radius: 6px; cursor: pointer; font-size: 12px; color: var(--orca-muted-foreground); }
+      .ctxrow:hover { background: var(--orca-muted); }
+      .ctxrow.on { color: var(--orca-foreground); }
       .chip {
         display: inline-flex; align-items: center; gap: 4px;
         background: var(--orca-muted); border-radius: 999px; padding: 1px 8px;
@@ -246,7 +250,7 @@
         project: null,
         tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
         history: null,             // все раны для вкладки Run history
-        objective: '', baseBranch: '', worktreeName: '', branch: '', context: '', ctxSessions: undefined,
+        objective: '', baseBranch: '', worktreeName: '', branch: '', context: '', ctxSessions: undefined, ctxPicked: [], ctxCustom: false,
         agent: 'claude', model: '', effort: '', worktree: '',
         startFor: null,           // task id with the start form open
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
@@ -269,7 +273,7 @@
       const PERSIST = {
         tab: (v) => ['runs', 'templates', 'history', 'settings'].includes(v),
         runId: () => true, tplSource: (v) => ['library', 'project'].includes(v),
-        tplId: () => true, objective: () => true, baseBranch: () => true, worktreeName: () => true, branch: () => true, context: () => true,
+        tplId: () => true, objective: () => true, baseBranch: () => true, worktreeName: () => true, branch: () => true, context: () => true, ctxPicked: () => true,
         agent: () => true, model: () => true, effort: () => true, worktree: () => true
       }
       const remember = async (key, value) => {
@@ -506,7 +510,7 @@
             templateId: tpl.id, objective: S.objective.trim(),
             baseBranch: S.baseBranch.trim() === '' ? null : S.baseBranch.trim(),
             branch: S.branch.trim() === '' ? null : S.branch.trim(),
-            context: S.context.trim() === '' ? null : S.context.trim(),
+            context: ctxValue(),
             worktreeName: S.worktreeName.trim(), agent: S.agent
           })
           for (let i = 0; i < 40; i++) {
@@ -593,6 +597,14 @@
             dismiss: () => { S.notice = null; render() },
             reload: () => location.reload(),
             'go-templates': () => { S.tab = 'templates'; S.templates = null; render(); void loadTemplates() },
+            'ctx-toggle': () => {
+              if (arg === 'custom') { S.ctxCustom = !S.ctxCustom; render(); return }
+              const i = Number(arg)
+              const at = S.ctxPicked.indexOf(i)
+              if (at >= 0) S.ctxPicked.splice(at, 1); else S.ctxPicked.push(i)
+              void remember('ctxPicked', S.ctxPicked)
+              render()
+            },
             'toggle-step': () => { if (S.openStep[arg]) delete S.openStep[arg]; else S.openStep[arg] = true; render() },
             'load-report': async () => {
               const task = (S.snap?.tasks || []).find((x) => x.id === arg)
@@ -703,14 +715,7 @@
           node.oninput = handler
           node.onchange = handler
         })
-        const picker = document.getElementById('ctx-session-picker')
-        if (picker) picker.onchange = () => {
-          if (picker.value === '__custom__') { S.ctxCustom = true; render(); return }
-          S.context = picker.value
-          S.ctxCustom = picker.value !== '' && false
-          void remember('context', picker.value)
-          if (picker.value === '') { render(); return }
-        }
+
         document.querySelectorAll('[data-bind-select]').forEach((node) => {
           node.onchange = async () => {
             const key = node.dataset.bindSelect
@@ -1063,6 +1068,15 @@
       }
 
       // ---- templates view
+      // Итоговый контекст для рана: выбранные доноры (по одному указанию на строку)
+      // + своё указание; без выбранных доноров своё остаётся самостоятельным контекстом.
+      function ctxValue() {
+        const donors = (S.ctxPicked || []).map((i) => (S.ctxSessions || [])[i]).filter(Boolean).map((o) => o.value)
+        const own = S.context.trim()
+        if (S.ctxCustom && own !== '') donors.push(own)
+        const joined = donors.join('\n')
+        return joined === '' ? null : joined
+      }
       async function loadCtxSessions() {
         try {
           const r = await req('context.sessions', { projectPath: S.project ? S.project.path : null }, 30000)
@@ -1138,13 +1152,15 @@
               <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>
             </div>
             <label class="f" title="Пусто — Orca сам даст ветку <логин>/<имя-ворктри>; заполнено — точное имя ветки без логина"><span>ветка (опц.)</span><input data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"/></label>
-            <label class="f" title="Выбери прошлый ран или живую сессию — поле контекста заполнится, можно править"><span>сессия-донор контекста (опц.)</span><select id="ctx-session-picker" style="width:100%">
-              <option value="">— без контекста —</option>
-              <option value="__custom__">✏️ своё указание…</option>
-              ${(S.ctxSessions || []).map((o) => `<option value="${esc(o.value)}">${o.kind === 'run' ? '📁 ' : '💬 '}${esc(o.label)}</option>`).join('')}
-            </select></label>
-${(S.ctxCustom || (S.context !== '' && !(S.ctxSessions || []).some((o) => o.value === S.context)))
-  ? `<label class="f" title="Что координатор прочитает первым делом — ворктри/ран/файлы"><span>контекст — своё указание</span><input data-bind="context" value="${esc(S.context)}" placeholder="ворктри momento-re, .orca/*-report.md, openspec/changes/momento-release-backend-prep"/></label>`
+            <div class="f" title="Отметь прошлые раны и живые сессии — их артефакты координатор прочитает первым делом">
+              <span>сессии-доноры контекста (опц.)${S.ctxPicked.length > 0 ? ` — выбрано ${S.ctxPicked.length}` : ''}</span>
+              <div class="ctxlist">
+                ${(S.ctxSessions || []).map((o, i) => `<div class="ctxrow${S.ctxPicked.includes(i) ? ' on' : ''}" data-act="ctx-toggle:${i}"><span class="cb">${S.ctxPicked.includes(i) ? '☑' : '☐'}</span> ${o.kind === 'run' ? '📁' : '💬'} ${esc(o.label)}</div>`).join('')}
+                <div class="ctxrow${S.ctxCustom ? ' on' : ''}" data-act="ctx-toggle:custom"><span class="cb">${S.ctxCustom ? '☑' : '☐'}</span> ✏️ своё указание…</div>
+              </div>
+            </div>
+${S.ctxCustom
+  ? `<label class="f" title="Дополнение к выбранным донорам — файлы/пути/пояснения"><span>контекст — своё указание</span><input data-bind="context" value="${esc(S.context)}" placeholder="openspec/changes/momento-release-backend-prep, .orca/plan.md"/></label>`
   : ''}
             <label class="f"><span>агент по умолчанию</span><input data-bind="agent" value="${esc(S.agent)}"/></label>
             <div class="rowline" style="margin-top:9px; flex-wrap:wrap">
