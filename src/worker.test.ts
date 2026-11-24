@@ -31,6 +31,8 @@ const b64 = (s: string): string => {
   return btoa(binary)
 }
 
+const WS_ROOT = '/Users/tester/orca/workspaces/demo'
+
 // Воркспейсы тестового хоста; сцена может подменить список (opts.workspaces).
 const DEFAULT_WORKSPACES = [
           { id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp', branch: 'master', project: 'repo:1', hostId: 'local' },
@@ -40,6 +42,7 @@ const DEFAULT_WORKSPACES = [
 
 function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string; workspaces?: unknown[]; repoPath?: string } = {}) {
   let created = 0
+  const createdWorktrees: string[] = [] // что «создала» команда worktree create в этой сцене
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
     const dir = LS_DIR
@@ -168,12 +171,34 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
         '__WFE__'
       ].join('\n')
     }
+    if (command.includes('orca worktree create')) {
+      // Как настоящая Орка: репозиторий в её реестре сравнивается с селектором СТРОКОЙ —
+      // симлинки не разрешаются, `--repo path:<другая запись того же каталога>` → repo_not_found.
+      const unquote = (v: string | undefined): string => (v ?? '').replace(/^['"]|['"]$/g, '')
+      const repo = unquote((command.match(/--repo (\S+)/) || [])[1])
+      const registry = opts.repoPath ?? '/Users/tester/PhpstormProjects/biz.erp'
+      const known: Record<string, boolean> = { 'id:r1': true, [`path:${registry}`]: true, 'path:.': true }
+      if (!known[repo]) {
+        return JSON.stringify({ ok: false, error: { code: 'repo_not_found', message: 'repo_not_found', data: null } })
+      }
+      const name = unquote((command.match(/--name (\S+)/) || [])[1])
+      createdWorktrees.push(name)
+      return JSON.stringify({ ok: true, result: { id: `wt:${name}`, displayName: name, path: `${WS_ROOT}/${name}` } })
+    }
+    if (command.includes('orca worktree list')) {
+      const base = (opts.workspaces ?? DEFAULT_WORKSPACES) as Array<{ name: string; path: string; branch?: string | null }>
+      const worktrees = [
+        ...base.map((w) => ({ displayName: w.name, path: w.path, branch: w.branch ?? null })),
+        ...createdWorktrees.map((n) => ({ displayName: n, path: `${WS_ROOT}/${n}`, branch: null }))
+      ]
+      return JSON.stringify({ ok: true, result: { worktrees } })
+    }
     if (command.includes('repo list')) {
       return JSON.stringify({
         ok: true,
         result: {
           repos: [
-            { id: 'r1', displayName: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp', kind: 'git' },
+            { id: 'r1', displayName: 'biz.erp', path: opts.repoPath ?? '/Users/tester/PhpstormProjects/biz.erp', kind: 'git' },
             { id: 'f1', displayName: '~', path: '/Users/tester', kind: 'folder' }
           ]
         }
@@ -633,3 +658,79 @@ test('адрес проекта через симлинк: помощник со
     }
   }, { repoPath: link, workspaces: [{ id: 'w1', kind: 'worktree', name: 'biz.erp', path: real, branch: 'master', project: 'repo:1', hostId: 'local' }] })
 })
+
+// ---- создание ворктри при подъёме рана --------------------------------------------------------
+// Сцена переезда: реестр Орки знает проект через симлинк, панель передаёт настоящий адрес.
+async function raiseInTemp(
+  fn: (r: { real: string; link: string; worker: Awaited<ReturnType<typeof mountWorker>>; host: MockHost; job: () => Promise<any> }) => Promise<void>,
+  scene: (dirs: { real: string; link: string }) => Record<string, unknown> = () => ({})
+): Promise<void> {
+  const real = realpathSync.native(mkdtempSync(join(tmpdir(), 'wfv-proj-')))
+  const link = join(tmpdir(), `wfv-plink-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`)
+  symlinkSync(real, link, 'dir')
+  try {
+    return await withWorker(async (worker, host) => {
+      const job = async (): Promise<any> => {
+        const { jobId } = await worker.request('template.instantiate', {
+          source: 'library', projectPath: real, templateId: 'demo',
+          objective: 'цель Z', baseBranch: null, worktreeName: 'demo-wt', agent: 'claude'
+        })
+        let j = null
+        for (let i = 0; i < 60; i++) {
+          await new Promise((r) => setTimeout(r, 50))
+          j = (await worker.request('job.get', { jobId })).job
+          if (j && j.status !== 'running') break
+        }
+        return j
+      }
+      await fn({ real, link, worker, host, job })
+    }, scene({ real, link }))
+  } finally {
+    rmSync(link, { force: true })
+    rmSync(real, { recursive: true, force: true })
+  }
+}
+
+test('подъём рана: репозиторий выбирается по id, когда реестр знает проект через симлинк', () =>
+  raiseInTemp(async ({ job }) => {
+    const j = await job()
+    assert.equal(j.status, 'done', j.error ?? '')
+    const create = spawned().find((c) => c.includes('orca worktree create'))
+    assert.ok(create, 'ворктри создаётся')
+    assert.ok(create.includes("--repo 'id:r1'"), 'селектор репозитория — id, а не адрес: ' + create.slice(0, 120))
+    assert.ok(!create.includes('|| true'), 'отказ создания больше не глушится')
+    assert.equal(spawned().filter((c) => c.includes('orca agent launch')).length, 1, 'координатор запущен в созданном ворктри')
+  }, (dirs) => ({ repoPath: dirs.link })))
+
+test('подъём рана: реестр не знает адрес проекта — подъём останавливается с причиной, а не молчит', () =>
+  raiseInTemp(async ({ job }) => {
+    const j = await job()
+    assert.equal(j.status, 'failed')
+    assert.ok(/не создан: repo_not_found/.test(j.error), 'в отчёте — ответ Орки, а не обрывок команды: ' + j.error)
+    assert.equal(spawned().filter((c) => c.includes('orca agent launch')).length, 0, 'координатора не запускают в несуществующий ворктри')
+  }, () => ({ repoPath: '/elsewhere/another-checkout' })))
+
+test('подъём рана: имя свободного воркспейса без ранов используется повторно — без создания', () =>
+  raiseInTemp(async ({ job }) => {
+    const j = await job()
+    assert.equal(j.status, 'done', j.error ?? '')
+    assert.equal(spawned().filter((c) => c.includes('orca worktree create')).length, 0, 'существующий ворктри не пересоздаётся')
+    const launch = spawned().find((c) => c.includes('orca agent launch'))
+    assert.ok(launch?.includes(`path:${WS_ROOT}/demo-wt`), 'координатор стартует в существующем ворктри')
+  }, () => ({
+    workspaces: [{ id: 'w9', kind: 'worktree', name: 'demo-wt', path: `${WS_ROOT}/demo-wt`, branch: 'feat/x', project: 'repo:1', hostId: 'local' }]
+  })))
+
+test('подъём рана: воркспейс, занятый живым раном, не подхватывается — имя получает суффикс', () =>
+  raiseInTemp(async ({ job, host }) => {
+    const j = await job()
+    assert.equal(j.status, 'done', j.error ?? '')
+    const create = spawned().find((c) => c.includes('orca worktree create'))
+    assert.ok(create?.includes("--name 'demo-wt-2'"), 'новый ворктри рядом, не в чужом: ' + (create ?? '').slice(0, 140))
+    const auto = host.data().storage['auto.run_2'] as { worktreeName?: string }
+    assert.equal(auto.worktreeName, 'demo-wt-2', 'состояние рана знает суффикс — по нему стартуют воркеры')
+  }, (dirs) => ({
+    repoPath: dirs.link, // реестр знает проект — создание ворктри проходит
+    storage: { 'runmeta.run_1': { projectPath: '/Users/tester/PhpstormProjects/biz.erp', worktreePath: `${WS_ROOT}/demo-wt` } },
+    workspaces: [{ id: 'w9', kind: 'worktree', name: 'demo-wt', path: `${WS_ROOT}/demo-wt`, branch: 'feat/x', project: 'repo:1', hostId: 'local' }]
+  })))

@@ -227,9 +227,18 @@ function parseJson<T>(output: string): T {
   throw new BridgeError(`мост: не JSON в ответе: ${tail(output, 300)}`, 'bad_json')
 }
 
-function tail(text: string, max: number): string {
+export function tail(text: string, max: number): string {
   const flat = text.replace(/\s+/g, ' ').trim()
   return flat.length <= max ? flat : '…' + flat.slice(flat.length - max)
+}
+
+/** Читаемая причина отказа CLI для отчёта человеку: ответ Орки (stderr), а не обрезанная
+ *  команда — в `Command failed: bash -c …` первым идёт текст команды с целым брифом, и
+ *  настоящая причина оказывалась за краем. */
+export function causeOf(error: unknown): string {
+  const stderr = (error as { stderr?: unknown } | null)?.stderr
+  if (typeof stderr === 'string' && stderr.trim() !== '') return tail(stderr.trim(), 400)
+  return error instanceof Error ? error.message : String(error)
 }
 
 /** Single-quoted for the bridge shell; `~` at the start stays outside the quotes to expand. */

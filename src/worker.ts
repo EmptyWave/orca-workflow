@@ -1,7 +1,7 @@
 // The plugin's worker: the CLI bridge, orchestration snapshot, gate/task management and
 // template materialization. Runs for as long as the plugin is enabled (it owns a status
 // bar item), polls a light refresh, and pushes 'state.changed' to open panels.
-import { Bridge, BridgeError, expandHome, realPath, shellPath, sleep } from './bridge'
+import { Bridge, BridgeError, causeOf, expandHome, realPath, shellPath, sleep } from './bridge'
 import type { WfGate, WfJob, WfRun, WfSnapshot, WfSpecialist, WfStep, WfTask, WfTemplate, WfWorker } from './protocol'
 import { applyPlaceholders, materialize, parseTemplate, rechecksDue, topoUnits } from './workflow'
 import { parseYaml, type YamlValue } from './yaml'
@@ -582,7 +582,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       let worktree = `name:${state.worktreeName}`
       if (!state.firstStarted) {
         state.firstStarted = true
-        const repoFlag = state.repoPath ? ` --repo path:${shellQuote(state.repoPath)}` : ''
+        const repoFlag = state.repoPath ? ` --repo ${shellQuote(await repoSelector(state.repoPath))}` : ''
         const baseFlag = state.baseBranch ? ` --base-branch ${shellQuote(state.baseBranch)}` : ''
         await act(`старт ${cfg.stepId} (new worktree ${state.worktreeName})`, async () =>
           bridge.run(
@@ -1535,66 +1535,116 @@ export default function activate(orca: OrcaWorkerApi): void {
         // The run is led by a live coordinator agent. First materialize the run's own
         // worktree workspace (what a person expects to appear when a run starts), then
         // launch the coordinator session THERE — the main checkout stays untouched.
-        try {
+        // Ворктри готовится ДО перехватчика запуска координатора: его отказ — это провал
+        // подъёма (рана без ворктри не куда стартовать), а не «координатор не поднялся,
+        // поднимите вручную». Внутри того try отказ создания глушился, и панель получала
+        // статус «готово» с советом, который не исполнить.
           const baseFlag = input.baseBranch ? ` --base-branch ${shellQuote(input.baseBranch)}` : ''
           // Явная ветка (--branch) подменяет сконструированное <логин>/<имя> целиком;
           // в имя ветки разрешён ограниченный набор символов git — остальное срезаем.
           const rawBranch = typeof input.branch === 'string' ? input.branch.trim() : ''
           const branchFlag = rawBranch !== '' ? ` --branch ${shellQuote(rawBranch.replace(/[^A-Za-z0-9._/-]+/g, '-').replace(/^-+|-+$/g, '') || rawBranch)}` : ''
-          // Имя ворктри занято ЖИВЫМ раном — суффиксуем -2, -3, … (два рана в одном
-          // ворктри перебивают привязку панели). Но если ранов на нём нет — имя даём
-          // использовать повторно: продолжение работы в том же ворктри (план/openspec
-          // остаются на месте) важнее формальной уникальности имени.
+          // Имя ворктри против существующих воркспейсов. Занято ЖИВЫМ раном — суффиксуем -2, -3, …
+          // (два рана в одном ворктри перебивают привязку панели). Занято воркспейсом без ранов —
+          // продолжаем в нём: план и openspec остаются на месте, новый ворктри не нужен.
+          // «Живой ран» сверяем по НАСТОЯЩЕМУ пути воркспейса, а не по имени: displayName может
+          // не совпадать с папкой (воркспейс «YCLPRODUCT-68» лежит в momento-re), а у рана,
+          // чей ворктри так и не создался, путь выводится из имени — фантом не должен занимать имя.
+          type ListedWorktree = { displayName?: string; path?: string }
+          const tailOf = (p: string | undefined): string => (p ?? '').replace(/\/+$/, '').split('/').pop() ?? ''
+          const listWorktrees = async (): Promise<ListedWorktree[]> => {
+            const taken = await bridge.json<{ result?: { worktrees?: ListedWorktree[] } }>('orca worktree list --json')
+            return taken.result?.worktrees ?? []
+          }
           const wantedName = input.worktreeName
           let worktreeName = wantedName
+          let reuseExisting = false
           try {
-            const taken = await bridge.json<{ result?: { worktrees?: Array<{ displayName?: string; path?: string }> } }>('orca worktree list --json')
-            const names = new Set<string>()
-            for (const w of taken.result?.worktrees ?? []) {
-              if (w.displayName) names.add(w.displayName)
-              const tail = (w.path ?? '').split('/').pop()
-              if (tail) names.add(tail)
-            }
-            if (names.has(worktreeName)) {
-              const busy = (await listRuns()).some((r) => (r.worktreePath ?? '').endsWith(`/${worktreeName}`))
+            const worktrees = await listWorktrees()
+            const clash = worktrees.find((w) => w.displayName === worktreeName || tailOf(w.path) === worktreeName)
+            if (clash) {
+              const clashPath = realPath(clash.path ?? '')
+              const busy = (await listRuns()).some((r) => r.worktreePath !== null && realPath(r.worktreePath) === clashPath)
               if (busy) {
+                const names = new Set(worktrees.flatMap((w) => [w.displayName ?? '', tailOf(w.path)]).filter(Boolean))
                 let n = 2
                 while (names.has(`${worktreeName}-${n}`)) n++
                 worktreeName = `${worktreeName}-${n}`
+              } else {
+                reuseExisting = true
               }
             }
           } catch {
-            // списка ворктри нет — создаём с именем как есть; Orca сам скажет, если занято
+            // списка ворктри нет — создаём с именем как есть; отказ создания скажет сам
           }
-          if (worktreeName !== wantedName) input.worktreeName = worktreeName
-          await bridge.run(
-            `orca worktree create --repo path:${shellQuote(input.projectPath ?? '.')} --name ${shellQuote(worktreeName)}${baseFlag}${branchFlag} --json || true`,
-            90_000
-          )
-          const list = await orca.host.call<{ workspaces: Array<{ id: string; name: string; path: string }> }>('workspace.list', undefined)
-          const runWorktree = list.workspaces.find((w) => w.name === input.worktreeName)
-            ?? list.workspaces.find((w) => w.path.endsWith(`/${input.worktreeName}`))
-          const home = runWorktree ?? list.workspaces.find((w) => w.path === input.projectPath) ?? list.workspaces[0]
-          const coordinator = specialists.find((sp) => sp.slug === 'coordinator')
-          const brief = coordinatorBrief(run.runId, template, objectiveSeed, input.worktreeName, input.projectPath, input.context ?? null)
-          // The brief lives as a file too: any session in the run's worktree can pick up the
-          // coordinator role (run-use + read the brief) — the role is portable, not nailed
-          // to the one session the plugin launched.
-          let runWorktreePath: string | null = null
-          try {
-            const wts = await bridge.json<{ result?: { worktrees?: Array<{ displayName?: string; path?: string }> } }>('orca worktree list --json')
-            const wtPath = (wts.result?.worktrees ?? []).find(
-              (w) => w.displayName === input.worktreeName || (w.path ?? '').endsWith(`/${input.worktreeName}`)
-            )?.path
-            runWorktreePath = wtPath ?? null
-            if (wtPath) {
-              await bridge.run(
-                `mkdir -p ${shellPath(`${wtPath}/.orca`)} && echo ${shellQuote(toBase64(brief))} | base64 -d > ${shellPath(`${wtPath}/.orca/coordinator-brief.md`)}`
+          input.worktreeName = worktreeName
+          if (!reuseExisting) {
+            // Репозиторий — по id: адрес проекта в реестре Орки может отличаться от настоящего
+            // (переезд на другой логин: старый дом оставили симлинком), а реестр сравнивает
+            // адреса строково — `--repo path:<настоящий>` даёт repo_not_found.
+            const repoFlag = `--repo ${shellQuote(await repoSelector(input.projectPath ?? '.'))}`
+            let createdOut = ''
+            try {
+              createdOut = await bridge.run(
+                `orca worktree create ${repoFlag} --name ${shellQuote(worktreeName)}${baseFlag}${branchFlag} --json`,
+                90_000
+              )
+            } catch (error) {
+              throw new BridgeError(`ворктри «${worktreeName}» не создан: ${causeOf(error)}`, 'cli_error')
+            }
+            // CLI печатает отказ и с нулевым кодом выхода — разбираем ответ
+            let createdDoc: { ok?: boolean; error?: { code?: unknown; message?: unknown } | null } | null = null
+            try {
+              createdDoc = JSON.parse(extractJson(createdOut)) as typeof createdDoc
+            } catch {
+              createdDoc = null // не-JSON ответ: ниже убедимся, что ворктри появился в списке
+            }
+            if (createdDoc && createdDoc.ok === false) {
+              const err = createdDoc.error ?? null
+              throw new BridgeError(
+                `ворктри «${worktreeName}» не создан: ${String(err?.code ?? '')}${err?.message ? ' — ' + String(err.message) : ''}`,
+                'cli_error'
               )
             }
-          } catch {
-            // файл брифа — удобство, ран живёт и без него
+            // имя могло получить суффикс — состояние рана должно знать актуальное (по нему стартуют воркеры)
+            const staged = await loadAuto(run.runId).catch(() => null)
+            if (staged && staged.worktreeName !== worktreeName) {
+              staged.worktreeName = worktreeName
+              await saveAuto(run.runId, staged)
+            }
           }
+        // Ворктри должен существовать до запуска: иначе `agent launch` не найдёт воркспейс,
+        // и ран останется с задачами, но без водителя. Проверка — вне перехватчика запуска
+        // координатора: это провал подъёма, а не «координатор не поднялся».
+        const coordinator = specialists.find((sp) => sp.slug === 'coordinator')
+        const brief = coordinatorBrief(run.runId, template, objectiveSeed, input.worktreeName, input.projectPath, input.context ?? null)
+        // The brief lives as a file too: any session in the run's worktree can pick up the
+        // coordinator role (run-use + read the brief) — the role is portable, not nailed
+        // to the one session the plugin launched.
+        let runWorktreePath: string | null = null
+        try {
+          const wts = await bridge.json<{ result?: { worktrees?: Array<{ displayName?: string; path?: string }> } }>('orca worktree list --json')
+          const wtPath = (wts.result?.worktrees ?? []).find(
+            (w) => w.displayName === input.worktreeName || (w.path ?? '').endsWith(`/${input.worktreeName}`)
+          )?.path
+          runWorktreePath = wtPath ?? null
+          if (wtPath) {
+            await bridge.run(
+              `mkdir -p ${shellPath(`${wtPath}/.orca`)} && echo ${shellQuote(toBase64(brief))} | base64 -d > ${shellPath(`${wtPath}/.orca/coordinator-brief.md`)}`
+            )
+          }
+        } catch {
+          // файл брифа — удобство, ран живёт и без него
+        }
+        // Координатору нужен существующий ворктри: без него `agent launch` просто не найдёт
+        // воркспейс, и ран останется с задачами, но без водителя. Не молчим.
+        if (!runWorktreePath) {
+          throw new BridgeError(
+            `ворктри «${input.worktreeName}» не найден в списке воркспейсов Орки — координатору некуда стартовать`,
+            'cli_error'
+          )
+        }
+        try {
           // The HOST agent.launch types the prompt the instant the terminal exists — a
           // still-booting agent CLI means the brief lands in a bare shell and is lost. The
           // CLI `orca agent launch` waits for the agent properly, so the coordinator starts
@@ -1627,10 +1677,10 @@ export default function activate(orca: OrcaWorkerApi): void {
             throw new BridgeError('агент координатора не поднялся через CLI (2 попытки)', 'cli_error')
           }
           const launchedTerminal = await launchVerified()
-          void home
           const stored = await loadAuto(run.runId)
           if (stored) {
             stored.worktreePath = runWorktreePath
+            stored.worktreeName = input.worktreeName
             stored.coordinatorTerminal = launchedTerminal
             await saveAuto(run.runId, stored)
           }
@@ -1638,7 +1688,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           await saveJob(job, run.runId)
         } catch (error) {
           // The run exists and tasks are materialized; a failed launch leaves it to the panel.
-          job.error = `координатор не поднялся: ${message(error)}. Ран готов, водитель поднимается вручную: открой claude в ворктри рана и дай ему две команды — (1) orca orchestration run-use --id ${run.runId} --json  (2) прочитай .orca/coordinator-brief.md и веди флоу по нему`
+          job.error = `координатор не поднялся: ${causeOf(error)}. Ран готов, водитель поднимается вручную: открой claude в ворктри рана и дай ему две команды — (1) orca orchestration run-use --id ${run.runId} --json  (2) прочитай .orca/coordinator-brief.md и веди флоу по нему`
           await saveJob(job, run.runId)
         }
         job.step = 'done'
@@ -1647,7 +1697,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         await refresh()
       } catch (error) {
         job.status = 'failed'
-        job.error = message(error)
+        job.error = causeOf(error)
         await saveJob(job)
       }
     })()
@@ -1711,6 +1761,24 @@ export default function activate(orca: OrcaWorkerApi): void {
    *  worker-start) требуют run-bound отправителя: координатор биндит СВОЙ терминал, наш
    *  хелпер по умолчанию не привязан — без этого ручной ретрай из панели падал с
    *  run_required. Идемпотентно и дёшево, зовём перед каждой мутацией из панели. */
+  /** Селектор репозитория для CLI — по id, а не по адресу. Адрес проекта в реестре Орки может
+   *  отличаться от настоящего (переезд на другой логин: старый дом оставили симлинком), а
+   *  реестр сравнивает адреса строково: `--repo path:<настоящий>` → repo_not_found. id от
+   *  адреса не зависит. Реестр недоступен или репозитория в нём нет — остаётся путь. */
+  async function repoSelector(projectPath: string): Promise<string> {
+    try {
+      const want = realPath(projectPath)
+      const listed = await bridge.json<{ result?: { repos?: Array<{ id?: unknown; path?: unknown }> } }>('orca repo list --json')
+      const hit = (listed.result?.repos ?? []).find(
+        (r) => typeof r.id === 'string' && r.id !== '' && typeof r.path === 'string' && realPath(r.path) === want
+      )
+      if (hit && typeof hit.id === 'string') return `id:${hit.id}`
+    } catch {
+      // без реестра — как раньше, путём
+    }
+    return `path:${projectPath}`
+  }
+
   async function bindRun(runId: string): Promise<void> {
     await bridge.run(`orca orchestration run-use --id ${shellQuote(runId)} --json`)
   }
