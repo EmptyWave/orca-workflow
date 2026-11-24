@@ -40,7 +40,17 @@ const DEFAULT_WORKSPACES = [
           { id: 'w3', kind: 'worktree', name: 'momento', path: '/Users/tester/orca/workspaces/biz.erp/momento', branch: 'feat/momento', project: 'repo:1', hostId: 'local' }
 ]
 
-function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string; workspaces?: unknown[]; repoPath?: string } = {}) {
+// Карточки воркеров тестового хоста; сцена добавляет/заменяет свои (opts.workers) или убирает (opts.dropWorkers).
+const CARDS: Record<string, string> = {
+  planner: 'agent: claude\nspec: PLAN SPEC {{objective}}\n',
+  researcher: 'agent: claude\nspec: RESEARCH SPEC\n',
+  reviewer: 'agent: claude\nspec: REVIEW SPEC\n',
+  coder: 'agent: claude\nspec: CODE SPEC\n',
+  tester: 'agent: claude\nmodel: cheap-model\nfallback: [zcode, kimi]\nspec: TEST SPEC\n',
+  committer: 'agent: claude\nspec: COMMIT SPEC\n'
+}
+
+function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[] } = {}) {
   let created = 0
   const createdWorktrees: string[] = [] // что «создала» команда worktree create в этой сцене
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
@@ -213,14 +223,7 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
     if (command.includes('__WF_LS__') && command.includes('base64')) {
       // The whole-directory listing: marker + base64 + end marker per yaml file.
       const files: Record<string, string> = command.includes('/specialists') || command.includes('/workers')
-        ? {
-            planner: 'agent: claude\nspec: PLAN SPEC {{objective}}\n',
-            researcher: 'agent: claude\nspec: RESEARCH SPEC\n',
-            reviewer: 'agent: claude\nspec: REVIEW SPEC\n',
-            coder: 'agent: claude\nspec: CODE SPEC\n',
-            tester: 'agent: claude\nmodel: cheap-model\nfallback: [zcode, kimi]\nspec: TEST SPEC\n',
-            committer: 'agent: claude\nspec: COMMIT SPEC\n'
-          }
+        ? Object.fromEntries(Object.entries({ ...CARDS, ...(opts.workers ?? {}) }).filter(([slug]) => !(opts.dropWorkers ?? []).includes(slug)))
         : { demo: TEMPLATE_YAML }
       const chunks: string[] = []
       for (const [name, content] of Object.entries(files)) {
@@ -274,7 +277,7 @@ const spawned = (): string[] => spawnedCommands
 
 async function withWorker(
   fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: MockHost) => Promise<void>,
-  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; workspaces?: unknown[]; repoPath?: string } = {}
+  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[] } = {}
 ): Promise<void> {
   const host = makeHost(opts)
   const canned = currentCanned as (command: string) => string
@@ -467,6 +470,100 @@ test('новый ран поднимает координатора-агента
     assert.equal(auto.driver, 'coordinator')
     assert.ok(auto.coordinatorTerminal, 'терминал координатора записан')
   }))
+
+/** Поднимает демо-ран из библиотеки на заданных карточках (поверх базовых), ждёт окончания job. */
+function raiseDemo(
+  fn: (r: { job: any; worker: Awaited<ReturnType<typeof mountWorker>>; host: MockHost }) => Promise<void>,
+  scene: { workers?: Record<string, string>; dropWorkers?: string[] } = {}
+): Promise<void> {
+  return withWorker(async (worker, host) => {
+    const { jobId } = await worker.request('template.instantiate', {
+      source: 'library', projectPath: null, templateId: 'demo',
+      objective: 'цель Y', baseBranch: null, worktreeName: 'demo-wt', agent: 'claude'
+    })
+    let job = null
+    for (let i = 0; i < 60; i++) {
+      await new Promise((r) => setTimeout(r, 50))
+      job = (await worker.request('job.get', { jobId })).job
+      if (job && job.status !== 'running') break
+    }
+    await fn({ job, worker, host })
+  }, scene)
+}
+
+/** Текст брифа из команды его записи в ворктри (`echo <base64> | base64 -d > …/coordinator-brief.md`). */
+function briefOf(command: string): string {
+  const match = command.match(/echo '([A-Za-z0-9+/=]+)' \| base64 -d/)
+  return match ? new TextDecoder().decode(Uint8Array.from(atob(match[1]), (c) => c.charCodeAt(0))) : ''
+}
+
+const GENERAL_COORDINATOR = 'agent: claude\nmodel: opus\neffort: xhigh\nprompt: |\n  GENERAL-CARD-RULE\n'
+
+test('координатор по шаблону: карточка coordinator-<id> заменяет общую — агент, модель и текст уходят в запуск', () =>
+  raiseDemo(async ({ job, worker }) => {
+    assert.equal(job.status, 'done', job.error ?? '')
+    const launch = spawned().find((c) => c.includes('orca agent launch')) ?? ''
+    assert.ok(launch.includes("--agent 'codex'"), 'агент — из карточки флоу')
+    assert.ok(launch.includes("--model 'gpt-5' --effort 'high'"), 'модель и effort — из карточки флоу')
+    assert.ok(launch.includes('FLOW-SPECIFIC-RULE-77'), 'текст карточки флоу — в брифе')
+    assert.ok(launch.includes('РОЛЬ И СПЕЦИФИКА ЭТОГО ФЛОУ'), 'бриф объявляет блок обязательным')
+    assert.ok(!launch.includes('GENERAL-CARD-RULE'), 'текст общей карточки в бриф не попадает')
+    assert.ok(!launch.includes("--model 'opus'"), 'общая карточка не доклеивается по частям')
+    const written = spawned().filter((c) => c.includes('coordinator-brief.md'))
+    assert.ok(written.some((c) => briefOf(c).includes('FLOW-SPECIFIC-RULE-77')), 'файл брифа несёт специфику флоу')
+    // Пересборка брифа («осведомить координатора») читает ту же карточку.
+    await worker.request('run.brief.refresh', { runId: 'run_2' })
+    const refreshed = briefOf(spawned().filter((c) => c.includes('coordinator-brief.md')).at(-1) ?? '')
+    assert.ok(refreshed.includes('FLOW-SPECIFIC-RULE-77'), 'пересборка брифа вкладывает карточку флоу')
+    assert.ok(!refreshed.includes('GENERAL-CARD-RULE'), 'пересборка не тянет общую карточку')
+  }, {
+    workers: {
+      coordinator: GENERAL_COORDINATOR,
+      'coordinator-demo': 'agent: codex\nmodel: gpt-5\neffort: high\nprompt: |\n  FLOW-SPECIFIC-RULE-77\n'
+    }
+  }))
+
+test('координатор по шаблону: карточка чужого флоу не мешает, без своей берётся общая', () =>
+  raiseDemo(async ({ job }) => {
+    assert.equal(job.status, 'done', job.error ?? '')
+    const launch = spawned().find((c) => c.includes('orca agent launch')) ?? ''
+    assert.ok(launch.includes("--agent 'codex'") && launch.includes("--model 'opus' --effort 'xhigh'"), 'агент, модель и effort — из общей карточки')
+    assert.ok(!launch.includes('FLOW-SPECIFIC-RULE-77'), 'карточка другого флоу в бриф не попадает')
+    assert.ok(!launch.includes('GENERAL-CARD-RULE'), 'текст общей карточки не вкладывается: её правила уже в брифе')
+    assert.ok(!launch.includes('РОЛЬ И СПЕЦИФИКА ЭТОГО ФЛОУ'), 'пустого блока роли нет')
+  }, {
+    workers: {
+      coordinator: GENERAL_COORDINATOR.replace('agent: claude', 'agent: codex'),
+      'coordinator-research': 'agent: codex\nprompt: |\n  FLOW-SPECIFIC-RULE-77\n'
+    }
+  }))
+
+test('координатор по шаблону: карточка coordinator-<id> без текста — только агент и модель, это не ошибка', () =>
+  raiseDemo(async ({ job }) => {
+    assert.equal(job.status, 'done', job.error ?? '')
+    const launch = spawned().find((c) => c.includes('orca agent launch')) ?? ''
+    assert.ok(launch.includes("--agent 'codex'") && !launch.includes('--model'), 'карточка флоу задана без модели — агент на своей')
+    assert.ok(!launch.includes('РОЛЬ И СПЕЦИФИКА ЭТОГО ФЛОУ'), 'блока роли нет')
+  }, {
+    workers: { coordinator: GENERAL_COORDINATOR, 'coordinator-demo': 'agent: codex\n' }
+  }))
+
+test('битая карточка coordinator-<id>: ран не создаётся, ошибка называет карточку', () =>
+  raiseDemo(async ({ job }) => {
+    assert.equal(job.status, 'failed')
+    assert.ok(String(job.error).includes('карточка координатора «coordinator-demo» не читается'), job.error)
+    assert.equal(spawned().filter((c) => c.includes('run-create')).length, 0, 'конфигурация проверена до run-create — пустого рана не остаётся')
+    assert.equal(spawned().filter((c) => c.includes('orca agent launch')).length, 0, 'координатор не запускается')
+  }, {
+    workers: { 'coordinator-demo': 'agent: claude\nprompt: "незакрытая кавычка\n' }
+  }))
+
+test('нет карточки воркера: конфигурация проверена до run-create — пустого рана не остаётся', () =>
+  raiseDemo(async ({ job }) => {
+    assert.equal(job.status, 'failed')
+    assert.ok(String(job.error).includes('нет карточек воркеров: planner'), job.error)
+    assert.equal(spawned().filter((c) => c.includes('run-create')).length, 0, 'ран не создан')
+  }, { dropWorkers: ['planner'] }))
 
 test('task.retry сбрасывает шаг и его хвост, автопилот просыпается', () =>
   withWorker(async (worker, host) => {

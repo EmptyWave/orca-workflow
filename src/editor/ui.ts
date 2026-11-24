@@ -350,6 +350,17 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     panel.append(add)
   }
 
+  /** Подсказка формы для карточек координатора; обычному воркеру нечего подсказывать. */
+  function coordinatorNote(slug: string): string | null {
+    if (slug === 'coordinator') {
+      return 'Общая карточка координатора — для флоу без своей карточки coordinator-<id>. Агент, модель и effort уходят в запуск; текст агенту не отправляется: правила координатора зашиты в бриф. Специфику флоу пиши в карточку coordinator-<id шаблона>.'
+    }
+    if (slug.startsWith('coordinator-')) {
+      return `Координатор флоу «${slug.slice('coordinator-'.length)}»: берётся для шаблона с этим id и заменяет общую карточку целиком (агент, модель, effort — свои). Текст карточки вкладывается в бриф как роль и специфика флоу.`
+    }
+    return null
+  }
+
   /** Открытая инлайн-форма — одна одновременно; новая закрывает предыдущую. */
   let inlineForm: HTMLElement | null = null
   function closeInlineForm(): void {
@@ -372,6 +383,16 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const slugEl = input('slug (имя файла)', editing === 'new' ? '' : editing.slug)
     slugEl.disabled = editing !== 'new' // the slug names the file; renaming would orphan references
     const agentEl = input('агент (claude, codex, zcode…)', editing === 'new' ? 'claude' : editing.agent)
+    // Карточки координатора живут по соглашению имени — говорим об этом там, где имя вводят.
+    const coordNote = document.createElement('div')
+    coordNote.className = 'wfv-hint'
+    coordNote.style.lineHeight = '1.5'
+    const syncCoordNote = (): void => {
+      coordNote.textContent = coordinatorNote(slugEl.value.trim()) ?? ''
+    }
+    slugEl.addEventListener('input', syncCoordNote)
+    syncCoordNote()
+    form.append(coordNote)
     void loadCatalogModels()
     const modelWrap = comboField('модель (опц.) — из каталога Орки', editing === 'new' || !editing ? '' : editing.model ?? '', modelOptions, () => undefined)
     const modelEl = modelWrap.querySelector('input') as HTMLInputElement

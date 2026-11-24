@@ -852,6 +852,32 @@ export default function activate(orca: OrcaWorkerApi): void {
     }
   }
 
+  /** Карточка координатора для шаблона: `coordinator-<id шаблона>`, нет — общий `coordinator`. */
+  function coordinatorFor(templateId: string, specialists: WfSpecialist[]): WfSpecialist | undefined {
+    return specialists.find((sp) => sp.slug === `coordinator-${templateId}`) ?? specialists.find((sp) => sp.slug === 'coordinator')
+  }
+
+  /** Специализированная карточка (`coordinator-<id>`) вкладывается в бриф целиком: это роль и
+   *  правила именно этого флоу, которых в универсальном брифе нет. Общая карточка не
+   *  вкладывается: её правила уже живут в брифе, а два списка с расхождениями хуже одного;
+   *  от любой карточки при запуске берутся агент, модель и effort. Карточка без текста —
+   *  не ошибка: так для флоу задаётся только агент или модель координатора. */
+  function coordinatorSpec(coordinator: WfSpecialist | undefined): string | null {
+    if (!coordinator || coordinator.slug === 'coordinator') return null
+    const spec = coordinator.spec?.trim() ?? ''
+    return spec === '' ? null : `Карточка «${coordinator.slug}»:\n${spec}`
+  }
+
+  /** Карточка координатора этого флоу должна читаться: битая — ран не поднимаем вовсе,
+   *  иначе он молча пойдёт с общими правилами вместо специфичных. Вызов — до run-create. */
+  function coordinatorCardChecked(templateId: string, specialists: WfSpecialist[]): WfSpecialist | undefined {
+    const coordinator = coordinatorFor(templateId, specialists)
+    if (coordinator?.error) {
+      throw new BridgeError(`карточка координатора «${coordinator.slug}» не читается: ${coordinator.error}`, 'cli_error')
+    }
+    return coordinator
+  }
+
   /** The coordinator agent's brief: the objective, the whole flow and the ground rules. */
   function coordinatorBrief(
     runId: string,
@@ -859,7 +885,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     objective: string,
     worktreeName: string,
     projectPath: string | null,
-    context: string | null = null
+    context: string | null = null,
+    roleSpec: string | null = null
   ): string {
     const flow = template.steps
       .map((step, i) => {
@@ -924,6 +951,13 @@ export default function activate(orca: OrcaWorkerApi): void {
     ].join('\n')
     return [
       `Ты координатор рана ${runId}.`,
+      ...(roleSpec
+        ? [
+            'РОЛЬ И СПЕЦИФИКА ЭТОГО ФЛОУ — карточка координатора, обязательна. Она главнее правил этого брифа во всём, что касается смысла флоу (артефакты, порядок работы, отчёт); команды движка бери из раздела «Действия» ниже.',
+            roleSpec,
+            ''
+          ]
+        : []),
       kickoff,
       'ПОЛНОЕ описание задачи (из затравки + интервью) пересылай планировщику при старте: сразу после worker-start отправь его в его диспетчер — orca orchestration send --to dispatch:<dispatch_id> --body <полное описание> --json. Воркеры получают затравку в своей задаче; полный текст идёт от тебя.',
       'Бриф сохранён в .orca/coordinator-brief.md ворктри рана — потерял контекст, перечитай его.',
@@ -1381,6 +1415,17 @@ export default function activate(orca: OrcaWorkerApi): void {
         // Название рана — ровно то, что ввёл человек (первая строка, до 120 символов);
         // префикс титула шаблона убран — «development — …» не имел отношения к вводу.
         // Пустой заголовок — fallback на титул шаблона.
+        // Карточки читаются ДО run-create: отсутствующий воркер или битая карточка
+        // координатора — ошибка конфигурации, ран с ней не создаём (иначе в истории
+        // остаётся пустой ран без задач).
+        const specialists = await loadSpecialists(input.projectPath)
+        coordinatorCardChecked(template.id, specialists)
+        if (template.missingWorkers.length > 0) {
+          throw new BridgeError(
+            `нет карточек воркеров: ${template.missingWorkers.join(', ')} — создай их в .orca/workers или через кнопку «Воркеры» в редакторе`,
+            'cli_error'
+          )
+        }
         const run = await cli<{ runId: string }>(
           `orca orchestration run-create --objective ${shellQuote(objectiveSeed === '' ? template.title : objectiveSeed.split('\n')[0].slice(0, 120))} --json`
         )
@@ -1396,17 +1441,10 @@ export default function activate(orca: OrcaWorkerApi): void {
         await saveJob(job, run.runId)
         stepsById = new Map(template.steps.map((s) => [s.id, s]))
         // Resolve specialists into the steps, then flatten blocks into task units.
-        const specialists = await loadSpecialists(input.projectPath)
         const specPaths = new Set<string>()
         for (const step of template.steps) {
           if (step.specFile) specPaths.add(step.specFile)
           for (const child of step.sub ?? []) if (child.specFile) specPaths.add(child.specFile)
-        }
-        if (template.missingWorkers.length > 0) {
-          throw new BridgeError(
-            `нет карточек воркеров: ${template.missingWorkers.join(', ')} — создай их в .orca/workers или через кнопку «Воркеры» в редакторе`,
-            'cli_error'
-          )
         }
         const dir = await workflowsDir(input.source, input.projectPath)
         const specs = specPaths.size > 0 ? await readFiles(dir, [...specPaths]) : {}
@@ -1616,8 +1654,11 @@ export default function activate(orca: OrcaWorkerApi): void {
         // Ворктри должен существовать до запуска: иначе `agent launch` не найдёт воркспейс,
         // и ран останется с задачами, но без водителя. Проверка — вне перехватчика запуска
         // координатора: это провал подъёма, а не «координатор не поднялся».
-        const coordinator = specialists.find((sp) => sp.slug === 'coordinator')
-        const brief = coordinatorBrief(run.runId, template, objectiveSeed, input.worktreeName, input.projectPath, input.context ?? null)
+        // Карточка координатора — по соглашению имени: `coordinator-<id шаблона>` (своя роль
+        // и специфика флоу), нет такой — общий `coordinator`. Поле в шаблоне не нужно: ран
+        // всегда один на флоу, значит и карточка предсказуема.
+        const coordinator = coordinatorFor(template.id, specialists)
+        const brief = coordinatorBrief(run.runId, template, objectiveSeed, input.worktreeName, input.projectPath, input.context ?? null, coordinatorSpec(coordinator))
         // The brief lives as a file too: any session in the run's worktree can pick up the
         // coordinator role (run-use + read the brief) — the role is portable, not nailed
         // to the one session the plugin launched.
@@ -1651,9 +1692,15 @@ export default function activate(orca: OrcaWorkerApi): void {
           // through it, in the run's own worktree; one verification + retry as a belt.
           const launchVerified = async (): Promise<string> => {
             const selector = runWorktreePath ? `path:${runWorktreePath}` : `name:${input.worktreeName}`
+            // Модель и effort — из карточки координатора, как у воркеров (effort только при модели).
+            // Модель из формы рана — умолчание для ШАГОВ без своей модели, координатора не касается.
+            const coordModel = coordinator?.model ?? null
+            const coordEffort = coordModel ? coordinator?.effort ?? null : null
             for (let attempt = 0; attempt < 2; attempt++) {
               const out = await bridge.run(
-                `orca agent launch --agent ${shellQuote(coordinator?.agent ?? input.agent)} --worktree ${shellQuote(selector)} --prompt ${shellQuote(brief)} --focus --json`,
+                `orca agent launch --agent ${shellQuote(coordinator?.agent ?? input.agent)} --worktree ${shellQuote(selector)} --prompt ${shellQuote(brief)}${
+                  coordModel ? ` --model ${shellQuote(coordModel)}` : ''
+                }${coordEffort ? ` --effort ${shellQuote(coordEffort)}` : ''} --focus --json`,
                 60_000
               )
               let handle = ''
@@ -2454,7 +2501,16 @@ export default function activate(orca: OrcaWorkerApi): void {
     const specialists = await loadSpecialists(projectPath)
     const resolved = resolveSteps(template, specialists, {})
     const objective = typeof meta?.objective === 'string' ? meta.objective : ''
-    const brief = coordinatorBrief(runId, { ...template, steps: resolved }, objective, auto.worktreeName, projectPath, typeof meta?.context === 'string' ? meta.context : null)
+    const coordinator = coordinatorCardChecked(template.id, specialists)
+    const brief = coordinatorBrief(
+      runId,
+      { ...template, steps: resolved },
+      objective,
+      auto.worktreeName,
+      projectPath,
+      typeof meta?.context === 'string' ? meta.context : null,
+      coordinatorSpec(coordinator)
+    )
     let wt: string | null = auto.worktreePath ?? null
     if (!wt && projectPath && auto.worktreeName) {
       wt = `${homedir()}/orca/workspaces/${projectPath.split('/').filter(Boolean).pop()}/${auto.worktreeName}`
