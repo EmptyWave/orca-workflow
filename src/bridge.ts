@@ -4,8 +4,27 @@
 // (`--from <terminal handle>`): a helper terminal is created on demand through the CLI
 // (terminal creation is not focus-scoped) and reused; it is closed on deactivate.
 import { execFile } from 'node:child_process'
+import { realpathSync } from 'node:fs'
 import { homedir } from 'node:os'
 import type { OrcaWorkerApi } from 'orca/worker'
+
+/** Настоящий адрес пути: симлинки разрешены, недоступный путь возвращается как есть.
+ *  Адрес проекта приходит из реестра Орки и может идти через симлинк — при переезде на другой
+ *  логин старый домашний каталог часто оставляют симлинком на новый. Сама Орка ищет воркспейс
+ *  по строковому совпадению адреса и симлинки не разрешает: `path:<симлинк>` → selector_not_found,
+ *  и мост не может создать терминал-помощник — ран не поднимался вовсе. */
+export function realPath(path: string): string {
+  try {
+    return realpathSync.native(path)
+  } catch {
+    return path
+  }
+}
+
+/** Один и тот же каталог, заданный разными записями адреса. */
+function samePath(a: string, b: string): boolean {
+  return a === b || (a !== '' && b !== '' && realPath(a) === realPath(b))
+}
 
 const DEFAULT_TIMEOUT_MS = 15_000
 const SPAWN_BUFFER = 16 * 1024 * 1024
@@ -67,9 +86,10 @@ export class Bridge {
    *  terminal instead of rotating identities — a run's consumer binding stays valid. */
   private fromByPath: Record<string, string> = {}
   pin(projectPath: string | null): void {
-    if (projectPath === this.pinPath) return
-    this.pinPath = projectPath
-    this.fromHandle = projectPath ? this.fromByPath[projectPath] ?? null : null
+    const next = projectPath ? realPath(projectPath) : null
+    if (next === this.pinPath) return
+    this.pinPath = next
+    this.fromHandle = next ? this.fromByPath[next] ?? null : null
   }
 
   /** The last helper --from terminal (informational). */
@@ -157,12 +177,18 @@ export class Bridge {
     return handle
   }
 
-  /** The pinned project's workspace id from the host's workspace list, if resolvable. */
+  /** The pinned project's workspace id from the host's workspace list, if resolvable.
+   *  Адреса сравниваются как каталоги (симлинки разрешаются), а не как строки. */
   private async helperWorkspace(): Promise<string | null> {
     if (!this.pinPath) return null
     const list = await this.host<{ workspaces: Array<{ id: string; path: string }> }>('workspace.list', undefined)
-    const ws = list.workspaces.find((w) => w.path === this.pinPath)
-      ?? list.workspaces.find((w) => w.path.startsWith(`${this.pinPath}/`))
+    const under = (candidate: string): boolean => {
+      if (candidate.startsWith(`${this.pinPath}/`)) return true
+      const real = realPath(candidate)
+      return real !== candidate && real.startsWith(`${this.pinPath}/`)
+    }
+    const ws = list.workspaces.find((w) => samePath(w.path, this.pinPath))
+      ?? list.workspaces.find((w) => under(w.path))
     return ws?.id ?? null
   }
 

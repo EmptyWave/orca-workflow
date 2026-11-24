@@ -1,7 +1,7 @@
 // The plugin's worker: the CLI bridge, orchestration snapshot, gate/task management and
 // template materialization. Runs for as long as the plugin is enabled (it owns a status
 // bar item), polls a light refresh, and pushes 'state.changed' to open panels.
-import { Bridge, BridgeError, expandHome, shellPath, sleep } from './bridge'
+import { Bridge, BridgeError, expandHome, realPath, shellPath, sleep } from './bridge'
 import type { WfGate, WfJob, WfRun, WfSnapshot, WfSpecialist, WfStep, WfTask, WfTemplate, WfWorker } from './protocol'
 import { applyPlaceholders, materialize, parseTemplate, rechecksDue, topoUnits } from './workflow'
 import { parseYaml, type YamlValue } from './yaml'
@@ -185,13 +185,13 @@ export default function activate(orca: OrcaWorkerApi): void {
         }
         if (meta && typeof meta === 'object') {
           const path = meta.projectPath
-          if (typeof path === 'string' && path !== '') projectPath = path
+          if (typeof path === 'string' && path !== '') projectPath = realPath(path)
         }
         // AutoState knows the run's own worktree even when runmeta already carried the project.
         const auto = await storageGet<{ repoPath?: unknown; worktreeName?: unknown; worktreePath?: unknown }>(`auto.${runId}`)
         if (auto && typeof auto === 'object') {
           const path = auto.repoPath
-          if (!projectPath && typeof path === 'string' && path !== '') projectPath = path
+          if (!projectPath && typeof path === 'string' && path !== '') projectPath = realPath(path)
           if (typeof auto.worktreePath === 'string' && auto.worktreePath !== '') worktreePath = auto.worktreePath
           else if (worktreePath === null && typeof auto.worktreeName === 'string' && typeof path === 'string' && path !== '') {
             worktreePath = `${homedir()}/orca/workspaces/${path.split('/').filter(Boolean).pop()}/${auto.worktreeName}`
@@ -1354,6 +1354,9 @@ export default function activate(orca: OrcaWorkerApi): void {
     /** Модель рана: дефолт для шагов БЕЗ явной model в карточке/шаблоне. */
     raiseModel?: string | null
   }): Promise<string> {
+    // Адрес от панели мог быть закэширован ещё до переезда (через симлинк): дальше он идёт
+    // в селекторы Орки, которые симлинки не разрешают, — приводим к настоящему сразу.
+    if (input.projectPath) input.projectPath = realPath(input.projectPath)
     if (input.source === 'project' && input.projectPath) bridge.pin(input.projectPath)
     const template = await loadTemplate(input.source, input.projectPath, input.templateId)
     const job: WfJob = {
@@ -1952,7 +1955,9 @@ export default function activate(orca: OrcaWorkerApi): void {
       const repos = JSON.parse(extractJson(repoJson)) as { result?: { repos?: Array<{ id?: string; displayName?: string; path?: string }> } }
       const repo = (repos.result?.repos ?? []).find((r) => r.id === repoId)
       if (!repo) return null
-      return { repoId, name: repo.displayName ?? '', path: repo.path ?? '' }
+      // Адрес из реестра может идти через симлинк (переезд на другой логин): приводим к
+      // настоящему — по нему Орка находит воркспейс, а панель сравнивает адреса ранов.
+      return { repoId, name: repo.displayName ?? '', path: realPath(repo.path ?? '') }
     } catch {
       return null
     }

@@ -2,6 +2,9 @@
 // JSON per command, the way the real bridge captures between markers.
 import { assert, mockHost, mountWorker, test, type MockHost } from 'orca/testing'
 import * as main from './worker'
+import { mkdtempSync, realpathSync, rmSync, symlinkSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { spawnHooks } from './bridge'
 
 const TEMPLATE_YAML = `id: demo
@@ -28,7 +31,14 @@ const b64 = (s: string): string => {
   return btoa(binary)
 }
 
-function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string } = {}) {
+// Воркспейсы тестового хоста; сцена может подменить список (opts.workspaces).
+const DEFAULT_WORKSPACES = [
+          { id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp', branch: 'master', project: 'repo:1', hostId: 'local' },
+          { id: 'w2', kind: 'worktree', name: 'other', path: '/x/other', branch: 'feature/x', project: 'repo:2', hostId: 'local' },
+          { id: 'w3', kind: 'worktree', name: 'momento', path: '/Users/tester/orca/workspaces/biz.erp/momento', branch: 'feat/momento', project: 'repo:1', hostId: 'local' }
+]
+
+function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string; workspaces?: unknown[]; repoPath?: string } = {}) {
   let created = 0
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
@@ -49,6 +59,13 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
       return '{"agent":"claude","discovered":{"models":[{"id":"glm-5.3","label":"Glm 5.3"},{"id":"glm-5.3[1m]","label":"Glm 5.3 (1M context)"}]}}\n{"agent":"codex","discovered":{"models":[{"id":"gpt-5","label":"GPT-5"}]}}'
     }
     if (command.includes('orca terminal create') && command.includes('workflow-view-runner')) {
+      // Как настоящий CLI: селектор `path:` сравнивает адрес СТРОКОЙ, симлинки не разрешает —
+      // иначе тест не заметил бы selector_not_found, на котором вживую падал каждый подъём рана.
+      const selector = (command.match(/--worktree path:(\S+)/) || [])[1]
+      const known = (opts.workspaces ?? DEFAULT_WORKSPACES).map((w) => (w as { path: string }).path)
+      if (selector && !known.includes(selector)) {
+        throw new Error('selector_not_found: No Orca workspace matched the worktree selector')
+      }
       return '{"ok":true,"result":{"terminal":{"handle":"t_helper"}}}'
     }
     // Мутации оркестрации требуют идентичность отправителя, как настоящий CLI — причём КАЖДАЯ
@@ -143,7 +160,7 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
           ok: true,
           result: {
             repos: [
-              { id: 'r1', displayName: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp', kind: 'git' },
+              { id: 'r1', displayName: 'biz.erp', path: opts.repoPath ?? '/Users/tester/PhpstormProjects/biz.erp', kind: 'git' },
               { id: 'f1', displayName: '~', path: '/Users/tester', kind: 'folder' }
             ]
           }
@@ -211,11 +228,7 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
         terminals: [opts.focus ? { id: opts.focus, title: 'Terminal' } : { id: 't1', title: 'workflow-view bridge' }]
       },
       'workspace.list': {
-        workspaces: [
-          { id: 'w1', kind: 'worktree', name: 'biz.erp', path: '/Users/tester/PhpstormProjects/biz.erp', branch: 'master', project: 'repo:1', hostId: 'local' },
-          { id: 'w2', kind: 'worktree', name: 'other', path: '/x/other', branch: 'feature/x', project: 'repo:2', hostId: 'local' },
-          { id: 'w3', kind: 'worktree', name: 'momento', path: '/Users/tester/orca/workspaces/biz.erp/momento', branch: 'feat/momento', project: 'repo:1', hostId: 'local' }
-        ],
+        workspaces: opts.workspaces ?? DEFAULT_WORKSPACES,
         truncated: false
       },
       'editor.open': { opened: true },
@@ -236,7 +249,7 @@ const spawned = (): string[] => spawnedCommands
 
 async function withWorker(
   fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: MockHost) => Promise<void>,
-  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string } = {}
+  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; workspaces?: unknown[]; repoPath?: string } = {}
 ): Promise<void> {
   const host = makeHost(opts)
   const canned = currentCanned as (command: string) => string
@@ -596,3 +609,27 @@ test('skip: «Перезапустить шаг» снимает пропуск 
     const left = host.data().storage['skipped.run_1'] as Record<string, unknown> | undefined
     assert.ok(!left || Object.keys(left).length === 0, 'шаг и его хвост снова в работе: записи о пропуске нет')
   }, skipOpts('commit')))
+
+// ---- адрес проекта через симлинк (переезд на другой логин) --------------------------------------
+test('адрес проекта через симлинк: помощник создаётся в воркспейсе проекта, а не selector_not_found', () => {
+  // Как на новом Маке: старый домашний каталог — симлинк, реестр Орки отдаёт адрес через него,
+  // а воркспейс зарегистрирован по настоящему адресу. macOS: сам tmpdir лежит за симлинком —
+  // берём настоящий адрес, чтобы сравнивать не две разные записи одного каталога.
+  const real = realpathSync.native(mkdtempSync(join(tmpdir(), 'wfv-real-')))
+  const link = join(tmpdir(), `wfv-link-${process.pid}-${Date.now()}`)
+  symlinkSync(real, link, 'dir')
+  return withWorker(async (worker, host) => {
+    try {
+      const { project } = await worker.request('project.current') as { project: { path: string } | null }
+      assert.equal(project?.path, real, 'адрес проекта из реестра приведён к настоящему')
+      await worker.request('gate.resolve', { gateId: 'gate_1', resolution: 'approve' })
+      const created = host.callsOf('terminal.create') as Array<{ workspaceId?: string }> | undefined
+      assert.equal(created?.length, 1, 'терминал-помощник создан host-вызовом')
+      assert.equal(created?.[0]?.workspaceId, 'w1', 'в воркспейсе проекта')
+      assert.ok(!spawned().some((c) => c.includes('orca terminal create')), 'резервная команда CLI не понадобилась — именно она падала с selector_not_found')
+    } finally {
+      rmSync(link, { force: true })
+      rmSync(real, { recursive: true, force: true })
+    }
+  }, { repoPath: link, workspaces: [{ id: 'w1', kind: 'worktree', name: 'biz.erp', path: real, branch: 'master', project: 'repo:1', hostId: 'local' }] })
+})
