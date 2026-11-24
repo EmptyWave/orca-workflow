@@ -197,6 +197,63 @@ steps:
   assert.throws(() => materialize(tpl.steps), /ничего нет/, 'гейт подтверждает результат — после последнего шага флоу нет')
 })
 
+test('on_skip: цель пропуска едет на удерживаемый шаг вместе с гейтом', () => {
+  const tpl = parseTemplate('s', parseYaml(`
+id: s
+title: S
+steps:
+  - id: review
+    worker: reviewer
+    gate: { question: 'Так?', options: [approve, request-changes, skip] }
+    on_skip: { goto: commit }
+  - id: dev
+    worker: coder
+  - id: tests
+    worker: tester
+  - id: commit
+    worker: committer
+`))
+  assert.deepEqual(tpl.steps[0].onSkip, { goto: 'commit' }, 'читается полем шага рядом с гейтом')
+  assert.equal(tpl.steps[1].onSkip, null, 'у шага без on_skip — null')
+  const { units } = materialize(tpl.steps)
+  assert.deepEqual(units.find((u) => u.id === 'dev')?.onSkip, { goto: 'commit' }, 'цель знает шаг, который гейт держит')
+  assert.equal(units.find((u) => u.id === 'review')?.onSkip, null, 'владелец гейта цель не держит — как и сам гейт')
+})
+
+test('on_skip: без опции skip, назад или на неизвестный шаг — отклоняется', () => {
+  const tpl = (gate: string, onSkip: string): string => `
+id: s
+title: S
+steps:
+  - id: review
+    worker: reviewer
+    gate: ${gate}
+    ${onSkip}
+  - id: dev
+    worker: coder
+  - id: commit
+    worker: committer
+`
+  assert.throws(
+    () => parseTemplate('s', parseYaml(tpl("{ question: 'Так?', options: [approve, request-changes] }", 'on_skip: { goto: commit }'))),
+    /только при гейте с опцией skip/,
+    'on_skip без кнопки skip — мёртвое поле'
+  )
+  assert.throws(
+    () => parseTemplate('s', parseYaml(tpl("{ question: 'Так?', options: [approve, skip] }", 'on_skip: { goto: review }'))),
+    /сам шаг или шаг позади/,
+    'назад ведёт on_reject'
+  )
+  assert.throws(
+    () => parseTemplate('s', parseYaml(tpl("{ question: 'Так?', options: [approve, skip] }", 'on_skip: { goto: nope }'))),
+    /on_skip.goto "nope" не определён/
+  )
+  assert.throws(
+    () => parseTemplate('s', parseYaml(tpl("{ question: 'Так?', options: [approve, skip] }", 'on_skip: commit'))),
+    /on_skip должен быть \{goto\}/
+  )
+})
+
 test('rechecksDue: перепроверка после доработки — отклонившие и падавшие, не одобрившие', () => {
   const reviews = {
     r1: { devTaskId: 'dev' },

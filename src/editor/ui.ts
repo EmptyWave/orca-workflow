@@ -1049,6 +1049,24 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
         if (step.gate) step.gate.options = v.split(',').map((s) => s.trim()).filter(Boolean)
         push()
       }))
+      // skip — явное разрешение в шаблоне: не всякий шаг можно осмысленно пропустить.
+      const skipAllowed = step.gate.options.includes('skip')
+      const skipRow = document.createElement('div')
+      skipRow.className = 'row'
+      const skipCheck = document.createElement('input')
+      skipCheck.type = 'checkbox'
+      skipCheck.checked = skipAllowed
+      skipCheck.title = 'Добавляет skip в варианты ответа: человек сможет пропустить шаг, который держит этот гейт'
+      skipCheck.addEventListener('change', () => {
+        if (!step.gate) return
+        step.gate.options = skipCheck.checked ? [...step.gate.options, 'skip'] : step.gate.options.filter((o) => o !== 'skip')
+        if (!skipCheck.checked) step.onSkip = null
+        push()
+      })
+      const skipText = document.createElement('span')
+      skipText.textContent = 'разрешить skip — человек может пропустить следующий шаг'
+      skipRow.append(skipCheck, skipText)
+      inspector.append(skipRow)
     }
     inspector.append(comboField('on_reject: goto', step.onReject?.goto ?? '', () => graph.steps.filter((st) => st.id !== step.id).map((st) => st.id), (v) => {
       step.onReject = v.trim() === '' ? null : { goto: v.trim(), maxRounds: step.onReject?.maxRounds ?? 2 }
@@ -1059,6 +1077,14 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
       if (step.onReject && Number.isInteger(n) && n >= 1) step.onReject.maxRounds = n
       push()
     }))
+    // on_skip — куда флоу продолжится после пропуска (опция skip в вариантах гейта); только вперёд
+    const stepsAfter = (): string[] => graph.steps.slice(graph.steps.findIndex((st) => st.id === step.id) + 1).map((st) => st.id)
+    const onSkipField = comboField('on_skip: goto', step.onSkip?.goto ?? '', stepsAfter, (v) => {
+      step.onSkip = v.trim() === '' ? null : { goto: v.trim() }
+      push()
+    }, 'пусто — следующий шаг')
+    onSkipField.title = 'С каким шагом флоу продолжится после skip; шаги между пропускаются. Нужно разрешить skip в гейте'
+    inspector.append(onSkipField)
     const addSub = document.createElement('button')
     addSub.textContent = '+ Подшаг (параллельный блок справа)'
     addSub.style.cssText = 'margin-top:12px;font:12px inherit;padding:4px 10px;border:1px solid var(--orca-border);border-radius:var(--orca-radius);background:var(--orca-background);color:var(--orca-foreground);cursor:pointer'
@@ -1150,7 +1176,7 @@ export function createEditor(doc: EditorSession<WfGraph>): void {
     const id = `step${n}`
     graph.steps.push({
       id, title: `Шаг ${n}`, specialist: null, agent: 'claude', model: null, effort: null, fallback: [],
-      spec: 'Новая задача: {{objective}}.', specFile: null, deps: [], gate: null, onReject: null, sub: []
+      spec: 'Новая задача: {{objective}}.', specFile: null, deps: [], gate: null, onReject: null, onSkip: null, sub: []
     })
     graph.layout[id] = p
     selection = { kind: 'node', id }

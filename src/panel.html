@@ -309,16 +309,21 @@
         }
         return memo
       }
-      // «пропущен»: ни одной попытки, флоу уже прошёл его позицию — координатор не
-      // счёл нужным. Optional-подшаги и проверки блоков условны по своей природе
-      // (бриф: «не нужен — пропусти»); обязательный шаг с попытками сюда не попадёт.
+      // «пропущен» — два источника, иконка одна (⊘):
+      // 1) явное решение человека: шаг пропущен через гейт с опцией skip (t.skipped — воркер
+      //    закрыл задачу с пометкой ПРОПУЩЕН и запомнил это; в движке она completed);
+      // 2) вывод панели: ни одной попытки, флоу уже прошёл позицию — координатор не счёл нужным.
+      //    Optional-подшаги и проверки блоков условны по своей природе (бриф: «не нужен —
+      //    пропусти»); обязательный шаг с попытками сюда не попадёт.
       const isSkipped = (t, passedOrder) =>
-        ['pending', 'ready'].includes(t.status) && passedOrder > (t.order ?? 0) &&
-        !(S.snap?.workers || []).some((w) => w.taskId === t.id) &&
-        (t.optional || String(t.parentTaskId || '').startsWith('step:'))
+        t.skipped === true ||
+        (['pending', 'ready'].includes(t.status) && passedOrder > (t.order ?? 0) &&
+          !(S.snap?.workers || []).some((w) => w.taskId === t.id) &&
+          (t.optional || String(t.parentTaskId || '').startsWith('step:')))
+      const SKIP_ICON = `<svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.6" stroke="rgba(139,148,158,.75)" stroke-width="1.6"/><path d="M4 12L12 4" stroke="rgba(139,148,158,.75)" stroke-width="1.6" stroke-linecap="round"/></svg>`
       const skippedIcon = (t, passedOrder) =>
         isSkipped(t, passedOrder)
-          ? `<span title="пропущен: не запускался, флоу уже прошёл его позицию" style="display:inline-flex"><svg width="15" height="15" viewBox="0 0 16 16" fill="none"><circle cx="8" cy="8" r="5.6" stroke="rgba(139,148,158,.75)" stroke-width="1.6"/><path d="M4 12L12 4" stroke="rgba(139,148,158,.75)" stroke-width="1.6" stroke-linecap="round"/></svg></span>`
+          ? `<span title="${t.skipped === true ? 'пропущен по решению гейта: шаг не выполнялся. «Перезапустить шаг» возвращает его в работу' : 'пропущен: не запускался, флоу уже прошёл его позицию'}" style="display:inline-flex">${SKIP_ICON}</span>`
           : ''
       const statusIcon = (status) =>
         status === 'succeeded' ? ICON.ok
@@ -469,9 +474,14 @@
       async function resolveGate(gate, resolution) {
         setBusy('гейт ' + short(gate.id, 'gate_').slice(0, 10) + '…')
         try {
-          await req('gate.resolve', { gateId: gate.id, resolution, runId: S.runId, question: gate.question })
+          const r = await req('gate.resolve', { gateId: gate.id, resolution, runId: S.runId, question: gate.question })
           S.openGate = null
-          setNotice(`Гейт закрыт: ${esc(resolution)}. Координатор держит ход и опрашивает гейт — продолжит сам в течение ~20 секунд. Прошла пара минут тишины — напиши ему в чат: «гейт подтверждён (${esc(resolution)}), продолжай».`)
+          if (resolution === 'skip') {
+            const n = (r && r.skipped ? r.skipped.length : 0)
+            setNotice(`Шаг пропущен${n > 1 ? ` — вместе с зависимыми (${n} задач)` : ''}. Флоу продолжится ${r && r.resumeAt ? `с шага «${esc(r.resumeAt)}»` : 'со следующего шага'}. Пропущенное можно вернуть: «↻ Перезапустить шаг» в его меню.`)
+          } else {
+            setNotice(`Гейт закрыт: ${esc(resolution)}. Координатор держит ход и опрашивает гейт — продолжит сам в течение ~20 секунд. Прошла пара минут тишины — напиши ему в чат: «гейт подтверждён (${esc(resolution)}), продолжай».`)
+          }
           await loadState()
         }
         catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
@@ -816,7 +826,8 @@
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
         const counts = (snap.tasks || []).reduce((acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc }, {})
-        const done = counts.succeeded || 0, total = (snap.tasks || []).length
+        // «шагов N/M»: пропущенные по гейту не выполнены — в числитель не входят
+        const done = (snap.tasks || []).filter((t) => t.status === 'succeeded' && !t.skipped).length, total = (snap.tasks || []).length
         let pilotBox = ''
         if (snap.pilot) {
           if (snap.pilot.driver === 'coordinator') {
@@ -965,7 +976,12 @@
           // впереди — серые, как весь непройденный пунктир.
           const reached = gateReached(g)
           const lock = !pending ? LOCK_OPEN : reached ? LOCK_CLOSED : LOCK_CLOSED_IDLE
-          const state = !pending ? `решён${g.resolution ? ': ' + g.resolution : ''}` : reached ? 'ждёт ответа' : 'впереди'
+          // skip — не «одобрено»: трейс под ним серый, состояние говорит, что именно пропущено
+          const wasSkip = !pending && g.resolution === 'skip'
+          const resume = g.onSkip && g.onSkip.goto ? ` → продолжить с шага «${esc(g.onSkip.goto)}»` : ''
+          const state = wasSkip
+            ? `пропущено${resume}`
+            : !pending ? `решён${g.resolution ? ': ' + g.resolution : ''}` : reached ? 'ждёт ответа' : 'впереди'
           // Воркер отдаёт files строками-путями; старые ответы могли нести {rel} — едим оба.
           const planFiles = pending && S.planFiles && S.planFiles.change
             ? `<div class="tiny" style="margin-top:3px;color:var(--orca-muted-foreground)">план: openspec/changes/${esc(S.planFiles.change)}/ — ` +
@@ -979,10 +995,17 @@
           const btns = pending && S.openGate === g.id
             ? `<div class="gate-btns">` +
               (g.options && g.options.length > 0 ? g.options : ['approve', 'request-changes'])
-                .map((o) => `<button class="btn mini${o === 'approve' ? ' primary' : o === 'request-changes' ? ' danger' : ''}" data-act="resolve-custom:${esc(g.id)}" data-option="${esc(o)}">${esc(o === 'approve' ? 'approve ✓' : o === 'request-changes' ? 'request-changes ✗' : o)}</button>`).join('') +
+                .map((o) => {
+                  const label = o === 'approve' ? 'approve ✓' : o === 'request-changes' ? 'request-changes ✗' : o === 'skip' ? `skip — пропустить${g.onSkip && g.onSkip.goto ? ` → ${esc(g.onSkip.goto)}` : ''}` : o
+                  const cls = o === 'approve' ? ' primary' : o === 'request-changes' ? ' danger' : ''
+                  const hint = o === 'skip'
+                    ? `Закрыть шаг «${esc(g.taskTitle)}» как пропущенный${g.onSkip && g.onSkip.goto ? ` и продолжить с шага «${esc(g.onSkip.goto)}» (шаги между пропускаются)` : ' и продолжить со следующего шага'}. Шаг не выполняется; вернуть — «Перезапустить шаг».`
+                    : ''
+                  return `<button class="btn mini${cls}"${hint ? ` title="${hint}"` : ''} data-act="resolve-custom:${esc(g.id)}" data-option="${esc(o)}">${esc(label)}</button>`
+                }).join('') +
               `</div>`
             : ''
-          return `<div class="gaterow${reached ? ' pending conn-run' : pending ? '' : ' conn-ok'}" data-act="toggle-gate:${esc(g.id)}" title="гейт шага ${esc(short(g.taskId, 'task_'))}">
+          return `<div class="gaterow${reached ? ' pending conn-run' : pending ? '' : wasSkip ? '' : ' conn-ok'}" data-act="toggle-gate:${esc(g.id)}" title="гейт шага ${esc(short(g.taskId, 'task_'))}">
             <span class="lock">${lock}</span>
             <div class="body">
               <div><span class="gq">гейт · ${esc(g.question)}</span> <span class="gs">${esc(state)}</span></div>
@@ -1005,7 +1028,7 @@
           const lastVerdict = attempts.length > 0 ? (attempts[attempts.length - 1].verdict ?? null) : null
           const rejected = e.status === 'succeeded' && lastVerdict === 'request-changes'
           const meta = [
-            t.agent, skipped ? 'ПРОПУЩЕН' : rejected ? 'отклонено (request-changes)' : STATUS_TEXT[e.status] ?? e.status,
+            t.agent, skipped ? (t.skipped === true ? 'ПРОПУЩЕН (решение гейта)' : 'ПРОПУЩЕН') : rejected ? 'отклонено (request-changes)' : STATUS_TEXT[e.status] ?? e.status,
             t.order == null ? 'вне шаблона (создана координатором)' : null,
             (t.deps || []).length > 0 ? 'после: ' + t.deps.map((d) => short(d, 'task_')).join(', ') : null,
             t.dispatchId ? 'воркер ' + short(t.dispatchId, 'ctx_') : null
@@ -1074,7 +1097,8 @@
             }
             drawer = `<div class="step-drawer">${bits.join('')}</div>`
           }
-          const conn = `conn-${rejected ? 'fail' : e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}`
+          // пропущенный по гейту шаг в движке completed, но не пройден — трейс под ним серый
+          const conn = `conn-${t.skipped === true && e.status === 'succeeded' ? 'idle' : rejected ? 'fail' : e.status === 'succeeded' ? 'ok' : e.status === 'dispatched' ? 'run' : 'idle'}`
           const nest = child
             ? ` childrow ${conn}`
             : (flowIndex < totalFlow - 1 ? ` flow ${conn}` : '')
@@ -1167,7 +1191,8 @@
               step.specialist ? 'воркер ' + step.specialist : null,
               step.swarm?.enabled ? `рой ≤${step.swarm.limit ?? '∞'}` : null,
               (step.deps || []).length > 0 ? 'deps: ' + step.deps.join(', ') : null,
-              step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
+              step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null,
+              step.gate?.options.includes('skip') ? `on_skip → ${step.onSkip?.goto ?? 'следующий шаг'}` : null
             ].filter(Boolean).join(' · ')
             const main = `<div class="step">
               <div class="ag">${agentIcon(step.agent)}</div>

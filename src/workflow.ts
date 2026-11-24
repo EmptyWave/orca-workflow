@@ -117,6 +117,12 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
       }
     }
 
+    let onSkip: WfStep['onSkip'] = null
+    if (raw.on_skip !== undefined && raw.on_skip !== null) {
+      if (!isMap(raw.on_skip)) throw new Error(`шаг "${stepId}": on_skip должен быть {goto}`)
+      onSkip = { goto: str(raw.on_skip.goto ?? '', `шаг "${stepId}": on_skip.goto`) }
+    }
+
     // `sub:` block children: parallel, own specialists, one level deep.
     const sub: WfStep['sub'] = []
     const rawSub = raw.sub
@@ -184,6 +190,7 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
       deps,
       gate,
       onReject,
+      onSkip,
       sub
     })
     specFiles[stepId] = specFile
@@ -200,6 +207,18 @@ export function parseTemplate(file: string, yaml: YamlValue): ParsedTemplate {
     }
     if (step.onReject && !seen.has(step.onReject.goto)) {
       throw new Error(`шаг "${step.id}": on_reject.goto "${step.onReject.goto}" не определён`)
+    }
+    // on_skip — только вперёд: skip пропускает шаги, назад ведёт on_reject. Двусмысленные
+    // шаблоны отклоняются здесь, а не молча делают «что-то» при нажатии кнопки.
+    if (step.onSkip) {
+      const goto = step.onSkip.goto
+      if (!step.gate?.options.includes('skip')) {
+        throw new Error(`шаг "${step.id}": on_skip имеет смысл только при гейте с опцией skip в gate.options`)
+      }
+      if (!seen.has(goto)) throw new Error(`шаг "${step.id}": on_skip.goto "${goto}" не определён`)
+      if (steps.findIndex((s) => s.id === goto) <= steps.findIndex((s) => s.id === step.id)) {
+        throw new Error(`шаг "${step.id}": on_skip.goto "${goto}" — это сам шаг или шаг позади; skip пропускает вперёд, для возврата есть on_reject`)
+      }
     }
     if (step.effort && !step.model) {
       throw new Error(`шаг "${step.id}": effort задаётся только вместе с model`)
@@ -233,6 +252,9 @@ export type WfUnit = {
   deps: string[] // unit ids
   gate: { question: string; options: string[] } | null
   onReject: { goto: string; maxRounds: number } | null
+  /** on_skip шага, чей гейт несёт этот юнит (гейт при материализации переезжает на удерживаемый
+   *  шаг — вместе с on_skip); у остальных null. */
+  onSkip: { goto: string } | null
   role: 'step' | 'child'
   optional: boolean
 }
@@ -299,6 +321,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
           deps,
           gate: null,
           onReject: null,
+          onSkip: null,
           role: 'child',
           optional: child.optional
         })
@@ -322,6 +345,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
           })(),
           gate: step.gate,
           onReject: step.onReject,
+          onSkip: step.onSkip,
           role: 'step',
           optional: false
         })
@@ -350,6 +374,7 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
         deps: [...external],
         gate: step.gate,
         onReject: step.onReject,
+        onSkip: step.onSkip,
         role: 'step',
         optional: false
       })
@@ -382,7 +407,10 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
   for (const step of steps) {
     if (!step.gate || !isBlock(step.id) || hasParentUnit.get(step.id)) continue
     const firstChild = units.find((u) => u.stepId === step.id && !u.optional)
-    if (firstChild) firstChild.gate = step.gate
+    if (firstChild) {
+      firstChild.gate = step.gate
+      firstChild.onSkip = step.onSkip
+    }
   }
 
   // Gate on a workered step confirms ITS RESULT: the template declares the gate next to the
@@ -404,8 +432,12 @@ export function materialize(steps: WfStep[]): { units: WfUnit[]; blockWatches: W
       throw new Error(`гейт шага «${step.id}» подтверждает результат и держит следующий шаг — после «${step.id}» ничего нет`)
     }
     const self = units.find((u) => u.id === step.id)
-    if (self) self.gate = null
+    if (self) {
+      self.gate = null
+      self.onSkip = null
+    }
     follower.gate = follower.gate ?? step.gate
+    follower.onSkip = follower.onSkip ?? step.onSkip
   }
   return { units, blockWatches }
 }

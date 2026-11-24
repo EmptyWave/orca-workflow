@@ -246,6 +246,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         optional: false,
         swarm: { enabled: false, limit: null },
         expectsVerdict: false,
+        skipped: false,
         dispatchId: dispatch,
         agent: null,
         model: null,
@@ -262,12 +263,21 @@ export default function activate(orca: OrcaWorkerApi): void {
       await sleep(300)
       autoStored = await orca.storage.get(`auto.${runId}`).catch(() => null)
     }
+    // Явные пропуски через гейт (опция skip): задача закрыта в движке как completed, но не
+    // выполнялась. Движок статуса «пропущен» не знает — истина только здесь.
+    const skippedStored = await storageGet<Record<string, unknown>>(`skipped.${runId}`).catch(() => null)
+    const skippedSet = new Set(
+      skippedStored && typeof skippedStored === 'object' ? Object.keys(skippedStored).filter((k) => k !== '') : []
+    )
+    let autoGates: Record<string, { goto?: string | null }> = {}
     if (autoStored && typeof autoStored === 'object') {
       const autoData = (autoStored as {
         tasks?: Record<string, { agent?: string; model?: string | null; fallback?: string[] }>
         children?: Record<string, string>
         optionals?: Record<string, { parentTaskId: string }>
+        gates?: Record<string, { goto?: string | null }>
       }) ?? {}
+      autoGates = autoData.gates ?? {}
       const autoTasks = autoData.tasks ?? {}
       for (const task of tasks) {
         const cfg = autoTasks[task.id]
@@ -279,8 +289,10 @@ export default function activate(orca: OrcaWorkerApi): void {
         }
         task.parentTaskId = autoData.children?.[task.id] ?? autoData.optionals?.[task.id]?.parentTaskId ?? null
         if (autoData.optionals?.[task.id]) task.optional = true
+        task.skipped = skippedSet.has(task.id)
       }
     }
+    for (const task of tasks) task.skipped = skippedSet.has(task.id)
     // Manual agent notes for runs raised before per-step configuration existed.
     const agentsStored = await orca.storage.get(`agents.${runId}`)
     if (agentsStored && typeof agentsStored === 'object') {
@@ -311,7 +323,9 @@ export default function activate(orca: OrcaWorkerApi): void {
         question: String(field(row, 'question') ?? ''),
         options: stringList(field(row, 'options')),
         status: String(field(row, 'status') ?? 'pending') === 'resolved' ? 'resolved' : 'pending',
-        resolution: typeof rawResolution === 'string' && rawResolution !== '' ? rawResolution : null
+        resolution: typeof rawResolution === 'string' && rawResolution !== '' ? rawResolution : null,
+        // on_skip знает только шаблон — движок хранит лишь question/options; берём из состояния рана
+        onSkip: autoGates[taskId]?.goto ? { goto: autoGates[taskId].goto as string } : null
       }
     })
     const workersRaw = asArray<Record<string, unknown>>(workerRows.workers ?? workerRows.dispatches)
@@ -486,6 +500,8 @@ export default function activate(orca: OrcaWorkerApi): void {
     coordinatorTerminal: string | null
     reviews: Record<string, { devTaskId: string; devStepId: string; maxRounds: number; source: 'verdict' | 'failure' }>
     optionals: Record<string, { parentTaskId: string; stepId: string }>
+    /** Задача, удерживаемая гейтом, → on_skip.goto её шага (для кнопки skip в панели). */
+    gates?: Record<string, { goto: string | null }>
     verdicts: Record<string, 'approve' | 'request-changes'>
     rounds: Record<string, number>
     actions: number
@@ -862,8 +878,15 @@ export default function activate(orca: OrcaWorkerApi): void {
             ? `РОЙ (параллельные инстансы воркера шага, до ${step.swarm.limit ?? 'скольких потребуется'}): задачу шага НЕ запускай как единственную. Раздели работу по плану на НЕЗАВИСИМЫЕ части по разным файлам/модулям (пересекаются — делай эти части последовательно). На каждую часть: task-create --spec '<СПЕКА ЗАДАЧИ ШАГА ДОСЛОВНО (узнай её: orca orchestration dispatch-show --task <task шага> — поле spec; это текст карточки воркера: роль, границы, верификация) + в конце допиши раздел «ЧАСТЬ РАБОТЫ: <конкретика части>»>' --task-title "<шаг>#k <часть>" --deps <deps шага> --parent <task шага>; затем стартуй ВСЕ части сразу (worker-start --task каждой, --worktree name:${worktreeName}) — это разные задачи, движок исполняет их одновременно. Собери отчёты всех частей (worker-read), после завершения ВСЕХ закрой задачу шага: task-update --id <task шага> --status completed --result <сводка по частям>. Часть одна — обычный запуск задачи шага.`
             : null,
           (step.fallback ?? []).length > 0 ? `fallback: ${step.fallback.join(' → ')}` : null,
-          step.gate ? `ГЕЙТ ПОСЛЕ этого шага (подтверждает его результат): ${step.gate.question} — стоп для человека, ответ двигает флоу дальше` : null,
-          step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null
+          step.gate
+            ? `ГЕЙТ ПОСЛЕ этого шага (подтверждает его результат): ${step.gate.question} — стоп для человека, ответ двигает флоу дальше${
+                step.gate.options.includes('skip')
+                  ? `; вариант skip = человек пропускает следующий шаг${step.onSkip ? ` и продолжает с шага ${step.onSkip.goto} (всё между — тоже пропускается)` : ''}`
+                  : ''
+              }`
+            : null,
+          step.onReject ? `on_reject → ${step.onReject.goto} (≤${step.onReject.maxRounds})` : null,
+          step.onSkip ? `on_skip → ${step.onSkip.goto}` : null
         ].filter(Boolean)
         const phaseText = (phase: string | undefined, optional: boolean, stepId: string, hasWorker: boolean): string => {
           const p = phase ?? (optional ? 'after_end' : 'before_end')
@@ -927,6 +950,7 @@ export default function activate(orca: OrcaWorkerApi): void {
       '• Ничего не додумывай за воркеров: пересылай факты как есть, свои выводы помечай отдельно.',
       '5. Не можешь решить — напиши человеку в этот чат (суть, варианты, рекомендация) и заверши ход.',
       `6. Гейт из флоу — стоп для человека, но НЕ засыпай на нём: задай вопрос в этот чат и ОСТАВАЙСЯ В ХОДЕ, опрашивая orca orchestration gate-list --run ${runId} --json каждые ~20 секунд (sleep 20). Человек ответит в чате или закроет гейт кнопкой в панели — оба пути меняют статус в gate-list; решение из панели приходит и в ящик (orchestration check). Гейт закрыт → продолжай флоу сразу же. ~10 минут тишины → заверши ход с резюме «жду ответа по гейту» и продолжи после сообщения человека.`,
+      '6a. Гейт решён как skip (в ящике — «Гейт решён из панели: skip»): перечисленные в сообщении шаги человек пропустил — их задачи закрыты с пометкой ПРОПУЩЕН. НЕ запускай их и не создавай взамен новые; продолжай флоу с шага, названного в сообщении (on_skip из брифа), как будто пропущенные шаги выполнены.',
       '7. Итог: когда последний шаг завершён, собери сводку по флою и закончи.'
     ].join('\n')
   }
@@ -1479,6 +1503,14 @@ export default function activate(orca: OrcaWorkerApi): void {
           autoChildren[ownTaskId] = parentTaskId && parentTaskId !== ownTaskId ? parentTaskId : `step:${unit.stepId}`
           if (unit.optional && parentTaskId) autoOptionals[ownTaskId] = { parentTaskId, stepId: unit.id }
         }
+        // on_skip шага едет вместе с его гейтом: при материализации гейт лежит на удерживаемой
+        // задаче — по её id снапшот и найдёт цель пропуска.
+        const autoGates: Record<string, { goto: string | null }> = {}
+        for (const unit of units) {
+          if (!unit.gate) continue
+          const taskId = taskOf.get(unit.id)
+          if (taskId) autoGates[taskId] = { goto: unit.onSkip?.goto ?? null }
+        }
         await orca.storage.set(`auto.${run.runId}`, {
           worktreeName: input.worktreeName,
           repoPath: input.projectPath,
@@ -1488,6 +1520,7 @@ export default function activate(orca: OrcaWorkerApi): void {
           reviews: autoReviews,
           optionals: autoOptionals,
           children: autoChildren,
+          gates: autoGates,
           verdicts: {},
           rounds: {},
           triedAgents: {},
@@ -1679,16 +1712,137 @@ export default function activate(orca: OrcaWorkerApi): void {
     await bridge.run(`orca orchestration run-use --id ${shellQuote(runId)} --json`)
   }
 
-  /** Хендл НАСТОЯЩЕГО координатора рана. run-use от моста перезаписывает
-   *  coordinator_handle рана на мост — так мы теряли адресата уведомлений, — поэтому
-   *  мост больше не биндится: мутации панели идут --from хендла координатора.
-   *  Поиск: AutoState (если это не мост) → живой агент-терминал в ворктри рана →
-   *  coordinator_handle из базы (если не мост). */
+  /** Ещё не начатая задача (не работает, не завершена, не пропущена) — только такую skip и закрывает. */
+  const isOpenTask = (t: WfTask): boolean => !t.skipped && !['succeeded', 'failed', 'dispatched'].includes(t.status)
+
+  /** Что закрывает skip в гейте: удерживаемая задача и — при on_skip.goto — всё до целевого шага.
+   *  Берём только ещё не начатое: работающее и завершённое не трогаем. */
+  function skipTargets(
+    snap: WfSnapshot,
+    gate: WfGate,
+    stepOf: (taskId: string) => string | null
+  ): { held: WfTask | null; lead: WfTask[]; resumeAt: string | null } {
+    const held = snap.tasks.find((t) => t.id === gate.taskId) ?? null
+    if (!held) return { held: null, lead: [], resumeAt: null }
+    const open = isOpenTask
+    const heldStep = stepOf(held.id)
+    const sameStep = (t: WfTask): boolean => heldStep !== null && stepOf(t.id) === heldStep
+    const goto = gate.onSkip?.goto ?? null
+    if (goto === null) {
+      return { held, lead: snap.tasks.filter((t) => t.id !== held.id && sameStep(t) && open(t)), resumeAt: null }
+    }
+    const gotoOrders = snap.tasks.filter((t) => stepOf(t.id) === goto).map((t) => t.order)
+    const gotoOrder = gotoOrders.length > 0 ? Math.min(...gotoOrders.filter((o): o is number => typeof o === 'number')) : NaN
+    const from = held.order ?? 0
+    if (!Number.isFinite(gotoOrder) || gotoOrder <= from) {
+      throw new BridgeError(`on_skip.goto «${goto}»: шаг не найден в ране или не идёт после пропускаемого`, 'cli_error')
+    }
+    // По порядку флоу: задачи вне шаблона (без order) не пропускаем — они не часть шага
+    const inRange = (t: WfTask): boolean => typeof t.order === 'number' && t.order >= from && t.order < gotoOrder && stepOf(t.id) !== null
+    return {
+      held,
+      // дальние первыми: так очередь закрывается от хвоста к держимой задаче
+      lead: snap.tasks.filter((t) => t.id !== held.id && (sameStep(t) || inRange(t)) && open(t)).sort((a, b) => (b.order ?? 0) - (a.order ?? 0)),
+      resumeAt: goto
+    }
+  }
+
+  /** Пропуск через гейт: задачи закрываются как completed с пометкой ПРОПУЩЕН (статуса «пропущен»
+   *  у движка нет) и запоминаются в skipped.<run> — оттуда панель знает правду.
+   *
+   *  Порядок диктует движок: gate-resolve заново вычисляет статус удерживаемой задачи и возвращает
+   *  её в ready даже из completed — поэтому закрыть её ДО решения гейта нельзя. Последующие задачи
+   *  диапазона решение гейта не касается, их закрываем заранее; держимую — той же командой, что и
+   *  решение, чтобы окно, в котором координатор может увидеть её готовой, было короче одного
+   *  запуска CLI (проверено: ~0,4 с). */
+  async function skipGate(runId: string, gateId: string, question?: string | null): Promise<{ ok: true; skipped: string[]; resumeAt: string | null }> {
+    const snap = await snapshot(runId)
+    const gate = snap.gates.find((g) => g.id === gateId)
+    if (!gate) throw new BridgeError(`гейт ${gateId} не найден в ране`, 'cli_error')
+    if (gate.status !== 'pending') throw new BridgeError('гейт уже решён', 'cli_error')
+    const auto = await loadAuto(runId)
+    const stepOf = (taskId: string): string | null => auto?.tasks?.[taskId]?.stepId ?? null
+    const { held, lead, resumeAt } = skipTargets(snap, gate, stepOf)
+    const skipped: string[] = []
+    const remember = async (): Promise<void> => {
+      if (skipped.length === 0) return
+      const stored = (await storageGet<Record<string, unknown>>(`skipped.${runId}`).catch(() => null)) ?? {}
+      const at = Date.now()
+      for (const id of skipped) stored[id] = { at, gateId, goto: resumeAt }
+      await orca.storage.set(`skipped.${runId}`, stored).catch(() => undefined)
+    }
+    const finish = async (): Promise<void> => {
+      await remember()
+      // Координатор узнаёт о skip из ящика: закрытые задачи нельзя запускать, флоу — с resumeAt
+      try {
+        await bridge.run(
+          `orca orchestration send --to ${shellQuote(`run:${runId}`)} --subject ${shellQuote('Гейт решён из панели: skip')} --body ${shellQuote(
+            `Человек ответил на гейт «${gate.question}» → skip. Пропущены (задачи закрыты с пометкой ПРОПУЩЕН — НЕ запускать их): ${[held, ...lead]
+              .filter((t): t is WfTask => t !== null)
+              .map((t) => `«${t.title}»`)
+              .join(', ')}. Продолжай флоу${resumeAt ? ` с шага «${resumeAt}»` : ' со следующего шага за пропущенным'}.`
+          )} --json`
+        )
+      } catch {
+        // координатор увидит статусы при следующем ходе
+      }
+      void refresh()
+    }
+    if (!held) {
+      await bridge.run(`orca orchestration gate-resolve --id ${shellQuote(gateId)} --resolution skip --json`)
+      await finish()
+      return { ok: true as const, skipped, resumeAt }
+    }
+    // Отказ — до любых мутаций: работающий или завершённый шаг пропустить нельзя, и половина
+    // диапазона не должна остаться закрытой из-за того, что мы спохватились посреди.
+    if (!isOpenTask(held)) {
+      throw new BridgeError(
+        held.skipped
+          ? `шаг «${held.title}» уже пропущен`
+          : `шаг «${held.title}» уже ${held.status === 'dispatched' ? 'выполняется' : 'завершён'} — пропустить нельзя`,
+        'cli_error'
+      )
+    }
+    const marker = `ПРОПУЩЕН: решение гейта «${question ?? gate.question}» (skip)`
+    // Отправитель — явно в каждой команде: у моста retry дописывает --from только в конец строки
+    const from = await bridge.senderFlag()
+    for (const t of lead) {
+      await bridge.run(
+        `orca orchestration task-update --id ${shellQuote(t.id)} --status completed --result ${shellQuote(marker)} --json${from}`
+      )
+      skipped.push(t.id)
+    }
+    try {
+      await bridge.run(
+        `orca orchestration gate-resolve --id ${shellQuote(gateId)} --resolution skip --json${from} && ` +
+          `orca orchestration task-update --id ${shellQuote(held.id)} --status completed --result ${shellQuote(marker)} --json${from}`,
+        90_000
+      )
+      skipped.push(held.id)
+    } catch (error) {
+      // Единственный реальный отказ — координатор стартовал шаг в окне между двумя командами
+      await remember()
+      void refresh()
+      throw new BridgeError(
+        `гейт закрыт как skip, но шаг «${held.title}» уже стартован координатором — пропустить его не удалось` +
+          (skipped.length > 0 ? `; шаги позади (${skipped.length}) закрыты как пропущенные` : '') +
+          `. ${message(error)}`,
+        'cli_error'
+      )
+    }
+    await finish()
+    return { ok: true as const, skipped, resumeAt }
+  }
+
   orca.panels.handle('gate.resolve', async ({ gateId, resolution, runId, question }) => {
     everUsed = true
     // Мутация — от терминала моста (run-use): чат-сессию нельзя заявить как --from
     // (session_caller_chat_not_declarable), а терминал — объявляемая идентичность.
     if (runId) await bindRun(runId)
+    if (resolution === 'skip') {
+      if (!runId) throw new BridgeError('skip: не указан ран', 'cli_error')
+      return skipGate(runId, gateId, question)
+    }
     await bridge.run(
       `orca orchestration gate-resolve --id ${shellQuote(gateId)} --resolution ${shellQuote(resolution)} --json`
     )
@@ -2301,9 +2455,17 @@ export default function activate(orca: OrcaWorkerApi): void {
       state.stopped = null
       for (const id of downstream) {
         delete state.triedAgents?.[id]
-        delete state.verdicts[id]
+        // состояние может быть неполным (старые раны, раны без ревью) — не падать на нём
+        if (state.verdicts) delete state.verdicts[id]
       }
       await saveAuto(runId, state)
+    }
+    // Пропуск снят: хвост возвращается в работу — записи о пропуске больше не правда
+    const skippedStored = await storageGet<Record<string, unknown>>(`skipped.${runId}`).catch(() => null)
+    if (skippedStored && typeof skippedStored === 'object') {
+      const next: Record<string, unknown> = {}
+      for (const [key, value] of Object.entries(skippedStored ?? {})) if (!downstream.has(key)) next[key] = value
+      await orca.storage.set(`skipped.${runId}`, next).catch(() => undefined)
     }
     void refresh()
     return { ok: true as const, reset: [...downstream] }
@@ -2409,6 +2571,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     await orca.storage.delete(`runmeta.${id}`).catch(() => undefined)
     await orca.storage.delete(`auto.${id}`).catch(() => undefined)
     await orca.storage.delete(`agents.${id}`).catch(() => undefined)
+    await orca.storage.delete(`skipped.${id}`).catch(() => undefined)
     // удалили ран, за которым следил цикл опроса — отвязываем, чтобы в кэш
     // не писалась пустая оболочка удалённого (панель перепривяжется сама)
     if ((await orca.storage.get('html.runId').catch(() => null)) === id) {

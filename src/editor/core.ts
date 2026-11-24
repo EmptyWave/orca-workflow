@@ -109,6 +109,7 @@ export function emit(graph: WfGraph): string {
     if (step.onReject) {
       lines.push(`    on_reject: { goto: ${step.onReject.goto}, max_rounds: ${step.onReject.maxRounds} }`)
     }
+    if (step.onSkip) lines.push(`    on_skip: { goto: ${step.onSkip.goto} }`)
     if (step.sub.length > 0) {
       lines.push('    sub:')
       for (const child of step.sub) {
@@ -153,6 +154,15 @@ export function validate(graph: WfGraph): string[] {
     if (step.gate && step.gate.question.trim() === '') errors.push(`шаг "${step.id}": пустой вопрос гейта`)
     if (step.onReject && !ids.has(step.onReject.goto)) {
       errors.push(`шаг "${step.id}": on_reject.goto "${step.onReject.goto}" не существует`)
+    }
+    // Те же правила, что и в парсере (workflow.ts): редактор не даст сохранить то, что ран не поднимет.
+    if (step.onSkip) {
+      const goto = step.onSkip.goto
+      if (!step.gate?.options.includes('skip')) errors.push(`шаг "${step.id}": on_skip имеет смысл только при гейте с опцией skip в gate.options`)
+      if (!ids.has(goto)) errors.push(`шаг "${step.id}": on_skip.goto "${goto}" не существует`)
+      else if (graph.steps.findIndex((s) => s.id === goto) <= graph.steps.findIndex((s) => s.id === step.id)) {
+        errors.push(`шаг "${step.id}": on_skip.goto "${goto}" — это сам шаг или шаг позади; skip пропускает вперёд, для возврата есть on_reject`)
+      }
     }
   }
   // Cycles: a dependency walk that meets itself.
@@ -247,6 +257,7 @@ export function mergeGraphs(base: WfGraph, outside: WfGraph, mine: WfGraph): WfG
         deps: pick('deps'),
         gate: pick('gate'),
         onReject: pick('onReject'),
+        onSkip: pick('onSkip'),
         sub: pick('sub')
       })
     }

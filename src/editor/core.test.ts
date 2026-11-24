@@ -132,3 +132,30 @@ steps:
   noGate[1].gate = null
   assert.deepEqual(validate({ ...graph, steps: noGate }), [])
 })
+
+test('on_skip: editor keeps the field on emit; validate mirrors the parser rules', () => {
+  const Y2 = YAML
+    .replace('options: [approve, request-changes]', 'options: [approve, request-changes, skip]')
+    .replace('    on_reject: { goto: dev, max_rounds: 2 }', '    on_reject: { goto: dev, max_rounds: 2 }\n    on_skip: { goto: ship }') +
+    '  - { id: ship, agent: claude, specFile: specs/ship.md, deps: [dev] }\n'
+  const graph = decode(Y2)
+  assert.equal(graph.parseError, null, graph.parseError ?? '')
+  assert.deepEqual(graph.steps.find((s) => s.id === 'dev')?.onSkip, { goto: 'ship' })
+  assert.deepEqual(validate(graph), [], 'валидный шаблон')
+  // Редактор пишет только известные поля: on_skip обязан пережить emit → decode
+  const again = decode(emit(graph))
+  assert.deepEqual(again.steps.find((s) => s.id === 'dev')?.onSkip, { goto: 'ship' }, 'emit сохраняет on_skip')
+  const bad = decode(Y2)
+  const dev = bad.steps.find((s) => s.id === 'dev')!
+  dev.onSkip = { goto: 'plan' }
+  assert.ok(validate(bad).some((e) => e.includes('on_skip.goto "plan" — это сам шаг или шаг позади')), validate(bad).join('; '))
+  dev.onSkip = { goto: 'ship' }
+  dev.gate!.options = ['approve', 'request-changes']
+  assert.ok(validate(bad).some((e) => e.includes('только при гейте с опцией skip')), validate(bad).join('; '))
+  // merge: правка on_skip в редакторе не теряется при слиянии с изменениями с диска
+  const mine = decode(Y2)
+  mine.steps.find((s) => s.id === 'dev')!.onSkip = { goto: 'plan' }
+  const base = decode(Y2)
+  const merged = mergeGraphs(base, base, mine) // (base, outside, mine): моя правка on_skip при слиянии не теряется
+  assert.deepEqual(merged.steps.find((s) => s.id === 'dev')?.onSkip, { goto: 'plan' }, 'mergeGraphs несёт on_skip')
+})

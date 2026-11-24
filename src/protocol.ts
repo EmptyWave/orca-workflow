@@ -27,6 +27,9 @@ export type WfTask = {
    *  renders a neutral dot instead of a green check. Non-review workers' success is the
    *  signal itself. */
   expectsVerdict: boolean
+  /** Явное решение человека: шаг пропущен через гейт (опция skip). Задача закрыта в движке как
+   *  completed, но не выполнялась — панель рисует «пропущен», в выполненные не считает. */
+  skipped: boolean
 }
 
 export type WfGate = {
@@ -38,6 +41,8 @@ export type WfGate = {
   status: 'pending' | 'resolved'
   /** The picked option once resolved; null while pending. */
   resolution: string | null
+  /** Из шаблона (движок этого поля не знает): on_skip.goto шага, чей гейт это держит. */
+  onSkip: { goto: string } | null
 }
 
 export type WfWorker = {
@@ -121,12 +126,15 @@ export type WfStep = {
   deps: string[]
   /** "This step does not start until a human answers." On a barrier step it gates the first
    *  materialized step after it (the explicit multi-target form). */
-  gate: { question: string; options: string[]   /** Swarm (from the worker card): concurrent instances of this worker allowed in a run. */
-  swarm: WfSwarm
-} | null
+  gate: { question: string; options: string[] } | null
   onReject: { goto: string; maxRounds: number } | null
+  /** С гейтом, где есть опция `skip`: шаг, с которого флоу продолжится после пропуска. Всё между
+   *  удерживаемым шагом и ним пропускается. null — пропускается только удерживаемый шаг. */
+  onSkip: { goto: string } | null
   /** Block children (`sub:`): parallel by default; optional ones start only on RUN: request. */
   sub: WfSubStepLike[]
+  /** Swarm (from the worker card): concurrent instances of this worker allowed in a run. */
+  swarm: WfSwarm
 }
 
 export type WfSubStepLike = {
@@ -189,7 +197,10 @@ declare module 'orca' {
     /** Fresh orchestration snapshot for a Run (runId null = latest runs summary only). */
     'state.get': { input: { runId: string | null }; output: WfSnapshot }
     /** Resolve a pending decision gate. */
-    'gate.resolve': { input: { gateId: string; resolution: string }; output: { ok: true } }
+    'gate.resolve': {
+      input: { gateId: string; resolution: string; runId?: string | null; question?: string | null }
+      output: { ok: true; skipped?: string[]; resumeAt?: string | null }
+    }
     /** Start a ready task's worker; model/effort/worktree optional overrides. */
     'task.start': {
       input: { taskId: string; agent: string; model: string | null; effort: string | null; worktree: string }

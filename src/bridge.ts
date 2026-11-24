@@ -112,6 +112,13 @@ export class Bridge {
     return this.fromHandle
   }
 
+  /** ` --from <handle>` для составной команды из нескольких мутаций. run() приписывает
+   *  отправителя только при отказе и только в конец строки — второй мутации после `&&` он бы
+   *  не достался, и живой CLI отказал бы на ней (тестовый мок такого не различает). */
+  async senderFlag(): Promise<string> {
+    return ` --from ${await this.fromTerminal()}`
+  }
+
   /** A long-sleeping terminal whose handle serves as the mutation sender identity.
    *  Created through the HOST api so it stays a background terminal — no visible tab pops
    *  open in the user's workspace (a CLI `orca terminal create` would show one); the CLI

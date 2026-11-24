@@ -28,7 +28,7 @@ const b64 = (s: string): string => {
   return btoa(binary)
 }
 
-function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string } = {}) {
+function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string } = {}) {
   let created = 0
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
   const canned = (command: string): string => {
@@ -51,10 +51,15 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
     if (command.includes('orca terminal create') && command.includes('workflow-view-runner')) {
       return '{"ok":true,"result":{"terminal":{"handle":"t_helper"}}}'
     }
-    // Мутации оркестрации требуют идентичность отправителя, как настоящий CLI.
+    // Мутации оркестрации требуют идентичность отправителя, как настоящий CLI — причём КАЖДАЯ
+    // мутация в составной команде (`a && b`): мост при отказе дописывает --from только в конец
+    // строки, и вторая команда без явного отправителя вживую падает.
     // agent launch несёт бриф с командами флоу (« run-use ») — это не мутация, не гоняем через retry
-    const mutation = !command.includes('orca agent launch') && / (run-create|task-create|gate-create|gate-resolve|task-update|worker-start|run-use|send) /.test(command)
-    if (mutation && !command.includes('--from')) {
+    const mutationRe = / (run-create|task-create|gate-create|gate-resolve|task-update|worker-start|run-use|send) /
+    const withoutSender = command.includes('orca agent launch')
+      ? []
+      : command.split(' && ').filter((part) => mutationRe.test(part) && !part.includes('--from'))
+    if (withoutSender.length > 0) {
       throw new Error('no_active_sender_terminal: Could not determine the calling terminal for this orchestration command. Pass --from with your own terminal handle.')
     }
     if (command.includes('orca terminal close')) {
@@ -68,9 +73,11 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
       return '{"ok":true,"result":{"runs":[{"runId":"run_1","objective":"Демо — цель"}]}}'
     }
     if (command.includes('--ready')) {
-      return '{"ok":true,"result":{"tasks":[{"id":"task_b","taskTitle":"dev Разработка"}]}}'
+      // Дефолтный --ready содержит task_b — сцена skip задаёт свой, иначе hold-задача станет «готовой»
+      return opts.ready ?? '{"ok":true,"result":{"tasks":[{"id":"task_b","taskTitle":"dev Разработка"}]}}'
     }
     if (command.includes('task-list') && !command.includes('--ready')) {
+      if (opts.tasks) return opts.tasks
       // The concise CLI view: unordered, deps packed as JSON strings — both must survive.
       return JSON.stringify({
         ok: true,
@@ -83,6 +90,7 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
       })
     }
     if (command.includes('gate-list')) {
+      if (opts.gates) return opts.gates
       return JSON.stringify({
         ok: true,
         result: {
@@ -505,3 +513,86 @@ test('gate.resolve и task.start доходят до CLI с флагами', () 
     assert.ok(start?.includes('--effort') && start.includes("'high'"), 'effort передан')
     assert.ok(start?.includes("'name:ycl-104-momento'"), 'ворктри передан')
   }))
+
+// ---- skip в гейте -----------------------------------------------------------------------------
+// Сцена: plan ✓ → [гейт держит dev] dev (+подшаг dev-sub) → tests → commit.
+const SKIP_SCENE = (heldStatus: string): string => JSON.stringify({ ok: true, result: { tasks: [
+  { id: 'task_d', title: 'commit Коммит', status: 'pending', deps: '["task_c"]' },
+  { id: 'task_c', title: 'tests Тесты', status: 'pending', deps: '["task_b"]' },
+  { id: 'task_b2', title: 'dev-sub Подшаг', status: 'blocked', deps: '["task_b"]' },
+  { id: 'task_b', title: 'dev Разработка', status: heldStatus, deps: '["task_a"]' },
+  { id: 'task_a', title: 'plan План', status: 'completed', deps: '[]' }
+] } })
+const SKIP_GATES = JSON.stringify({ ok: true, result: { gates: [
+  { id: 'gate_1', task_id: 'task_b', status: 'pending', question: 'Пускать dev?', options: '["approve","request-changes","skip"]' }
+] } })
+const SKIP_AUTO = (goto: string | null): Record<string, unknown> => ({
+  'auto.run_1': {
+    worktreeName: 'wt', repoPath: null, driver: 'coordinator',
+    tasks: {
+      task_a: { stepId: 'plan', order: 0 }, task_b: { stepId: 'dev', order: 1 }, task_b2: { stepId: 'dev', order: 2 },
+      task_c: { stepId: 'tests', order: 3 }, task_d: { stepId: 'commit', order: 4 }
+    },
+    children: { task_b2: 'task_b' },
+    gates: { task_b: { goto } }
+  }
+})
+const skipOpts = (goto: string | null, heldStatus = 'blocked') => ({
+  tasks: SKIP_SCENE(heldStatus), gates: SKIP_GATES, storage: SKIP_AUTO(goto), ready: '{"ok":true,"result":{"tasks":[]}}'
+})
+const updatedIds = (command: string): string[] => [...command.matchAll(/--id '(task_\w+)'/g)].map((m) => m[1])
+
+test('skip с on_skip: закрывает всё до цели, держимую — одной командой с решением гейта', () =>
+  withWorker(async (worker, host) => {
+    const r = await worker.request('gate.resolve', { gateId: 'gate_1', resolution: 'skip', runId: 'run_1' })
+    assert.equal(r.resumeAt, 'commit', 'флоу продолжится с on_skip.goto')
+    assert.deepEqual(r.skipped, ['task_c', 'task_b2', 'task_b'], 'хвост дальний → ближний, держимая последней')
+    const cmds = spawned()
+    const solo = cmds.filter((c) => c.includes('task-update') && !c.includes('gate-resolve'))
+    assert.deepEqual(solo.flatMap(updatedIds).sort(), ['task_b2', 'task_c'], 'до решения гейта закрыты только задачи между')
+    for (const c of solo) assert.ok(c.includes('--status completed') && c.includes('ПРОПУЩЕН'), 'закрыты с пометкой ПРОПУЩЕН')
+    const combo = cmds.find((c) => c.includes('gate-resolve'))
+    assert.ok(combo, 'держимая закрыта в одной команде с gate-resolve')
+    const parts = combo.split(' && ')
+    assert.equal(parts.length, 2, 'ровно две команды')
+    assert.ok(parts[0].includes("'gate_1'") && /--resolution skip( |$)/.test(parts[0]), 'первая — решение гейта skip')
+    assert.ok(parts[1].includes("--id 'task_b'") && parts[1].includes('--status completed'), 'вторая — закрыть держимую')
+    for (const part of parts) assert.ok(part.includes('--from'), 'отправитель у КАЖДОЙ команды связки')
+    const lastSolo = Math.max(...cmds.map((c, i) => (c.includes('task-update') && !c.includes('gate-resolve') ? i : -1)))
+    assert.ok(lastSolo < cmds.indexOf(combo), 'сначала хвост, потом решение гейта — иначе resolve вернул бы задачи в ready')
+    const touched = cmds.filter((c) => c.includes('task-update')).flatMap(updatedIds)
+    assert.ok(!touched.includes('task_a') && !touched.includes('task_d'), 'выполненный и целевой шаги не тронуты')
+    assert.deepEqual(Object.keys(host.data().storage['skipped.run_1'] as object).sort(), ['task_b', 'task_b2', 'task_c'], 'пропуск запомнен')
+    assert.ok(cmds.some((c) => c.includes('orchestration send') && c.includes('skip')), 'координатор извещён через ящик')
+  }, skipOpts('commit')))
+
+test('skip без on_skip: закрывает только держимый шаг с его подшагами', () =>
+  withWorker(async (worker, host) => {
+    const r = await worker.request('gate.resolve', { gateId: 'gate_1', resolution: 'skip', runId: 'run_1' })
+    assert.equal(r.resumeAt, null)
+    assert.deepEqual(r.skipped, ['task_b2', 'task_b'])
+    const touched = spawned().filter((c) => c.includes('task-update')).flatMap(updatedIds)
+    assert.deepEqual(touched.sort(), ['task_b', 'task_b2'], 'последующие шаги не тронуты')
+    assert.deepEqual(Object.keys(host.data().storage['skipped.run_1'] as object).sort(), ['task_b', 'task_b2'])
+  }, skipOpts(null)))
+
+test('skip: шаг уже выполняется — отказ до любых мутаций', () =>
+  withWorker(async (worker, host) => {
+    await assert.rejects(
+      () => worker.request('gate.resolve', { gateId: 'gate_1', resolution: 'skip', runId: 'run_1' }),
+      /уже выполняется/,
+      'работающий шаг не пропускается'
+    )
+    const mutations = spawned().filter((c) => / (gate-resolve|task-update) /.test(c))
+    assert.equal(mutations.length, 0, 'ни гейт не решён, ни одна задача не закрыта')
+    assert.equal(host.data().storage['skipped.run_1'], undefined, 'записи о пропуске нет')
+  }, skipOpts('commit', 'dispatched')))
+
+test('skip: «Перезапустить шаг» снимает пропуск со всего хвоста', () =>
+  withWorker(async (worker, host) => {
+    await worker.request('gate.resolve', { gateId: 'gate_1', resolution: 'skip', runId: 'run_1' })
+    assert.ok(host.data().storage['skipped.run_1'], 'пропуск записан')
+    await worker.request('task.retry', { runId: 'run_1', taskId: 'task_b' })
+    const left = host.data().storage['skipped.run_1'] as Record<string, unknown> | undefined
+    assert.ok(!left || Object.keys(left).length === 0, 'шаг и его хвост снова в работе: записи о пропуске нет')
+  }, skipOpts('commit')))
