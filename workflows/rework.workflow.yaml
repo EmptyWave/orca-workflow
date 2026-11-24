@@ -1,0 +1,50 @@
+# Доработка после уточнения требований: уточнение плана по существующему
+# контексту → ревью → разработка → проверки → коммит. Отличается от полного
+# development-флоу стартом с уточнения плана, а не с нуля.
+id: rework
+title: 'Доработка после уточнения требований'
+steps:
+  - id: rework-plan
+    title: 'Уточнение плана (openspec)'
+    worker: planner
+    deps: []
+    sub:
+      - { id: code-research, title: 'Ресерч по коду', worker: code-researcher, phase: before_start, optional: true }
+      - { id: docs-research, title: 'Документация', worker: docs-researcher, phase: before_start, optional: true }
+  - id: plan-review
+    title: 'Ревью плана'
+    worker: plan-reviewer
+    deps: [rework-plan]
+    gate:
+      question: 'Подтверждаем доработку?'
+      options: [approve, request-changes]
+    on_reject: { goto: rework-plan, max_rounds: 3 }
+    sub:
+      - { id: architecture-review, title: 'Ревью архитектуры', worker: architecture-reviewer, phase: parallel }
+  - id: development
+    title: 'Разработка'
+    worker: developer
+    deps: [plan-review]
+    sub:
+      - { id: stat-analyze, title: 'Статический анализ', worker: stat-analyzer, phase: before_end }
+      - { id: plan-diff-review, title: 'Соответствие плану', worker: plan-diff-reviewer, phase: before_end }
+  - id: code-review
+    title: 'Ревью кода'
+    deps: [development]
+    on_reject: { goto: development, max_rounds: 3 }
+    sub:
+      - { id: backend-review, title: 'Ревью бекенда', worker: backend-reviewer, phase: parallel }
+      - { id: frontend-review, title: 'Ревью фронта', worker: frontend-reviewer, phase: parallel, optional: true }
+      - { id: security-review, title: 'Ревью безопасности', worker: security-reviewer, phase: parallel, optional: true }
+  - id: tests
+    title: 'Тесты'
+    deps: [code-review]
+    on_reject: { goto: development, max_rounds: 3 }
+    sub:
+      - { id: test-api, title: 'API/бэкенд', worker: api-tester, phase: parallel }
+      - { id: test-ui, title: 'Фронт/UI', worker: ui-tester, phase: parallel, optional: true }
+      - { id: design-review, title: 'Фронт/UI', worker: design-reviewer, phase: parallel, optional: true }
+  - id: commit
+    title: 'Коммит'
+    worker: committer
+    deps: [tests]

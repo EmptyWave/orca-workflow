@@ -1,4 +1,4 @@
-# on_reject на ревью возвращает работу назад, тесты — один блок из трёх проверок.
+# workflow-view: layout plan:40,182; plan-review:40,472; development:40,630; code-review:40,920; tests:40,1298; commit:40,1544
 id: main
 title: 'development'
 steps:
@@ -6,34 +6,46 @@ steps:
     title: 'План (openspec)'
     worker: planner
     sub:
-      - { id: code-research, title: 'Ресерч по коду', worker: code-researcher}
-      - { id: web-search, title: 'Поиск необходимой информации', worker: web-searcher, optional: true }
-      - { id: ba-review, title: 'Ревью бизнес дизайна', worker: ba-reviewer, optional: true }
-  - id: plan-review,
-    title: 'Ревью плана',
-    worker: plan-reviewer,
+      - { id: docs-research, title: 'Изучение документации и требований', worker: docs-researcher, phase: before_start }
+      - { id: code-research, title: 'Ресерч по коду', worker: code-researcher, phase: before_start }
+      - { id: web-search, title: 'Поиск необходимой информации', worker: web-searcher, phase: before_start, optional: true }
+      - { id: ba-review, title: 'Ревью бизнес дизайна', worker: ba-reviewer, phase: before_start, optional: true }
+  - id: plan-review
+    title: 'Ревью плана'
+    worker: plan-reviewer
+    deps: [plan]
+    gate:
+      question: 'Подтверждаем план?'
+      options: [approve, request-changes]
+    on_reject: { goto: plan, max_rounds: 3 }
     sub:
-      - { id: architecture-review, title: 'Ревью архитектуры', worker: architecture-reviewer}
-    on_reject: { goto: plan, max_rounds: 2 }
-  - id: dev
+      - { id: architecture-review, title: 'Ревью архитектуры', worker: architecture-reviewer, phase: parallel }
+  - id: development
     title: 'Разработка'
-    worker: coder
-  - id: code-review,
-    title: 'Ревью кода',
-    worker: code-reviewer,
+    worker: developer
+    deps: [plan-review]
     sub:
-      { id: stat-analyze, title: 'Статический анализ', worker: stat-analyzer },
-    on_reject: { goto: dev, max_rounds: 2 }
+      - { id: stat-analyze, title: 'Статический анализ', worker: stat-analyzer, phase: before_end }
+      - { id: plan-diff-review, title: 'Соответствие плану', worker: plan-diff-reviewer, phase: before_end }
+  - id: code-review
+    title: 'Ревью кода'
+    deps: [development]
+    on_reject: { goto: development, max_rounds: 3 }
+    sub:
+      - { id: backend-review, title: 'Ревью бекенда', worker: backend-reviewer, phase: parallel }
+      - { id: frontend-review, title: 'Ревью фронта', worker: frontend-reviewer, phase: parallel, optional: true }
+      - { id: security-review, title: 'Ревью безопасности', worker: security-reviewer, phase: parallel, optional: true }
   - id: tests
     title: 'Тесты'
+    deps: [code-review]
+    on_reject: { goto: development, max_rounds: 3 }
     sub:
-      - { id: test-api, title: 'API/бэкенд', worker: api-tester }
-      - { id: test-ui, title: 'Фронт/UI', worker: ui-tester, optional: true }
-      - { id: design-review, title: 'Фронт/UI', worker: design-reviewer, optional: true }
-    on_reject: { goto: dev, max_rounds: 2 }
+      - { id: test-api, title: 'API/бэкенд', worker: api-tester, phase: parallel }
+      - { id: test-ui, title: 'Фронт/UI', worker: ui-tester, phase: parallel, optional: true }
+      - { id: design-review, title: 'Фронт/UI', worker: design-reviewer, phase: parallel, optional: true }
   - id: commit
     title: 'Коммит'
     worker: committer
-    sub:
-      - { id: qa-doc-write, title: 'Подготовка документации для QA', worker: qa-doc-writer }
     deps: [tests]
+    sub:
+      - { id: qa-doc-write, title: 'Подготовка документации для QA', worker: qa-doc-writer, phase: before_end }

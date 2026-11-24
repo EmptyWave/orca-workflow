@@ -1,0 +1,38 @@
+# Баг-фикс: диагноз → фикс → ревью → тесты → коммит. Гейт после диагноза —
+# человек подтверждает понимание бага до правок.
+id: bugfix
+title: 'Баг-фикс'
+steps:
+  - id: diagnose
+    title: 'Диагноз'
+    worker: bug-investigator
+    deps: []
+    gate:
+      question: 'Диагноз верен, фиксируем так?'
+      options: [approve, request-changes]
+    on_reject: { goto: diagnose, max_rounds: 3 }
+  - id: fix
+    title: 'Фикс'
+    worker: developer
+    deps: [diagnose]
+    sub:
+      - { id: stat-analyze, title: 'Статический анализ', worker: stat-analyzer, phase: before_end }
+  - id: code-review
+    title: 'Ревью кода'
+    deps: [fix]
+    on_reject: { goto: fix, max_rounds: 3 }
+    sub:
+      - { id: backend-review, title: 'Ревью бекенда', worker: backend-reviewer, phase: parallel }
+      - { id: frontend-review, title: 'Ревью фронта', worker: frontend-reviewer, phase: parallel, optional: true }
+      - { id: security-review, title: 'Ревью безопасности', worker: security-reviewer, phase: parallel, optional: true }
+  - id: tests
+    title: 'Тесты'
+    deps: [code-review]
+    on_reject: { goto: fix, max_rounds: 3 }
+    sub:
+      - { id: test-api, title: 'API/бэкенд', worker: api-tester, phase: parallel }
+      - { id: test-ui, title: 'Фронт/UI', worker: ui-tester, phase: parallel, optional: true }
+  - id: commit
+    title: 'Коммит'
+    worker: committer
+    deps: [tests]
