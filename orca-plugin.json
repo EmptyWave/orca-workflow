@@ -15,7 +15,7 @@
       {
         "id": "workflow",
         "title": "Workflow",
-        "icon": "activity",
+        "icon": "bot",
         "entry": "src/panel.html",
         "ui": "html"
       }
@@ -44,7 +44,7 @@
       {
         "id": "wf-status",
         "text": "Workflow",
-        "icon": "activity",
+        "icon": "bot",
         "tooltip": "Workflow View"
       }
     ],
