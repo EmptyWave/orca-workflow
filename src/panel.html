@@ -257,6 +257,7 @@
         project: null,
         tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
         history: null,             // все раны для вкладки Run history
+        workspaces: undefined,     // воркспейсы Орки — подсказка «существует: ран поднимется в нём»
         objective: '', baseBranch: '', worktreeName: '', branch: '', context: '', ctxSessions: undefined, ctxPicked: [], ctxCustom: false, ctxFilter: '',
         agent: 'claude', model: '', effort: '', worktree: '', raiseModel: '', models: undefined, modelOpen: false, agentOpen: false,
         startFor: null,           // task id with the start form open
@@ -469,6 +470,28 @@
         } catch { /* extras, not required */ }
         render()
       }
+      async function loadWorkspaces() {
+        try {
+          const r = await req('workspaces.list', undefined, 20000)
+          S.workspaces = r.workspaces || []
+        } catch { S.workspaces = [] }
+        render()
+      }
+      // Существующий воркспейс в поле «имя ворктри»: ран поднимется В НЁМ — отдельный ворктри
+      // не создаётся, ветки из формы не используются. Имя сверяем и с папкой: displayName
+      // воркспейса может не совпадать с ней. Говорим заранее, а не молча.
+      function existingWorkspace(name) {
+        const typed = (name || '').trim()
+        if (typed === '' || !S.workspaces) return null
+        return S.workspaces.find((w) => w.name === typed || String(w.path || '').replace(/\/+$/, '').split('/').pop() === typed) || null
+      }
+      function worktreeHint() {
+        const w = existingWorkspace(S.worktreeName)
+        if (!w) return ''
+        const branch = String(w.branch || '').replace(/^refs\/heads\//, '')
+        const wanted = S.branch.trim()
+        return `<div class="muted" style="margin-top:6px;font-size:12px;line-height:1.5" title="Имя совпало с существующим воркспейсом Орки">воркспейс «${esc(w.name)}» уже существует — ран поднимется в нём${branch ? ` (ветка ${esc(branch)})` : ''}; новый ворктри не создаётся${wanted ? `, ветка «${esc(wanted)}» из формы создана не будет` : ''}</div>`
+      }
 
       // ------------------------------------------------------------------ actions
       async function resolveGate(gate, resolution) {
@@ -543,6 +566,7 @@
             await orca.storage.set('html.runId', S.runId).catch(() => {})
             S.tab = 'runs'
             S.job = null
+            S.workspaces = undefined // ране мог достаться новый ворктри — список перечитаем
             await loadRuns(); await loadState()
           }
         } catch (e) {
@@ -704,7 +728,7 @@
               try {
                 const r = await req('run.brief.refresh', { runId: S.runId }, 90000)
                 setNotice(null)
-                S.notice = `Бриф пересобран из текущих шаблона и карточек: ${esc(r.briefPath ?? '')} — осведоми координатора («перечитай .orca/coordinator-brief.md»)`
+                S.notice = `Бриф пересобран из текущих шаблона и карточек: ${esc(r.briefPath ?? '')} — осведоми координатора: «бриф обновлён, перечитай ${esc(r.briefRel ?? r.briefPath ?? '')}»`
                 render()
               } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
             },
@@ -817,7 +841,7 @@
         const sel = `<div class="rowline" style="align-items:center;gap:6px">` +
           `<span class="chip" style="white-space:normal;line-height:1.35" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective)}</span>` +
           `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
-          `<button class="btn ghost" data-act="brief-refresh" title="Пересобрать бриф координатора из текущего шаблона и карточек (рой, промты); координатора осведоми сам — «бриф обновлён, перечитай .orca/coordinator-brief.md»">↻ бриф</button>` +
+          `<button class="btn ghost" data-act="brief-refresh" title="Пересобрать бриф координатора из текущего шаблона и карточек (рой, промты); координатора осведоми сам — панель покажет путь к файлу брифа этого рана">↻ бриф</button>` +
           ((sessionRun.liveWorkers || 0) > 0
             ? `<button class="btn ghost" disabled title="У рана работают воркеры — сначала останови их">✕</button>`
             : S.armedDel === `run:${sessionRun.runId}`
@@ -1156,6 +1180,7 @@
       function viewTemplates() {
         if (S.ctxSessions === undefined) { S.ctxSessions = null; void loadCtxSessions() }
         if (S.models === undefined) { S.models = null; void loadModels().then(() => render()) }
+        if (S.workspaces === undefined) { S.workspaces = null; void loadWorkspaces() }
         const effSource = S.tplFellBack ? 'library' : S.tplSource
         const header = `<div class="rowline" style="margin-bottom:8px">
           <select data-bind-select="tplSource" style="flex:1">
@@ -1230,6 +1255,7 @@
               <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>
             </div>
             <label class="f" title="Пусто — Orca сам даст ветку <логин>/<имя-ворктри>; заполнено — точное имя ветки без логина"><span>ветка (опц.)</span><input data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"/></label>
+            ${worktreeHint()}
             <div class="f ctxfield" title="Отметь прошлые раны и живые сессии — их артефакты координатор прочитает первым делом">
               <div class="ctxtrigger" data-act="ctx-open" title="Показать/скрыть список доноров">сессии-доноры контекста (опц.)${S.ctxPicked.length > 0 ? ` — выбрано ${S.ctxPicked.length}` : ''} ${S.ctxOpen ? '▾' : '▸'}</div>
 ${!S.ctxOpen && S.ctxPicked.length > 0 ? `              <div class="ctxchips">${S.ctxPicked.map((i) => (S.ctxSessions || [])[i]).filter(Boolean).map((o) => `<span class="chip ctxchip" data-act="ctx-toggle:${S.ctxSessions.indexOf(o)}" title="клик — убрать">${o.kind === 'run' ? '📁' : '💬'} ${esc(o.label.split('·')[0].trim())} ✕</span>`).join('')}</div>` : ''}

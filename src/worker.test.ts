@@ -50,7 +50,7 @@ const CARDS: Record<string, string> = {
   committer: 'agent: claude\nspec: COMMIT SPEC\n'
 }
 
-function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[] } = {}) {
+function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[]; runId?: string | (() => string) } = {}) {
   let created = 0
   const createdWorktrees: string[] = [] // что «создала» команда worktree create в этой сцене
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
@@ -142,7 +142,8 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
       return '{"ok":true,"result":{}}'
     }
     if (command.includes('run-create')) {
-      return '{"ok":true,"result":{"runId":"run_2"}}'
+      const id = typeof opts.runId === 'function' ? opts.runId() : opts.runId
+      return JSON.stringify({ ok: true, result: { runId: id ?? 'run_2' } })
     }
     if (command.includes('task-create')) {
       created += 1
@@ -277,7 +278,7 @@ const spawned = (): string[] => spawnedCommands
 
 async function withWorker(
   fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: MockHost) => Promise<void>,
-  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[] } = {}
+  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[]; runId?: string | (() => string) } = {}
 ): Promise<void> {
   const host = makeHost(opts)
   const canned = currentCanned as (command: string) => string
@@ -474,12 +475,12 @@ test('новый ран поднимает координатора-агента
 /** Поднимает демо-ран из библиотеки на заданных карточках (поверх базовых), ждёт окончания job. */
 function raiseDemo(
   fn: (r: { job: any; worker: Awaited<ReturnType<typeof mountWorker>>; host: MockHost }) => Promise<void>,
-  scene: { workers?: Record<string, string>; dropWorkers?: string[] } = {}
+  scene: { workers?: Record<string, string>; dropWorkers?: string[]; worktreeName?: string } = {}
 ): Promise<void> {
   return withWorker(async (worker, host) => {
     const { jobId } = await worker.request('template.instantiate', {
       source: 'library', projectPath: null, templateId: 'demo',
-      objective: 'цель Y', baseBranch: null, worktreeName: 'demo-wt', agent: 'claude'
+      objective: 'цель Y', baseBranch: null, worktreeName: scene.worktreeName ?? 'demo-wt', agent: 'claude'
     })
     let job = null
     for (let i = 0; i < 60; i++) {
@@ -491,13 +492,18 @@ function raiseDemo(
   }, scene)
 }
 
-/** Текст брифа из команды его записи в ворктри (`echo <base64> | base64 -d > …/coordinator-brief.md`). */
+/** Текст брифа из команды его записи в ворктри (`echo <base64> | base64 -d > …/coordinator-brief.<runId>.md`). */
 function briefOf(command: string): string {
   const match = command.match(/echo '([A-Za-z0-9+/=]+)' \| base64 -d/)
   return match ? new TextDecoder().decode(Uint8Array.from(atob(match[1]), (c) => c.charCodeAt(0))) : ''
 }
 
 const GENERAL_COORDINATOR = 'agent: claude\nmodel: opus\neffort: xhigh\nprompt: |\n  GENERAL-CARD-RULE\n'
+
+/** Команды записи брифа рана. Фильтр — по форме команды, а не по одному имени файла: путь к брифу
+ *  назван и в самом брифе, поэтому команда запуска координатора тоже содержит это имя. */
+const briefWrites = (runId: string): string[] =>
+  spawned().filter((c) => c.includes('base64 -d >') && c.includes(`coordinator-brief.${runId}.md`))
 
 test('координатор по шаблону: карточка coordinator-<id> заменяет общую — агент, модель и текст уходят в запуск', () =>
   raiseDemo(async ({ job, worker }) => {
@@ -509,11 +515,13 @@ test('координатор по шаблону: карточка coordinator-<
     assert.ok(launch.includes('РОЛЬ И СПЕЦИФИКА ЭТОГО ФЛОУ'), 'бриф объявляет блок обязательным')
     assert.ok(!launch.includes('GENERAL-CARD-RULE'), 'текст общей карточки в бриф не попадает')
     assert.ok(!launch.includes("--model 'opus'"), 'общая карточка не доклеивается по частям')
-    const written = spawned().filter((c) => c.includes('coordinator-brief.md'))
+    const written = briefWrites('run_2')
     assert.ok(written.some((c) => briefOf(c).includes('FLOW-SPECIFIC-RULE-77')), 'файл брифа несёт специфику флоу')
-    // Пересборка брифа («осведомить координатора») читает ту же карточку.
-    await worker.request('run.brief.refresh', { runId: 'run_2' })
-    const refreshed = briefOf(spawned().filter((c) => c.includes('coordinator-brief.md')).at(-1) ?? '')
+    // Пересборка брифа («осведомить координатора») читает ту же карточку и пишет файл ЭТОГО рана.
+    const refreshedAnswer = await worker.request('run.brief.refresh', { runId: 'run_2' })
+    assert.equal(refreshedAnswer.briefRel, '.orca/coordinator-brief.run_2.md', 'панель получает путь, чтобы назвать его координатору')
+    assert.ok(!briefWrites('run_2').at(-1)?.includes(' && cp '), 'новому рану достаточно своего файла — чужие не трогает')
+    const refreshed = briefOf(briefWrites('run_2').at(-1) ?? '')
     assert.ok(refreshed.includes('FLOW-SPECIFIC-RULE-77'), 'пересборка брифа вкладывает карточку флоу')
     assert.ok(!refreshed.includes('GENERAL-CARD-RULE'), 'пересборка не тянет общую карточку')
   }, {
@@ -818,16 +826,84 @@ test('подъём рана: имя свободного воркспейса б
     workspaces: [{ id: 'w9', kind: 'worktree', name: 'demo-wt', path: `${WS_ROOT}/demo-wt`, branch: 'feat/x', project: 'repo:1', hostId: 'local' }]
   })))
 
-test('подъём рана: воркспейс, занятый живым раном, не подхватывается — имя получает суффикс', () =>
+test('подъём рана: воркспейс, в котором уже поднимались раны, используется — новая сессия координатора в нём, без суффикса', () =>
   raiseInTemp(async ({ job, host }) => {
     const j = await job()
     assert.equal(j.status, 'done', j.error ?? '')
-    const create = spawned().find((c) => c.includes('orca worktree create'))
-    assert.ok(create?.includes("--name 'demo-wt-2'"), 'новый ворктри рядом, не в чужом: ' + (create ?? '').slice(0, 140))
+    assert.equal(spawned().filter((c) => c.includes('orca worktree create')).length, 0, 'новый ворктри рядом не создаётся')
+    const launch = spawned().find((c) => c.includes('orca agent launch'))
+    assert.ok(launch?.includes(`path:${WS_ROOT}/demo-wt`), 'координатор стартует в существующем воркспейсе')
     const auto = host.data().storage['auto.run_2'] as { worktreeName?: string }
-    assert.equal(auto.worktreeName, 'demo-wt-2', 'состояние рана знает суффикс — по нему стартуют воркеры')
+    assert.equal(auto.worktreeName, 'demo-wt', 'ран помнит имя воркспейса — по нему стартуют воркеры')
   }, (dirs) => ({
-    repoPath: dirs.link, // реестр знает проект — создание ворктри проходит
+    repoPath: dirs.link, // реестр знает проект — создание ворктри прошло бы, но его нет
+    // в этом воркспейсе уже поднимался ран
     storage: { 'runmeta.run_1': { projectPath: '/Users/tester/PhpstormProjects/biz.erp', worktreePath: `${WS_ROOT}/demo-wt` } },
     workspaces: [{ id: 'w9', kind: 'worktree', name: 'demo-wt', path: `${WS_ROOT}/demo-wt`, branch: 'feat/x', project: 'repo:1', hostId: 'local' }]
   })))
+
+test('подъём рана: два рана в одном воркспейсе — бриф у каждого свой, чужой не перезаписывается', () => {
+  // Очередь id ранов: мок отвечает на каждый run-create следующим id — сцена читает её снаружи колбэка.
+  const ids = ['run_2', 'run_3']
+  const queue = [...ids]
+  return withWorker(async (worker, host) => {
+    for (const runId of ids) {
+      const { jobId } = await worker.request('template.instantiate', {
+        source: 'library', projectPath: null, templateId: 'demo',
+        objective: `цель ${runId}`, baseBranch: null, worktreeName: 'demo-wt', agent: 'claude'
+      })
+      let job = null
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 50))
+        job = (await worker.request('job.get', { jobId })).job
+        if (job && job.status !== 'running') break
+      }
+      assert.equal(job.status, 'done', `${runId}: ` + (job.error ?? ''))
+    }
+    const files = spawned().filter((c) => c.includes('base64 -d >')).map((c) => (c.match(/coordinator-brief\.(run_\d+)\.md/) || [])[1]).filter(Boolean)
+    assert.deepEqual([...new Set(files)].sort(), ['run_2', 'run_3'], 'у каждого рана — свой файл брифа: ' + files.join(','))
+    for (const runId of ids) {
+      const own = briefWrites(runId)
+      assert.ok(own.length > 0 && own.every((c) => briefOf(c).includes(`Ты координатор рана ${runId}.`)), `бриф ${runId} называет свой ран`)
+      const auto = host.data().storage[`auto.${runId}`] as { worktreeName?: string }
+      assert.equal(auto.worktreeName, 'demo-wt', 'оба рана живут в одном воркспейсе')
+    }
+    assert.equal(spawned().filter((c) => c.includes('orca worktree create')).length, 0, 'второй ворктри не создаётся')
+  }, {
+    runId: () => queue.shift() ?? 'run_extra',
+    workspaces: [{ id: 'w9', kind: 'worktree', name: 'demo-wt', path: `${WS_ROOT}/demo-wt`, branch: 'feat/x', project: 'repo:1', hostId: 'local' }]
+  })
+})
+
+test('↻ бриф рана, поднятого до раздельных брифов, обновляет и старый общий файл — координатор знает старый путь', () =>
+  withWorker(async (worker) => {
+    const answer = await worker.request('run.brief.refresh', { runId: 'run_1' })
+    assert.equal(answer.briefRel, '.orca/coordinator-brief.run_1.md')
+    const write = spawned().filter((c) => c.includes('base64 -d >')).at(-1) ?? ''
+    const dir = `${WS_ROOT}/demo-wt/.orca`
+    assert.ok(write.includes(`> '${dir}/coordinator-brief.run_1.md'`), 'свой файл записан: ' + write.slice(-160))
+    assert.ok(write.includes(`&& cp '${dir}/coordinator-brief.run_1.md' '${dir}/coordinator-brief.md'`), 'старый общий файл обновлён тем же текстом: ' + write.slice(-160))
+    assert.ok(briefOf(write).includes('Ты координатор рана run_1.'), 'бриф — этого рана')
+  }, {
+    storage: {
+      'runmeta.run_1': { projectPath: null, templateId: 'demo', objective: 'цель' },
+      // Состояние рана, поднятого до раздельных брифов: без briefRel.
+      'auto.run_1': { worktreeName: 'demo-wt', worktreePath: `${WS_ROOT}/demo-wt`, repoPath: null, driver: 'coordinator' }
+    }
+  }))
+
+test('подъём рана: вписана папка воркспейса, а не его имя — ран запоминает имя (по нему Орка находит воркспейс)', () =>
+  raiseDemo(async ({ job, host }) => {
+    assert.equal(job.status, 'done', job.error ?? '')
+    assert.equal(spawned().filter((c) => c.includes('orca worktree create')).length, 0, 'воркспейс найден по папке — не создаётся')
+    const launch = spawned().find((c) => c.includes('orca agent launch')) ?? ''
+    assert.ok(launch.includes(`path:${WS_ROOT}/momento-re`), 'координатор стартует в этом воркспейсе')
+    assert.ok(!launch.includes('name:momento-re'), 'селектор name: по папке Орка не понимает — в брифе его нет')
+    assert.ok(launch.includes('name:YCLPRODUCT-68'), 'воркерам — имя воркспейса: ' + launch.slice(launch.indexOf('Ворктри воркеров'), launch.indexOf('Ворктри воркеров') + 60))
+    const auto = host.data().storage['auto.run_2'] as { worktreeName?: string; worktreePath?: string | null }
+    assert.equal(auto.worktreeName, 'YCLPRODUCT-68', 'состояние рана хранит displayName')
+    assert.equal(auto.worktreePath, `${WS_ROOT}/momento-re`, 'путь воркспейса известен сразу — панель привяжет ран и до запуска координатора')
+  }, {
+    worktreeName: 'momento-re',
+    workspaces: [{ id: 'w9', kind: 'worktree', name: 'YCLPRODUCT-68', path: `${WS_ROOT}/momento-re`, branch: 'YCLPRODUCT-68', project: 'repo:1', hostId: 'local' }]
+  }))
