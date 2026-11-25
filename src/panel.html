@@ -79,6 +79,8 @@
         height: 28px; box-sizing: border-box;
       }
       input:focus, select:focus { outline: 1.5px solid var(--orca-accent); outline-offset: -1px; }
+      /* цвета полей заданы явно — браузер сам заблокированное поле не погасит */
+      label.f > input:disabled { opacity: .55; cursor: not-allowed; }
       label.f { display: block; margin: 7px 0 0; }
       label.f > span { display: block; font-size: 10.5px; color: var(--orca-muted-foreground); margin: 0 0 3px 1px; }
       .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; }
@@ -257,7 +259,8 @@
         project: null,
         tplSource: 'project', templates: null, tplId: null, tplFellBack: false,
         history: null,             // все раны для вкладки Run history
-        workspaces: undefined,     // воркспейсы Орки — подсказка «существует: ран поднимется в нём»
+        workspaces: undefined,     // воркспейсы Орки — блокировка поля «ветка» и подсказка «существует: ран поднимется в нём»
+        workspacesAt: 0,           // когда список прочитан (свежесть — WORKSPACES_TTL_MS)
         objective: '', baseBranch: '', worktreeName: '', branch: '', context: '', ctxSessions: undefined, ctxPicked: [], ctxCustom: false, ctxFilter: '',
         agent: 'claude', model: '', effort: '', worktree: '', raiseModel: '', models: undefined, modelOpen: false, agentOpen: false,
         startFor: null,           // task id with the start form open
@@ -470,27 +473,52 @@
         } catch { /* extras, not required */ }
         render()
       }
+      const BRANCH_TITLE = 'Пусто — Orca сам даст ветку <логин>/<имя-ворктри>; заполнено — точное имя ветки без логина'
+      const BRANCH_LOCKED_TITLE = 'Недоступно: «имя ворктри» называет существующий воркспейс, у него уже есть ветка — новая не создаётся'
+      // Список воркспейсов читает только блокировка поля «ветка» и подсказка под ним. Держим его
+      // свежим (воркспейсы удаляют и создают, не закрывая панель), но без полного render():
+      // пересборка DOM на каждой перечитке рвала бы ввод в форме — правим на месте.
+      const WORKSPACES_TTL_MS = 15000
       async function loadWorkspaces() {
         try {
           const r = await req('workspaces.list', undefined, 20000)
           S.workspaces = r.workspaces || []
-        } catch { S.workspaces = [] }
-        render()
+        } catch { S.workspaces = [] } // списка нет — ничего не блокируем и не подсказываем
+        S.workspacesAt = Date.now()
+        syncWorktreeHint()
+      }
+      function workspacesStale() {
+        return S.workspaces === undefined || Date.now() - (S.workspacesAt || 0) > WORKSPACES_TTL_MS
+      }
+      function refreshWorkspaces() {
+        if (S.workspaces === undefined) S.workspaces = null
+        void loadWorkspaces()
       }
       // Существующий воркспейс в поле «имя ворктри»: ран поднимется В НЁМ — отдельный ворктри
-      // не создаётся, ветки из формы не используются. Имя сверяем и с папкой: displayName
-      // воркспейса может не совпадать с ней. Говорим заранее, а не молча.
+      // не создаётся, новая ветка не создаётся. Имя сверяем и с папкой: displayName воркспейса
+      // может не совпадать с ней. Говорим заранее и блокируем то, что использовано не будет.
       function existingWorkspace(name) {
         const typed = (name || '').trim()
         if (typed === '' || !S.workspaces) return null
         return S.workspaces.find((w) => w.name === typed || String(w.path || '').replace(/\/+$/, '').split('/').pop() === typed) || null
       }
-      function worktreeHint() {
+      function worktreeHintInner() {
         const w = existingWorkspace(S.worktreeName)
         if (!w) return ''
         const branch = String(w.branch || '').replace(/^refs\/heads\//, '')
         const wanted = S.branch.trim()
-        return `<div class="muted" style="margin-top:6px;font-size:12px;line-height:1.5" title="Имя совпало с существующим воркспейсом Орки">воркспейс «${esc(w.name)}» уже существует — ран поднимется в нём${branch ? ` (ветка ${esc(branch)})` : ''}; новый ворктри не создаётся${wanted ? `, ветка «${esc(wanted)}» из формы создана не будет` : ''}</div>`
+        return `<div class="muted" style="margin-top:6px;font-size:12px;line-height:1.5" title="Имя совпало с существующим воркспейсом Орки">воркспейс «${esc(w.name)}» уже существует — ран поднимется в нём${branch ? ` (ветка ${esc(branch)})` : ''}; новый ворктри не создаётся${wanted ? `, ветка «${esc(wanted)}» из формы не используется — поле «ветка» недоступно` : ''}</div>`
+      }
+      /** Правит на месте то, что зависит от имени ворктри и ветки: блокировку поля «ветка» и
+       *  подсказку. Так же вызывается при вводе — render() на каждой букве рвал бы ввод. */
+      function syncWorktreeHint() {
+        const branch = document.getElementById('branch-input')
+        const hint = document.getElementById('worktree-hint')
+        if (!branch || !hint) return
+        const locked = existingWorkspace(S.worktreeName) !== null
+        branch.disabled = locked
+        if (branch.parentElement) branch.parentElement.title = locked ? BRANCH_LOCKED_TITLE : BRANCH_TITLE
+        hint.innerHTML = worktreeHintInner()
       }
 
       // ------------------------------------------------------------------ actions
@@ -770,10 +798,20 @@
         })
         document.querySelectorAll('[data-bind]').forEach((node) => {
           const key = node.dataset.bind
-          const handler = () => void remember(key, node.type === 'number' ? node.value : node.value)
+          const handler = () => {
+            void remember(key, node.value)
+            // Имя ворктри и ветка меняют блокировку поля «ветка» и подсказку под ним — сразу,
+            // на месте: вкладка «Шаблоны» не перерисовывается при вводе.
+            if (key === 'worktreeName' || key === 'branch') {
+              syncWorktreeHint()
+              if (key === 'worktreeName' && workspacesStale()) refreshWorkspaces()
+            }
+          }
           node.oninput = handler
           node.onchange = handler
         })
+        // Отрисовка собрала поле и подсказку из состояния; заголовок поля задаёт та же синхронизация.
+        syncWorktreeHint()
 
         const search = document.querySelector('.ctxsearch')
         if (search) search.oninput = () => {
@@ -1180,7 +1218,7 @@
       function viewTemplates() {
         if (S.ctxSessions === undefined) { S.ctxSessions = null; void loadCtxSessions() }
         if (S.models === undefined) { S.models = null; void loadModels().then(() => render()) }
-        if (S.workspaces === undefined) { S.workspaces = null; void loadWorkspaces() }
+        if (workspacesStale()) refreshWorkspaces()
         const effSource = S.tplFellBack ? 'library' : S.tplSource
         const header = `<div class="rowline" style="margin-bottom:8px">
           <select data-bind-select="tplSource" style="flex:1">
@@ -1254,8 +1292,8 @@
               <label class="f"><span>base branch (опц.)</span><input data-bind="baseBranch" value="${esc(S.baseBranch)}" placeholder="master"/></label>
               <label class="f"><span>имя ворктри</span><input data-bind="worktreeName" value="${esc(S.worktreeName)}" placeholder="feature-x"/></label>
             </div>
-            <label class="f" title="Пусто — Orca сам даст ветку <логин>/<имя-ворктри>; заполнено — точное имя ветки без логина"><span>ветка (опц.)</span><input data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"/></label>
-            ${worktreeHint()}
+            <label class="f" title="${BRANCH_TITLE}"><span>ветка (опц.)</span><input id="branch-input" data-bind="branch" value="${esc(S.branch)}" placeholder="feat/momento-release"${existingWorkspace(S.worktreeName) ? ' disabled' : ''}/></label>
+            <div id="worktree-hint">${worktreeHintInner()}</div>
             <div class="f ctxfield" title="Отметь прошлые раны и живые сессии — их артефакты координатор прочитает первым делом">
               <div class="ctxtrigger" data-act="ctx-open" title="Показать/скрыть список доноров">сессии-доноры контекста (опц.)${S.ctxPicked.length > 0 ? ` — выбрано ${S.ctxPicked.length}` : ''} ${S.ctxOpen ? '▾' : '▸'}</div>
 ${!S.ctxOpen && S.ctxPicked.length > 0 ? `              <div class="ctxchips">${S.ctxPicked.map((i) => (S.ctxSessions || [])[i]).filter(Boolean).map((o) => `<span class="chip ctxchip" data-act="ctx-toggle:${S.ctxSessions.indexOf(o)}" title="клик — убрать">${o.kind === 'run' ? '📁' : '💬'} ${esc(o.label.split('·')[0].trim())} ✕</span>`).join('')}</div>` : ''}
