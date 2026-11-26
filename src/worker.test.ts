@@ -50,7 +50,7 @@ const CARDS: Record<string, string> = {
   committer: 'agent: claude\nspec: COMMIT SPEC\n'
 }
 
-function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[]; runId?: string | (() => string) } = {}) {
+function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; tasks?: string; gates?: string; ready?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[]; runId?: string | (() => string); runList?: string; coordinators?: string } = {}) {
   let created = 0
   const createdWorktrees: string[] = [] // что «создала» команда worktree create в этой сцене
   const LS_DIR = '/Users/tester/orca-plugins/workflow-view/workflows'
@@ -100,7 +100,7 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
       return command.includes('/Users/tester/PhpstormProjects/biz.erp') ? '__WF_PROJ__' : ''
     }
     if (command.includes('run-list')) {
-      return '{"ok":true,"result":{"runs":[{"runId":"run_1","objective":"Демо — цель"}]}}'
+      return opts.runList ?? '{"ok":true,"result":{"runs":[{"runId":"run_1","objective":"Демо — цель"}]}}'
     }
     if (command.includes('--ready')) {
       // Дефолтный --ready содержит task_b — сцена skip задаёт свой, иначе hold-задача станет «готовой»
@@ -133,6 +133,10 @@ function makeHost(opts: { focus?: string; storage?: Record<string, unknown>; wor
     }
     if (command.includes('dispatch_contexts')) {
       return opts.dispatchTimes ?? ''
+    }
+    if (command.includes('coordinator_orca_session_id') && command.includes('FROM runs;')) {
+      // id | handle терминала | orca-сессия | generation сессии | consumer_generation
+      return opts.coordinators ?? ''
     }
     if (command.includes('FROM runs;')) {
       // listRuns тянет created_at ранов одним запросом — новейший ран ворктри побеждает
@@ -278,7 +282,7 @@ const spawned = (): string[] => spawnedCommands
 
 async function withWorker(
   fn: (worker: Awaited<ReturnType<typeof mountWorker>>, host: MockHost) => Promise<void>,
-  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[]; runId?: string | (() => string) } = {}
+  opts: { focus?: string; storage?: Record<string, unknown>; workerRead?: string; inbox?: string; workerList?: string; dispatchTimes?: string; workspaces?: unknown[]; repoPath?: string; workers?: Record<string, string>; dropWorkers?: string[]; runId?: string | (() => string); runList?: string; coordinators?: string } = {}
 ): Promise<void> {
   const host = makeHost(opts)
   const canned = currentCanned as (command: string) => string
@@ -351,7 +355,7 @@ test('попытки шага идут в порядке создания, а н
 test('runs.list и state.get читают оркестрацию через мост', () =>
   withWorker(async (worker) => {
     const runs = await worker.request('runs.list')
-    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель', projectPath: null, worktreePath: null, createdAt: '2026-11-17 10:00:00', updatedAt: null, hasCoordinator: false, liveWorkers: 0 }])
+    assert.deepEqual(runs.runs, [{ runId: 'run_1', objective: 'Демо — цель', projectPath: null, worktreePath: null, createdAt: '2026-11-17 10:00:00', updatedAt: null, hasCoordinator: false, liveWorkers: 0, coordinatorSessionId: null, coordinatorTerminal: null }])
     assert.equal(runs.error, null)
 
     const state = await worker.request('state.get', { runId: 'run_1' })
@@ -363,6 +367,27 @@ test('runs.list и state.get читают оркестрацию через мо
     assert.equal(state.gates[0].taskId, 'task_b')
     assert.equal(state.workers[0].dispatchId, 'ctx_1')
     assert.equal(state.tasks[1].agent, null)
+  }))
+
+test('runs.list называет сессию и терминал координатора рана — по ним панель узнаёт ран из события агента', () =>
+  withWorker(async (worker) => {
+    const runs = await worker.request('runs.list')
+    const byId = Object.fromEntries(runs.runs.map((r) => [r.runId, r]))
+    assert.equal(byId.run_1.coordinatorSessionId, 'sess_a')
+    assert.equal(byId.run_1.coordinatorTerminal, 'term_t1', 'координатор в терминале — handle на месте')
+    assert.equal(byId.run_2.coordinatorSessionId, 'sess_b')
+    assert.equal(byId.run_2.coordinatorTerminal, null, 'чат-координатор обходится без терминала')
+  }, {
+    runList: '{"ok":true,"result":{"runs":[{"runId":"run_1","objective":"Демо — цель"},{"runId":"run_2","objective":"Второй ран"}]}}',
+    // id | handle | orca-сессия | generation | consumer_generation
+    coordinators: 'run_1|term_t1|sess_a|1|1\nrun_2||sess_b|2|2'
+  }))
+
+test('session.workspace называет путь и id воркспейса сессии — по id событие агента узнаёт своих', () =>
+  withWorker(async (worker) => {
+    const r = await worker.request('session.workspace')
+    assert.equal(r.path, '/Users/tester/PhpstormProjects/biz.erp')
+    assert.equal(r.workspaceId, 'w1', 'id из workspace.list — его называет agent.status.changed (workspaceListId)')
   }))
 
 test('template.list читает библиотеку и резолвит specFile', () =>

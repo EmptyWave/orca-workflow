@@ -267,7 +267,11 @@
         openStep: {},            // task ids expanded: gate, report, retry live inside the step (несколько одновременно)
         reports: {},              // taskId -> worker report text (fetched on demand)
         job: null, notice: null, busy: null,
-        cfg: null, bridge: null, openAttempt: {}, openGate: null, gateAutoOpened: null, planFiles: undefined, sessionPath: null, sessionPathUnknown: false, armedDel: null
+        cfg: null, bridge: null, openAttempt: {}, openGate: null, gateAutoOpened: null, planFiles: undefined, sessionPath: null, sessionPathUnknown: false, armedDel: null,
+        // Несколько координаторов в одном воркспейсе: активный ран — тот, чей координатор начал
+        // работать последним (событие агента) или который выбрали руками. Запоминается за воркспейсом.
+        sessionWorkspaceId: null, activeRunId: null, activeRunFor: undefined, activeRunSaved: undefined,
+        lastAgentEvent: null, runsLoading: false, runSwitchOpen: false
       }
       const STATUS_TEXT = {
         pending: 'ожидает', ready: 'готов к запуску', dispatched: 'работает', skipped: 'пропущен',
@@ -354,19 +358,78 @@
         render()
         setTimeout(() => { if (S.armedDel === key) { S.armedDel = null; render() } }, 5000)
       }
-      // В одном ворктри может оказаться несколько ранов (перезапуски в то же имя).
-      // Привязка: самый АКТИВНЫЙ ран (updated_at — задачи/гейты менялись) — чат
-      // координатора мог быть закрыт у работающего рана и открытие у мёртвого,
-      // реальную жизнь рана показывает активность. Тай-брейки: координатор, created.
+      // В одном воркспейсе может жить несколько ранов — у каждого своя сессия координатора.
+      // Показываем АКТИВНЫЙ ран: последний, чей координатор начал работать (событие агента называет
+      // сессию), либо выбранный руками. Пока ни то, ни другое — самый свежий (updated_at —
+      // задачи/гейты менялись); тай-брейки: координатор, created.
+      function ownRuns(runs) {
+        if (!S.sessionPath) return []
+        return (runs || []).filter((r) => r.worktreePath === S.sessionPath)
+      }
       function pickSessionRun(runs) {
-        if (!S.sessionPath) return null
-        const own = (runs || []).filter((r) => r.worktreePath === S.sessionPath)
+        const own = ownRuns(runs)
         if (own.length === 0) return null
         const cmp = (a, b) =>
           (b.updatedAt ?? '').localeCompare(a.updatedAt ?? '') ||
           ((b.hasCoordinator ? 1 : 0) - (a.hasCoordinator ? 1 : 0)) ||
           (b.createdAt ?? '').localeCompare(a.createdAt ?? '')
-        return own.slice().sort(cmp)[0]
+        return own.find((r) => r.runId === S.activeRunId) || own.slice().sort(cmp)[0]
+      }
+      // Событие агента Орки: координатор начал работать или ждёт человека — панель показывает
+      // его ран, сразу. «done» не переключает: фоновый координатор не должен перебивать того,
+      // с кем работает человек.
+      function onAgentStatus(p) {
+        if (!p || p.state === 'done') return
+        const run = runOfAgentEvent(p)
+        if (run) { void activateRun(run.runId); return }
+        // Сессии нет в списке ранов — список мог устареть (ран подняли в другой поверхности).
+        // Перечитываем только для своего воркспейса: чужие воркеры событий не стоят.
+        if (sessionOfEvent(p) && S.sessionWorkspaceId && p.workspaceListId === S.sessionWorkspaceId && !S.runsLoading) {
+          S.lastAgentEvent = p
+          void loadRuns()
+        }
+      }
+      // Orca-сессия агента из события. У чат-сессий ключ панели — «structured-agent-session-<сессия>:<uuid>»:
+      // сессию берём и оттуда, если событие назвало только панель.
+      function sessionOfEvent(p) {
+        if (!p) return null
+        if (p.sessionId) return p.sessionId
+        const m = /^structured-agent-session-(.+):[^:]*$/.exec(String(p.paneKey || ''))
+        return m ? m[1] : null
+      }
+      // Ран, чья сессия координатора названа событием агента: orca-сессия чата — это
+      // coordinator_orca_session_id рана, терминал агента — coordinator_handle. Орка не сообщает,
+      // какой чат открыт, поэтому сигнал переключения — «координатор начал работать».
+      function runOfAgentEvent(p) {
+        if (!p) return null
+        const session = sessionOfEvent(p)
+        return ownRuns(S.runs).find((r) =>
+          (session && r.coordinatorSessionId === session) ||
+          (p.terminalId && r.coordinatorTerminal === p.terminalId)) || null
+      }
+      // Активный ран запоминается за воркспейсом: переоткрытая панель показывает тот же ран.
+      async function persistActiveRun() {
+        S.activeRunSaved = S.activeRunId
+        if (S.sessionPath) await orca.storage.set('activeRun.' + S.sessionPath, S.activeRunId).catch(() => {})
+      }
+      // Переключить панель на ран этого воркспейса — сразу, не дожидаясь опроса.
+      async function activateRun(runId) {
+        S.runSwitchOpen = false
+        if (!S.runs) await loadRuns() // из Run history до первого чтения списка
+        const run = ownRuns(S.runs).find((r) => r.runId === runId)
+        if (!run) { render(); return }
+        const changed = S.activeRunId !== runId
+        S.activeRunId = runId
+        if (changed) void persistActiveRun()
+        if (S.runId !== runId) {
+          S.runId = runId; S.snap = null; S.planFiles = undefined; S.openGate = null
+          // воркер снапшотит ран из html.runId — ведём его за собой при перепривязке,
+          // иначе после удаления/смены рана в кэш пишется чужой/пустой снапшот
+          remember('runId', runId)
+          void loadState()
+        }
+        if (S.tab !== 'runs') remember('tab', 'runs')
+        render()
       }
       // Ран «свежий», если активность была в последние 3 часа: удаление такого
       // предупреждаем даже без бейджей — по ним не видно (чат бывает закрыт).
@@ -381,14 +444,30 @@
           try {
             const r = await req('session.workspace', undefined, 20000)
             S.sessionPath = r.path ?? null
+            S.sessionWorkspaceId = r.workspaceId ?? null
             S.sessionPathUnknown = false
           } catch { S.sessionPathUnknown = true }
-          const answer = await req('runs.list', undefined, 60000)
+          S.runsLoading = true
+          let answer
+          try { answer = await req('runs.list', undefined, 60000) } finally { S.runsLoading = false }
           if (checkEpoch(answer.epoch)) { location.reload(); return }
           S.runs = answer.runs
           delete loadingSince['запуски']
+          // Активный ран — свой у каждого воркспейса: при смене воркспейса читаем свой.
+          if (S.activeRunFor !== S.sessionPath) {
+            S.activeRunFor = S.sessionPath
+            const saved = S.sessionPath ? await orca.storage.get('activeRun.' + S.sessionPath).catch(() => null) : null
+            S.activeRunId = typeof saved === 'string' && saved !== '' ? saved : null
+            S.activeRunSaved = S.activeRunId
+          }
+          // Событие агента могло прийти, когда списка ещё не было или он устарел, — применяем теперь.
+          const woke = runOfAgentEvent(S.lastAgentEvent)
+          if (woke) { S.lastAgentEvent = null; S.activeRunId = woke.runId }
+          // Удалённого рана больше нет — панель возвращается к самому свежему.
+          if (S.activeRunId && !ownRuns(S.runs).some((r) => r.runId === S.activeRunId)) S.activeRunId = null
+          if (S.activeRunId !== S.activeRunSaved) void persistActiveRun()
           // Ран привязан к сессии: показываем рана ЭТОГО воркспейса, без выбора из списка.
-          const sessionRun = pickSessionRun(answer.runs)
+          const sessionRun = pickSessionRun(S.runs)
           const wantedId = sessionRun?.runId ?? null
           if (S.runId !== wantedId) {
             S.runId = wantedId; S.snap = null; S.planFiles = undefined; S.openGate = null
@@ -721,6 +800,10 @@
               } catch (e) { setNotice(esc(e.message || e)) } finally { S.busy = null; render() }
             },
             refresh: () => { void loadRuns(); void loadState(true) },
+            'run-switch-open': () => { S.runSwitchOpen = !S.runSwitchOpen; render() },
+            // Ран этого воркспейса — показать: из переключателя в заголовке или из Run history.
+            'run-switch': () => void activateRun(arg),
+            'hist-show': () => void activateRun(arg),
             'refresh-tpl': () => { S.templates = null; render(); void loadTemplates() },
             'resolve-approve': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), 'approve'),
             'resolve-custom': () => void resolveGate(S.snap.gates.find((g) => g.id === arg), b.dataset.option),
@@ -793,6 +876,8 @@
             ev.stopPropagation()
             // красная «точно удалить?» взведена — любой другой клик её гасит
             if (S.armedDel && act !== 'delete-run' && act !== 'hist-del') S.armedDel = null
+            // список ранов в заголовке открыт — любой другой клик его закрывает
+            if (S.runSwitchOpen && act !== 'run-switch-open' && act !== 'run-switch') S.runSwitchOpen = false
             map[act]()
           }
         })
@@ -869,6 +954,15 @@
         if (v.mine === 0 && v.others > 0) return `<div class="tiny muted" style="margin:4px 0 8px">В проекте «${esc(S.project.name)}» ещё нет ранов — показаны все.</div>`
         return ''
       }
+      // Строка переключателя ранов воркспейса: цель, отметка текущего, живой координатор.
+      function runSwitchRow(r) {
+        const on = r.runId === S.runId
+        return `<div class="ctxrow${on ? ' on' : ''}" data-act="run-switch:${esc(r.runId)}" title="${esc(r.objective)}">` +
+          `<span class="cb">${on ? '●' : '○'}</span>` +
+          `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(r.objective)}</span>` +
+          (r.hasCoordinator ? '<span class="chip" title="к рану привязана живая сессия координатора">координатор</span>' : '') +
+          '</div>'
+      }
       function viewRuns() {
         if (!S.runs) return stuck('запуски')
         const sessionRun = pickSessionRun(S.runs)
@@ -876,15 +970,24 @@
           ? 'Не удалось определить воркспейс этой сессии.<br/><span class="tiny muted">нажми «Обновить» — привязка рана восстановится</span><br/><button class="btn mini" data-act="refresh" style="margin-top:8px">${ICON.refresh} Обновить</button>'
           : 'В этой сессии нет рана.<br/><span class="tiny muted">ран живёт в воркспейсе, созданном при «Поднять Run» — открой его, чтобы следить</span><br/><button class="btn mini" data-act="go-templates" style="margin-top:8px">Поднять Run из шаблона</button>'}</div>`
         const snap = S.snap
+        // В воркспейсе несколько ранов — заголовок становится переключателем: какой показывать.
+        const own = ownRuns(S.runs).slice().sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+        const switchable = own.length > 1
+        const caption = switchable
+          ? `В этом воркспейсе ранов: ${own.length}. Панель показывает рана того координатора, который начал работать последним; здесь можно выбрать другой.`
+          : sessionRun.objective
         const sel = `<div class="rowline" style="align-items:center;gap:6px">` +
-          `<span class="chip" style="white-space:normal;line-height:1.35" title="${esc(sessionRun.objective)}">${esc(sessionRun.objective)}</span>` +
+          (switchable
+            ? `<span class="chip ctxchip" style="white-space:normal;line-height:1.35" data-act="run-switch-open" title="${esc(caption)}">${esc(sessionRun.objective)} ▾</span>`
+            : `<span class="chip" style="white-space:normal;line-height:1.35" title="${esc(caption)}">${esc(sessionRun.objective)}</span>`) +
           `<button class="btn ghost" data-act="refresh" title="Обновить">${ICON.refresh}</button>` +
           `<button class="btn ghost" data-act="brief-refresh" title="Пересобрать бриф координатора из текущего шаблона и карточек (рой, промты); координатора осведоми сам — панель покажет путь к файлу брифа этого рана">↻ бриф</button>` +
           ((sessionRun.liveWorkers || 0) > 0
             ? `<button class="btn ghost" disabled title="У рана работают воркеры — сначала останови их">✕</button>`
             : S.armedDel === `run:${sessionRun.runId}`
               ? `<button class="btn mini" data-act="delete-run" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="${sessionRun.hasCoordinator ? 'Внимание: к рану привязана сессия координатора — после удаления она останется без рана. ' : ''}Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">точно удалить?</button>`
-              : `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`) + '</div>'
+              : `<button class="btn ghost" data-act="delete-run" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`) + '</div>' +
+          (switchable && S.runSwitchOpen ? `<div class="ctxlist">${own.map(runSwitchRow).join('')}</div>` : '')
         if (!snap) return sel + `<div class="skeleton" style="width:80%"></div><div class="skeleton" style="width:60%"></div>`
         const errorCallout = snap.error ? `<div class="callout danger">${esc(snap.error)}</div>` : ''
         const counts = (snap.tasks || []).reduce((acc, t) => { acc[t.status] = (acc[t.status] || 0) + 1; return acc }, {})
@@ -1376,12 +1479,16 @@ ${S.modelOpen ? `              <div class="ctxlist">
             : S.armedDel === `hist:${r.runId}`
               ? `<button class="btn mini" data-act="hist-del:${esc(r.runId)}" style="color:var(--orca-destructive,#f85149);border-color:var(--orca-destructive,#f85149)" title="${r.hasCoordinator ? 'Внимание: к рану привязана сессия координатора — после удаления она останется без рана. ' : ''}${isFreshRun(r) ? 'ВНИМАНИЕ: ран был активен недавно — возможно, это рабочий ран. ' : ''}Повторный клик удалит ран, задачи, гейты и отчёты безвозвратно">${isFreshRun(r) ? 'ран активен — точно удалить?' : 'точно удалить?'}</button>`
               : `<button class="btn ghost mini" data-act="hist-del:${esc(r.runId)}" title="Удалить ран (задачи, гейты, отчёты — безвозвратно)">✕</button>`
+          // Ран из этого воркспейса — показать на вкладке Run одним кликом, не разыскивая его.
+          const showBtn = r.worktreePath && r.worktreePath === S.sessionPath && !mine
+            ? `<button class="btn ghost mini" data-act="hist-show:${esc(r.runId)}" title="Показать этот ран на вкладке Run — он живёт в этом воркспейсе">показать</button>`
+            : ''
           return `<div class="histrow">
             <div class="body">
               <div class="title">${esc(r.objective)}${badges}</div>
               <div class="meta">${esc(project)} · ворктри ${esc(worktree)} · ${esc(short(r.runId, 'run_'))}</div>
             </div>
-            <button class="btn ghost mini" data-act="hist-refresh-brief:${esc(r.runId)}" title="Пересобрать бриф координатора из текущего шаблона и карточек">↻ бриф</button>
+            ${showBtn}<button class="btn ghost mini" data-act="hist-refresh-brief:${esc(r.runId)}" title="Пересобрать бриф координатора из текущего шаблона и карточек">↻ бриф</button>
             ${delBtn}
           </div>`
         }).join('')
@@ -1428,6 +1535,8 @@ ${S.modelOpen ? `              <div class="ctxlist">
         try {
           orca.plugin.on('state.changed', () => { if (S.tab === 'runs') void loadState() })
           orca.plugin.on('job.progress', (p) => { if (p && p.job) { S.job = p.job; render() } })
+          // Координатор начал работать или ждёт человека — панель показывает его ран, сразу.
+          try { orca.on('agent.status.changed', onAgentStatus) } catch { /* Орка без событий в панели — остаётся переключение руками */ }
           // The editor changed a template: swap it in, no bridge, no re-reading.
           orca.plugin.on('templates.changed', (p) => {
             if (!p || !p.template || !S.project || p.projectPath !== S.project.path) return

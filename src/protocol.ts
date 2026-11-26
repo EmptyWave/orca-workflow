@@ -71,6 +71,12 @@ export type WfRun = {
   hasCoordinator: boolean
   /** Сколько воркеров рана прямо работают ('starting'/'ready'): удаление такого рана отклоняется. */
   liveWorkers: number
+  /** Orca-сессия координатора рана (`runs.coordinator_orca_session_id`). По ней панель узнаёт,
+   *  какой ран показать, когда координатор начал работать: событие `agent.status.changed`
+   *  называет сессию, а не ран. */
+  coordinatorSessionId?: string | null
+  /** Терминал координатора (`runs.coordinator_handle`) — для рана, который ведёт агент в терминале. */
+  coordinatorTerminal?: string | null
 }
 
 export type WfSnapshot = {

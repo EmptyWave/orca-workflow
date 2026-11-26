@@ -130,6 +130,7 @@ export default function activate(orca: OrcaWorkerApi): void {
     // Handle в базе живёт и после смерти чата, поэтому сверяем со списком терминалов.
     const runHandle = new Map<string, string>()
     const runSessionLive = new Map<string, boolean>()
+    const runSession = new Map<string, string>()
     const runLive = new Map<string, number>()
     try {
       const db = `${homedir()}/Library/Application Support/orca/orchestration.db`
@@ -151,6 +152,7 @@ export default function activate(orca: OrcaWorkerApi): void {
         if (parts.length < 5) continue
         const [id, handle, sessionId, gen, consumer] = parts.map((x) => x.trim())
         if (handle !== '') runHandle.set(id, handle)
+        if (sessionId !== '') runSession.set(id, sessionId)
         runSessionLive.set(id, sessionId !== '' && gen !== '' && gen === consumer)
       }
       const live = await bridge.run(
@@ -211,7 +213,9 @@ export default function activate(orca: OrcaWorkerApi): void {
         hasCoordinator:
           (runSessionLive.get(runId) ?? false) ||
           (handle !== undefined && (liveTerminals === null || liveTerminals.has(handle))),
-        liveWorkers: runLive.get(runId) ?? 0
+        liveWorkers: runLive.get(runId) ?? 0,
+        coordinatorSessionId: runSession.get(runId) ?? null,
+        coordinatorTerminal: handle ?? null
       })
     }
     return out
@@ -2652,12 +2656,14 @@ export default function activate(orca: OrcaWorkerApi): void {
       if (!context) return { path: null }
       // Список воркспейсов берём у хоста, не через мост: мост бывает занят живым координатором,
       // и привязка рана к сессии не должна зависеть от очереди команд терминала.
-      const list = await orca.host.call<{ workspaces?: Array<{ path?: string; name?: string; displayName?: string; branch?: string | null }> }>('workspace.list', undefined)
+      const list = await orca.host.call<{ workspaces?: Array<{ id?: string; path?: string; name?: string; displayName?: string; branch?: string | null }> }>('workspace.list', undefined)
       const ws = (list.workspaces ?? []).find((w) => (w.displayName ?? w.name) === context.displayName)
         ?? (list.workspaces ?? []).find((w) => w.branch != null && w.branch === context.branch)
-      return { path: ws?.path ?? null }
+      // Идентификатор того же воркспейса в `workspace.list`: его называет событие
+      // `agent.status.changed` (workspaceListId) — панель отличает своих агентов от чужих.
+      return { path: ws?.path ?? null, workspaceId: ws?.id ?? null }
     } catch {
-      return { path: null }
+      return { path: null, workspaceId: null }
     }
   })
 
